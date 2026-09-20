@@ -196,6 +196,13 @@ export class DOMProjection {
             return false;
           });
           if (!data.adds.length) return;
+          // A frame document replaces its predecessor. Retaining the old
+          // subtree would keep stale media and node identities authorized.
+          for (const addition of data.adds) {
+            for (const id of this.children.get(addition.parentId) ?? [])
+              this.forget(id);
+            this.children.delete(addition.parentId);
+          }
         }
         data.adds = data.adds.filter((addition: Serialized) => {
           if (

@@ -151,6 +151,9 @@ export function installRecorder(
         mediaActive = active;
         for (const observer of media) observer.setEnabled(active);
       },
+      retireMedia: (streams: string[]) => {
+        for (const observer of media) observer.retire(streams);
+      },
       snapshot: () => {
         record.takeFullSnapshot();
         emitFocus(document, true);

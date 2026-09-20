@@ -31,6 +31,9 @@ type Pending = {
   resolve: (ok: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
   started: number;
+  epoch: string;
+  tab: string;
+  hover: boolean;
 };
 const modifiers = (event: MouseEvent | KeyboardEvent) =>
   (event.altKey ? 1 : 0) |
@@ -356,6 +359,18 @@ export class DOMBrowserView {
       pending.resolve(message.ok);
       this.options.onAction?.(Math.round(performance.now() - pending.started));
       if (!message.ok) {
+        if (message.code === 'stale_view') {
+          // Hover can overtake a changing DOM without a user action failing.
+          // A rejected action refreshes only its current view, never its input.
+          if (
+            pending.hover ||
+            pending.epoch !== this.epoch ||
+            pending.tab !== this.tab ||
+            this.resyncing
+          )
+            return;
+          this.resync();
+        }
         const text = {
           stale_view:
             'The page changed before that action. Please try again on the current view.',
@@ -417,7 +432,17 @@ export class DOMBrowserView {
         this.connection.close();
         this.disconnected();
       }, 25000);
-      this.pending.set(id, { resolve, timer, started: performance.now() });
+      this.pending.set(id, {
+        resolve,
+        timer,
+        started: performance.now(),
+        epoch: this.epoch,
+        tab: this.tab,
+        hover:
+          action.kind === 'pointer' &&
+          action.phase === 'move' &&
+          action.buttons === 0,
+      });
       try {
         this.connection.send({
           type: 'command',

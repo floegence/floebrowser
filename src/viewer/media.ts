@@ -161,15 +161,31 @@ export class MediaView {
     const state = this.states.get(playback.id);
     element.muted = !this.audible || (state?.muted ?? true);
     element.volume = state?.volume ?? 1;
-    void element.play().catch(() => {
-      if (!element.muted) {
-        this.audible = false;
-        this.sound.textContent = 'Enable sound';
-        this.sound.setAttribute('aria-pressed', 'false');
-        for (const active of this.playback.values())
-          if (active.element) active.element.muted = true;
-      }
-    });
+    if (state?.paused && element.readyState >= 2) {
+      element.pause();
+      return;
+    }
+    // A newly bound stream needs its first frame even when the source is
+    // paused. Afterwards the source state owns the receiver's play/pause state.
+    void element
+      .play()
+      .then(() => {
+        if (
+          !playback.closed &&
+          playback.element === element &&
+          this.states.get(playback.id)?.paused
+        )
+          element.pause();
+      })
+      .catch((error) => {
+        if (error.name === 'NotAllowedError' && !element.muted) {
+          this.audible = false;
+          this.sound.textContent = 'Enable sound';
+          this.sound.setAttribute('aria-pressed', 'false');
+          for (const active of this.playback.values())
+            if (active.element) active.element.muted = true;
+        }
+      });
   }
   private update() {
     for (const playback of this.playback.values()) {

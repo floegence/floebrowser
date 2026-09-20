@@ -23,6 +23,11 @@ HTTP fetch fallback, expose cookies, or publish a raw CDP endpoint. Preserve the
 scriptless replay sandbox and same-origin resource policy. Unsupported surfaces
 must remain explicit. Do not enable rrweb's unsafe canvas replay option.
 
+DOM removals must retire both media endpoints; reinsertion must negotiate a fresh
+stream. Replacing a frame document retires its old node identities and media.
+Never stop website-owned `srcObject` tracks during projection teardown. Stale
+hover is disposable; rejected actions may refresh the view but must not be retried.
+
 Design for a professional product: preserve selection, IME, clear loading and
 disconnect states, keyboard use, accessibility labels and obvious recovery.
 

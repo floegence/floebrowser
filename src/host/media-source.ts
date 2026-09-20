@@ -17,9 +17,11 @@ type Capture = {
   playbackError?: string;
   previous: string;
   src: string;
+  sourceObject: HTMLMediaElement['srcObject'] | string;
   offer?: string;
   negotiating: boolean;
   retries: number;
+  stopWatching?: () => void;
 };
 
 /** Captures only source media elements. RTP congestion control drops late frames;
@@ -34,8 +36,14 @@ export function observeMedia(
   const captures = new Map<HTMLMediaElement, Capture>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let enabled = false;
+  const sourceObject = (element: HTMLMediaElement) => {
+    const source = element.srcObject;
+    // Chromium can return a new MediaStream wrapper for the same source.
+    return source && 'id' in source ? source.id : source;
+  };
   const release = (capture: Capture) => {
     capture.retired = true;
+    capture.stopWatching?.();
     capture.peer?.close();
     capture.stream?.getTracks().forEach((track) => track.stop());
     delete (capture.element as any)[key];
@@ -95,7 +103,19 @@ export function observeMedia(
       return;
     }
     try {
-      const stream = element.captureStream();
+      const observed = element.captureStream();
+      const sourceObject = element.srcObject;
+      const borrowed =
+        sourceObject && 'getTracks' in sourceObject
+          ? sourceObject.getTracks()
+          : [];
+      // Chromium may return the page's original srcObject tracks. Own clones
+      // of those tracks so teardown cannot stop the website's media source.
+      const stream = new MediaStream(
+        observed
+          .getTracks()
+          .map((track) => (borrowed.includes(track) ? track.clone() : track)),
+      );
       capture.stream = stream;
       if (!stream.getTracks().length) return;
       const peer = new RTCPeerConnection(configuration);
@@ -119,7 +139,7 @@ export function observeMedia(
         });
       }
       const tracks = () =>
-        stream
+        observed
           .getTracks()
           .map((track) => track.id)
           .sort()
@@ -131,8 +151,12 @@ export function observeMedia(
           captures.delete(element);
         }
       };
-      stream.addEventListener('addtrack', changed);
-      stream.addEventListener('removetrack', changed);
+      observed.addEventListener('addtrack', changed);
+      observed.addEventListener('removetrack', changed);
+      capture.stopWatching = () => {
+        observed.removeEventListener('addtrack', changed);
+        observed.removeEventListener('removetrack', changed);
+      };
       peer.onconnectionstatechange = () => {
         if (capture.retired) return;
         if (peer.connectionState === 'connected') {
@@ -173,7 +197,8 @@ export function observeMedia(
       if (
         !elements.has(element) ||
         !element.isConnected ||
-        element.currentSrc !== capture.src
+        element.currentSrc !== capture.src ||
+        sourceObject(element) !== capture.sourceObject
       ) {
         release(capture);
         captures.delete(element);
@@ -195,6 +220,7 @@ export function observeMedia(
           reason: '',
           previous: '',
           src: element.currentSrc,
+          sourceObject: sourceObject(element),
           negotiating: false,
           retries: 0,
         };
@@ -247,6 +273,14 @@ export function observeMedia(
     }
   };
   return {
+    retire(streams: string[]) {
+      for (const [element, capture] of captures) {
+        if (!streams.includes(capture.token)) continue;
+        release(capture);
+        captures.delete(element);
+        emit({ kind: 'removed', id: capture.id });
+      }
+    },
     setEnabled(active: boolean) {
       if (active === enabled) {
         if (active) scan(true);

@@ -27,6 +27,14 @@ test(
       }
     });
     await source.addInitScript(() => {
+      (window as any).sourcePeers = [];
+      const Peer = RTCPeerConnection;
+      (window as any).RTCPeerConnection = class extends Peer {
+        constructor(c?: RTCConfiguration) {
+          super(c);
+          (window as any).sourcePeers.push(this);
+        }
+      };
       const original = RTCPeerConnection.prototype.setRemoteDescription;
       RTCPeerConnection.prototype.setRemoteDescription = async function (
         description: RTCSessionDescriptionInit,
@@ -54,8 +62,11 @@ test(
       const ctx = canvas.getContext('2d')!;
       let frame = 0;
       setInterval(() => {
+        // Keep motion during the recovery color probe: an unchanged frame may
+        // legitimately be suppressed by the native video encoder.
+        frame++;
         ctx.fillStyle =
-          (window as any).frameColor ?? (++frame % 2 ? 'red' : 'blue');
+          (window as any).frameColor ?? (frame % 2 ? 'red' : 'blue');
         ctx.fillRect(0, 0, 640, 360);
         ctx.fillStyle = 'white';
         ctx.fillText(String(frame), 30, 30);
@@ -192,8 +203,47 @@ test(
       Date.now() < recoveryDeadline
     )
       await new Promise((r) => setTimeout(r, 100));
+    const afterRecovery = await stats();
+    if (afterRecovery.frames < impaired.frames + 10)
+      t.diagnostic(
+        JSON.stringify({
+          relay: network.stats(),
+          before,
+          impaired,
+          afterRecovery,
+          source: await source.evaluate(async () => {
+            const v = document.querySelector('video')!;
+            return {
+              paused: v.paused,
+              frames: v.getVideoPlaybackQuality().totalVideoFrames,
+              tracks: (v.srcObject as MediaStream)
+                .getTracks()
+                .map((t) => ({ id: t.id, state: t.readyState })),
+              peers: await Promise.all(
+                (window as any).sourcePeers.map(
+                  async (p: RTCPeerConnection) => ({
+                    state: p.connectionState,
+                    senders: p.getSenders().map((s) => ({
+                      state: s.track?.readyState,
+                      enabled: s.track?.enabled,
+                    })),
+                    stats: [...(await p.getStats()).values()]
+                      .filter((s) => s.type === 'outbound-rtp')
+                      .map((s) => ({
+                        frames: s.framesEncoded,
+                        sent: s.packetsSent,
+                        nack: s.nackCount,
+                        pli: s.pliCount,
+                      })),
+                  }),
+                ),
+              ),
+            };
+          }),
+        }),
+      );
     assert.ok(
-      (await stats()).frames >= impaired.frames + 10,
+      afterRecovery.frames >= impaired.frames + 10,
       'Media resumes from new frames after congestion clears',
     );
     // Poll from the test runner: the replay iframe intentionally forbids script

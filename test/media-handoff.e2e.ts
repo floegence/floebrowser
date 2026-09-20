@@ -76,6 +76,8 @@ test(
       [],
       'A supported video element must accept source pointer input',
     );
+    // The browser may emit multiple hover moves before down/up complete.
+    await source.waitForFunction(() => (window as any).clicks === 1);
     const effects = await source.evaluate(() => ({
       clicks: (window as any).clicks,
       moves: (window as any).moves,

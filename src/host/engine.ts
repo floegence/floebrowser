@@ -71,7 +71,7 @@ export class BrowserProjection {
   private heldKeys = new Map<string, Record<string, unknown>>();
   private heldButtons = new Set<string>();
   private state: BrowserState;
-  private mediaNodes = new Set<number>();
+  private mediaNodes = new Map<number, string>();
   private disposers: Array<() => void> = [];
 
   private constructor(
@@ -150,6 +150,7 @@ export class BrowserProjection {
       ) {
         this.contextID = context.id;
         this.epoch = '';
+        this.mediaNodes.clear();
         this.metadata = undefined;
         this.updateState({ status: 'loading' });
       }
@@ -157,6 +158,7 @@ export class BrowserProjection {
     this.listen(this.cdp, 'Runtime.executionContextsCleared', () => {
       this.contextID = 0;
       this.epoch = '';
+      this.mediaNodes.clear();
       this.metadata = undefined;
       this.heldKeys.clear();
       this.heldButtons.clear();
@@ -298,19 +300,22 @@ export class BrowserProjection {
       event.data.tag === 'floebrowser:media'
     ) {
       const packet = mediaPacketSchema.safeParse(event.data.payload);
-      if (
-        packet.success &&
-        this.epoch &&
-        this.projection.isMedia(packet.data.id)
-      ) {
-        if (packet.data.kind === 'removed')
-          this.mediaNodes.delete(packet.data.id);
-        else {
-          if (!this.mediaNodes.has(packet.data.id) && this.mediaNodes.size >= 8)
+      if (packet.success && this.epoch) {
+        const media = packet.data;
+        if (media.kind === 'removed') {
+          // Removal can follow DOM teardown or a checkpoint that temporarily
+          // omits a child document. Always let the receiver retire that node.
+          this.mediaNodes.delete(media.id);
+        } else {
+          if (!this.projection.isMedia(media.id)) return;
+          for (const [id, stream] of this.mediaNodes)
+            if (stream === media.stream && id !== media.id)
+              this.mediaNodes.delete(id);
+          if (!this.mediaNodes.has(media.id) && this.mediaNodes.size >= 8)
             return;
-          this.mediaNodes.add(packet.data.id);
+          this.mediaNodes.set(media.id, media.stream);
         }
-        this.send({ type: 'media', epoch: this.epoch, packet: packet.data });
+        this.send({ type: 'media', epoch: this.epoch, packet: media });
       }
       return;
     }
@@ -348,21 +353,41 @@ export class BrowserProjection {
     }
     const projected = this.projection.event(event, this.page.url());
     if (!projected) return;
-    for (const id of event.type === EventType.FullSnapshot
-      ? []
-      : this.mediaNodes) {
-      if (!this.projection.isMedia(id)) {
+    if (event.type !== EventType.FullSnapshot) {
+      const retired: string[] = [];
+      for (const [id, stream] of this.mediaNodes) {
+        if (this.projection.isMedia(id)) continue;
         this.mediaNodes.delete(id);
+        retired.push(stream);
         this.send({
           type: 'media',
           epoch: this.epoch,
           packet: { kind: 'removed', id },
         });
       }
+      // DOM teardown retires both endpoints by stream identity. If a page
+      // reinserts the same element, its source scan creates a fresh offer.
+      // This also handles an iframe disappearing before it can emit removal.
+      if (retired.length)
+        void Promise.all(
+          this.page
+            .frames()
+            .map((frame) =>
+              frame
+                .evaluate(
+                  ({ key, streams }) =>
+                    (window as any)[key]?.retireMedia(streams),
+                  { key: this.recorderKey, streams: retired },
+                )
+                .catch(() => {}),
+            ),
+        );
     }
     if (event.type === EventType.FullSnapshot) {
       this.epoch = `${this.recorderKey.slice(-12)}:${++this.generation}`;
       this.sequence = 0;
+      // Child documents are rebuilt separately. Their forced media states
+      // re-admit existing streams after the corresponding DOM is present.
       this.mediaNodes.clear();
       const meta = this.metadata ?? {
         type: EventType.Meta,
@@ -446,6 +471,7 @@ export class BrowserProjection {
   }
 
   private async setMedia(active: boolean): Promise<void> {
+    if (!active) this.mediaNodes.clear();
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
@@ -482,7 +508,8 @@ export class BrowserProjection {
       if (
         message.tab !== this.id ||
         message.epoch !== this.epoch ||
-        !this.mediaNodes.has(message.node) ||
+        this.mediaNodes.get(message.node) !== message.stream ||
+        !this.projection.isMedia(message.node) ||
         viewer.mediaPending.has(message.stream) ||
         viewer.mediaPending.size >= 8
       )
