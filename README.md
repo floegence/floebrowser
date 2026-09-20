@@ -218,7 +218,7 @@ The standalone viewer always adapts automatically and has no manual size selecto
 
 Embedding hosts can pass a `mediaControls` element in `DOMBrowserView` options to place these optional controls in their browser chrome, outside the projection container. Without that mount, the viewer adds no media UI; website controls and media forwarding still work. The host should provide the toolbar mount when users need auxiliary playback controls and availability details.
 
-Use the same FloeBrowser release on both sides. Protocol version 7 adds a tab-local `error` state for failed document loads, alongside viewport commands, scroll-region wheel coordinates and the pinned rrweb event format; it is not compatible with earlier viewers or independently upgraded rrweb packages.
+Use the same FloeBrowser release on both sides. Protocol version 8 adds layout-preserving Canvas placeholders alongside tab-local load errors, viewport commands, scroll-region wheel coordinates and the pinned rrweb event format; it is not compatible with earlier viewers or independently upgraded rrweb packages.
 
 ## State and failure boundaries
 
@@ -272,6 +272,12 @@ Public-site qualification on 2026-09-20 used isolated managed Chromium sources a
 | WebGL / Three.js | Official `webgl_animation_keyframes` example: the source rendered the animated 3D scene; the viewer showed canvas placeholders. Not supported |
 
 Canvas and WebGL are graphics surfaces rather than DOM content. Supporting their actual pictures and input requires a separately designed source-owned graphics transport; enabling unsafe rrweb canvas replay or treating an opened page as a passing game test is not acceptable.
+
+Live CSS animations run in the scriptless projection rather than being frozen by rrweb's paused-replay defaults. Entry fades, transformed scroll regions and pseudo-element animations can finish; an animation explicitly paused by website CSS remains paused. Animation timelines are not synchronized frame-for-frame with the source, and website JavaScript still runs only at the source.
+
+Canvas pixels remain unsupported. The recorder retains Canvas layout attributes, source intrinsic dimensions and mutations without recording its pixels; the viewer uses an inert SVG placeholder image with native replaced-element sizing. Canvas and image type selectors are rewritten separately so ordinary image rules do not restyle the placeholder. Hidden and zero-sized editor overlays retain their source visibility, pointer behavior and dimensions. Single-dimension attributes, attribute removal and cross-origin frame updates preserve source sizing without adding synthetic width or height attributes. The placeholder never replays Canvas commands or source bitmap payloads. These behaviors are covered by `test/style-fidelity.e2e.ts` and `test/projection.test.ts`.
+
+The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exercised at a 781 × 801 source viewport through seven chapter selections and repeated scrolling. The qualification compared the geometry of the directory controls, article controls and editor Canvas surfaces against the source and observed 69 acknowledged actions with no rejected actions. This validates those document flows, not WebGL or WebGPU rendering.
 
 ## Current limits
 

@@ -2,16 +2,29 @@ import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import { SOURCE_LINK_ATTRIBUTE, type ResourceStore } from './resources.js';
 import {
   MATHML_ATTRIBUTE,
+  CANVAS_ATTRIBUTE,
   STYLESHEET_LINK_ATTRIBUTE,
   styleAttributes,
   type SourceStylesheet,
+  type SourceCanvasSize,
 } from '../shared/style.js';
 
 type Serialized = Record<string, any>;
-const blocked = new Set(['canvas', 'object', 'embed']);
+const blocked = new Set(['object', 'embed']);
 const inert = new Set(['script', 'base', 'meta', 'source', 'track']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
+function canvasPlaceholder(size?: SourceCanvasSize): string {
+  const dimension = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+      ? value
+      : fallback;
+  const width = dimension(size?.width, 300);
+  const height = dimension(size?.height, 150);
+  // Intrinsic sizing must follow the source without inventing DOM attributes
+  // that would change selectors such as canvas[width]. Only numbers enter SVG.
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"><rect width="300" height="150" fill="#f3f5f8"/><text x="150" y="70" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">Canvas is not supported</text><text x="150" y="90" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">in DOM mode</text></svg>`)}`;
+}
 const reservedStyleAttributes = new Set(Object.values(styleAttributes));
 
 /** Projects untrusted rrweb data into an inert, source-resource-only document. */
@@ -34,6 +47,7 @@ export class DOMProjection {
     base: string,
     raw: Serialized = {},
     sheet?: SourceStylesheet,
+    canvas?: SourceCanvasSize,
   ): Serialized {
     const result: Serialized = {};
     for (const [name, marker] of Object.entries(styleAttributes)) {
@@ -45,10 +59,13 @@ export class DOMProjection {
       if (
         key === SOURCE_LINK_ATTRIBUTE ||
         key === MATHML_ATTRIBUTE ||
+        key === CANVAS_ATTRIBUTE ||
+        key === 'data-floebrowser-unsupported' ||
         key === STYLESHEET_LINK_ATTRIBUTE ||
         reservedStyleAttributes.has(key)
       )
         continue;
+      if (tag === 'canvas' && key.startsWith('rr_')) continue;
       if (
         tag === 'link' &&
         ['href', 'rel', 'as', 'disabled', '_cssText'].includes(key)
@@ -123,6 +140,14 @@ export class DOMProjection {
     }
     if (tag === 'iframe' || tag === 'frame')
       result.sandbox = 'allow-same-origin';
+    if (tag === 'canvas') {
+      result[CANVAS_ATTRIBUTE] = '';
+      result.src = canvasPlaceholder(canvas);
+      result['data-floebrowser-unsupported'] =
+        'Canvas is not supported in DOM mode';
+      result['aria-label'] = 'Canvas is not supported in DOM mode';
+      result.role = 'img';
+    }
     if (tag === 'link' || (tag === 'style' && sheet)) {
       // A stable style node handles activation, URL changes and CSSOM text;
       // rrweb must never turn a preloaded link into a permanent inert node.
@@ -172,6 +197,26 @@ export class DOMProjection {
     if (node.type === 2) {
       const original = String(node.tagName).toLowerCase();
       this.tags.set(node.id, original);
+      if (original === 'canvas') {
+        // Scriptless canvas uses fallback flow. An inert image retains replaced
+        // element sizing; selector rewriting preserves the source canvas rules.
+        node.tagName = 'img';
+        node.attributes = this.attributes(
+          node.attributes ?? {},
+          original,
+          base,
+          node.floeAttributes,
+          undefined,
+          node.floeCanvas,
+        );
+        delete node.floeCanvas;
+        delete node.floeAttributes;
+        delete node.floeStylesheet;
+        delete node.floeNamespace;
+        for (const child of node.childNodes ?? []) this.exclude(child);
+        node.childNodes = [];
+        return;
+      }
       if (
         blocked.has(original) ||
         (original === 'input' && node.attributes?.type === 'file')
@@ -271,6 +316,7 @@ export class DOMProjection {
         data.adds = data.adds.filter((addition: Serialized) => {
           if (
             this.excluded.has(addition.parentId) ||
+            this.tags.get(addition.parentId) === 'canvas' ||
             this.excluded.has(addition.node.rootId)
           ) {
             this.exclude(addition.node);
@@ -308,10 +354,12 @@ export class DOMProjection {
             entry.floeBase ?? this.bases.get(entry.id) ?? base,
             entry.floeAttributes,
             entry.floeStylesheet,
+            entry.floeCanvas,
           );
           delete entry.floeBase;
           delete entry.floeAttributes;
           delete entry.floeStylesheet;
+          delete entry.floeCanvas;
         }
         for (const text of data.texts)
           if (this.tags.get(text.id) === 'style')

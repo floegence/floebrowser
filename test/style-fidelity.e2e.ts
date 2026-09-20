@@ -44,6 +44,29 @@ async function setup(
   });
   const external: string[] = [];
   const errors: string[] = [];
+  const failures: unknown[] = [];
+  const commands = new Map<number, any>();
+  viewer.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.type === 'command') commands.set(message.id, message.action);
+    });
+    socket.on('framereceived', ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.type !== 'ack') return;
+      const action = commands.get(message.id);
+      commands.delete(message.id);
+      if (
+        !message.ok &&
+        !(
+          action?.kind === 'pointer' &&
+          action.phase === 'move' &&
+          action.buttons === 0
+        )
+      )
+        failures.push({ action: action?.kind, code: message.code });
+    });
+  });
   viewer.on('pageerror', (error) => errors.push(error.message));
   await viewer.route('**/*', (route) => {
     if (new URL(route.request().url()).origin !== new URL(service.url).origin) {
@@ -69,6 +92,7 @@ async function setup(
     source,
     viewer,
     service,
+    failures,
     root: viewer.frameLocator('#viewport iframe'),
   };
 }
@@ -590,3 +614,244 @@ test(
     );
   },
 );
+
+test('live entry animations reveal content and preserve explicitly paused source animations', async (t) => {
+  const { source, viewer, root } = await setup(
+    t,
+    `
+    <style>
+      @keyframes reveal { from { opacity: 0 } to { opacity: 1 } }
+      .entry { animation: reveal 120ms ease-out both; }
+      .paused { animation-play-state: paused; }
+      #pseudo::before { content: 'Animated label'; animation: reveal 120ms both; }
+    </style>
+    <section class="entry" id="entry"><button id="action" onclick="this.textContent='Confirmed'">Run action</button></section>
+    <div class="entry paused" id="paused">Intentionally hidden</div>
+    <div id="pseudo"></div>
+  `,
+  );
+  const opacity = (node: Element) => getComputedStyle(node).opacity;
+  assert.equal(await source.locator('#entry').evaluate(opacity), '1');
+  await eventually(async () =>
+    assert.equal(await root.locator('#entry').evaluate(opacity), '1'),
+  );
+  await eventually(async () =>
+    assert.equal(
+      await root
+        .locator('#pseudo')
+        .evaluate((node) => getComputedStyle(node, '::before').opacity),
+      '1',
+    ),
+  );
+  assert.equal(await root.locator('#paused').evaluate(opacity), '0');
+  await root.locator('#action').click();
+  await source.waitForFunction(
+    () => document.querySelector('#action')?.textContent === 'Confirmed',
+  );
+  await viewer.reload();
+  await viewer.locator('#status.live').waitFor();
+  await eventually(async () =>
+    assert.equal(await root.locator('#entry').evaluate(opacity), '1'),
+  );
+});
+
+test('canvas placeholders preserve editor overlays, hidden surfaces, native sizing and later layout changes', async (t) => {
+  const { source, viewer, root, failures } = await setup(
+    t,
+    `
+    <style>
+      #editor { position:relative; width:480px; height:160px; overflow:auto; }
+      canvas.overlay { position:absolute; right:0; top:0; width:14px; height:160px; pointer-events:none; }
+      canvas.zero { width:0; }
+      canvas.hidden { display:none; }
+      img { display:block; margin:40px; width:500px; }
+      #content { height:1800px; }
+    </style>
+    <div id="editor"><canvas id="overlay" class="overlay"></canvas><canvas id="zero" class="overlay zero"></canvas><canvas id="hidden" class="hidden"></canvas><div id="content"><button id="target" onclick="this.textContent='Confirmed'">Source action</button></div></div>
+    <canvas id="intrinsic" width="200" height="80"></canvas><button id="after">After surface</button>
+    <div><canvas id="width-only" width="200"></canvas><canvas id="height-only" height="80"></canvas><canvas id="defaults"></canvas></div>
+  `,
+  );
+  const geometry = (node: Element) => {
+    const r = node.getBoundingClientRect();
+    const s = getComputedStyle(node);
+    return {
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      display: s.display,
+      position: s.position,
+      pointerEvents: s.pointerEvents,
+    };
+  };
+  for (const id of [
+    'editor',
+    'overlay',
+    'zero',
+    'hidden',
+    'intrinsic',
+    'after',
+    'width-only',
+    'height-only',
+    'defaults',
+  ]) {
+    await eventually(async () =>
+      assert.deepEqual(
+        await root.locator(`#${id}`).evaluate(geometry),
+        await source.locator(`#${id}`).evaluate(geometry),
+      ),
+    );
+  }
+  await root.locator('#target').click();
+  await source.waitForFunction(
+    () => document.querySelector('#target')?.textContent === 'Confirmed',
+  );
+  await root.locator('#editor').hover({ position: { x: 470, y: 80 } });
+  await viewer.mouse.wheel(0, 300);
+  await source.waitForFunction(
+    () => document.querySelector('#editor')!.scrollTop >= 300,
+  );
+  await source.locator('#overlay').evaluate((node) => {
+    node.style.width = '9px';
+    node.style.height = '120px';
+    node.style.right = '20px';
+  });
+  await eventually(async () =>
+    assert.deepEqual(
+      await root.locator('#overlay').evaluate(geometry),
+      await source.locator('#overlay').evaluate(geometry),
+    ),
+  );
+  await source
+    .locator('#hidden')
+    .evaluate((node) => node.classList.remove('hidden'));
+  await eventually(async () =>
+    assert.deepEqual(
+      await root.locator('#hidden').evaluate(geometry),
+      await source.locator('#hidden').evaluate(geometry),
+    ),
+  );
+  for (const [id, attribute, value] of [
+    ['width-only', 'width', '240'],
+    ['height-only', 'height', null],
+    ['intrinsic', 'width', null],
+    ['defaults', 'height', '50'],
+  ] as const) {
+    await source.locator(`#${id}`).evaluate(
+      (node, change) => {
+        if (change.value === null) node.removeAttribute(change.attribute);
+        else node.setAttribute(change.attribute, change.value);
+      },
+      { attribute, value },
+    );
+    await eventually(async () => {
+      assert.deepEqual(
+        await root.locator(`#${id}`).evaluate(geometry),
+        await source.locator(`#${id}`).evaluate(geometry),
+      );
+      assert.equal(await root.locator(`#${id}`).getAttribute(attribute), value);
+    });
+  }
+  assert.deepEqual(failures, []);
+});
+
+test('cross-origin frame animations and intrinsic canvas sizes survive projection and source updates', async (t) => {
+  const { source, root, failures } = await setup(
+    t,
+    '<iframe id="child" src="ASSET_ORIGIN/child.html" width="700" height="450"></iframe>',
+    {
+      '/child.html': `<!doctype html><style>
+      @keyframes reveal { from { opacity:0 } to { opacity:1 } }
+      article { animation:reveal 100ms both; }
+      canvas:not([height]) { margin-left:10px; }
+    </style><article><canvas id="surface" width="200"></canvas><button onclick="document.querySelector('canvas').height=90">Resize surface</button></article>`,
+    },
+  );
+  const child = root.frameLocator('#child');
+  const sourceChild = source.frameLocator('#child');
+  const size = (node: Element) => {
+    const r = node.getBoundingClientRect();
+    return [r.x, r.y, r.width, r.height];
+  };
+  await eventually(async () => {
+    assert.equal(
+      await child
+        .locator('article')
+        .evaluate((n) => getComputedStyle(n).opacity),
+      '1',
+    );
+    assert.deepEqual(
+      await child.locator('#surface').evaluate(size),
+      await sourceChild.locator('#surface').evaluate(size),
+    );
+  });
+  await child.getByRole('button', { name: 'Resize surface' }).click();
+  await eventually(async () => {
+    assert.equal(
+      await sourceChild.locator('#surface').getAttribute('height'),
+      '90',
+    );
+    assert.deepEqual(
+      await child.locator('#surface').evaluate(size),
+      await sourceChild.locator('#surface').evaluate(size),
+    );
+  });
+  assert.deepEqual(failures, []);
+});
+
+test('animated nested document scrolling does not enter a stale-view refresh loop', async (t) => {
+  const { source, viewer, root, failures } = await setup(
+    t,
+    `
+    <style>
+      body { margin:0; }
+      @keyframes enter { from { transform:translateX(-350px); opacity:0 } to { transform:none; opacity:1 } }
+      #article { position:absolute; left:400px; top:80px; width:300px; height:350px; overflow:auto; animation:enter 150ms both; }
+      #text { height:2500px; }
+    </style>
+    <section id="article"><div id="text"><button id="switch" onclick="location.hash='next';document.querySelector('#text').dataset.page='next'">Next section</button><h1>Architecture</h1></div></section>
+  `,
+  );
+  await eventually(async () =>
+    assert.equal(
+      await root
+        .locator('#article')
+        .evaluate((n) => getComputedStyle(n).transform),
+      await source
+        .locator('#article')
+        .evaluate((n) => getComputedStyle(n).transform),
+    ),
+  );
+  await root
+    .locator('#article')
+    .hover({ position: { x: 100, y: 50 }, timeout: 3000 });
+  for (let i = 0; i < 12; i++) {
+    await viewer.mouse.wheel(0, 80);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await source.waitForFunction(
+    () => document.querySelector('#article')!.scrollTop >= 800,
+  );
+  await eventually(async () =>
+    assert.equal(
+      await root.locator('#article').evaluate((n) => n.scrollTop),
+      await source.locator('#article').evaluate((n) => n.scrollTop),
+    ),
+  );
+  for (let i = 0; i < 12; i++) {
+    await viewer.mouse.wheel(0, -80);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await source.waitForFunction(
+    () => document.querySelector('#article')!.scrollTop === 0,
+  );
+  await root.locator('#switch').click();
+  await source.waitForFunction(() => location.hash === '#next');
+  assert.deepEqual(
+    failures,
+    [],
+    'Ordinary scrolling and document links must not reject input',
+  );
+  assert.equal(await viewer.locator('#toast').isVisible(), false);
+});

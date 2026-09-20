@@ -296,3 +296,140 @@ test('media keeps its DOM geometry but cannot load site URLs or replay source pl
   assert.equal(mutation.data.attributes[0].attributes.src, null);
   resources.close();
 });
+
+test('canvas projection retains layout attributes without accepting bitmap payloads or fallback scripts', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const projection = new DOMProjection(resources);
+  try {
+    const output: any = projection.event(
+      {
+        type: 2,
+        timestamp: 1,
+        data: {
+          node: {
+            type: 0,
+            id: 1,
+            childNodes: [
+              {
+                type: 2,
+                id: 2,
+                tagName: 'canvas',
+                floeCanvas: { width: 0, height: 120 },
+                attributes: {
+                  id: 'editor-overlay',
+                  width: 0,
+                  height: 120,
+                  style: 'position:absolute;right:0',
+                  rr_dataURL: 'data:image/png;base64,secret',
+                  onclick: 'steal()',
+                },
+                childNodes: [
+                  {
+                    type: 2,
+                    id: 3,
+                    tagName: 'script',
+                    attributes: {},
+                    childNodes: [],
+                  },
+                ],
+              },
+            ],
+          },
+          initialOffset: { left: 0, top: 0 },
+        },
+      } as any,
+      'https://source.test',
+    );
+    const canvas = output.data.node.childNodes[0];
+    assert.equal(canvas.tagName, 'img');
+    assert.equal(canvas.attributes.width, 0);
+    assert.equal(canvas.attributes.height, 120);
+    assert.equal(canvas.attributes.id, 'editor-overlay');
+    assert.equal(canvas.attributes.onclick, null);
+    assert.equal(canvas.attributes.rr_dataURL, undefined);
+    assert.equal(canvas.attributes['data-floebrowser-canvas'], '');
+    assert.match(canvas.attributes.src, /^data:image\/svg\+xml,/);
+    assert.doesNotMatch(canvas.attributes.src, /secret/);
+    assert.match(
+      decodeURIComponent(canvas.attributes.src),
+      /width="0" height="120"/,
+    );
+    assert.equal(canvas.floeCanvas, undefined);
+    assert.deepEqual(canvas.childNodes, []);
+    const update: any = projection.event(
+      {
+        type: 3,
+        timestamp: 2,
+        data: {
+          source: 0,
+          adds: [],
+          texts: [],
+          removes: [],
+          attributes: [
+            {
+              id: 2,
+              floeCanvas: { width: 40, height: 120 },
+              attributes: {
+                width: 40,
+                rr_dataURL: 'data:image/png;base64,secret',
+              },
+            },
+            { id: 3, attributes: { src: 'https://evil.test/code.js' } },
+          ],
+        },
+      } as any,
+      'https://source.test',
+    );
+    assert.equal(update.data.attributes.length, 1);
+    assert.equal(update.data.attributes[0].attributes.width, 40);
+    assert.equal(update.data.attributes[0].attributes.rr_dataURL, undefined);
+    assert.equal(update.data.attributes[0].floeCanvas, undefined);
+    assert.match(
+      decodeURIComponent(update.data.attributes[0].attributes.src),
+      /width="40" height="120"/,
+    );
+    const malformed: any = projection.event(
+      {
+        type: 3,
+        timestamp: 3,
+        data: {
+          source: 0,
+          adds: [],
+          texts: [],
+          removes: [],
+          attributes: [
+            {
+              id: 2,
+              attributes: {},
+              floeCanvas: {
+                width: '"><script>evil()</script>',
+                height: -1,
+              },
+            },
+          ],
+        },
+      } as any,
+      'https://source.test',
+    );
+    const placeholder = decodeURIComponent(
+      malformed.data.attributes[0].attributes.src,
+    );
+    assert.match(placeholder, /width="300" height="150"/);
+    assert.doesNotMatch(placeholder, /script|evil/);
+    assert.equal(
+      projection.event(
+        {
+          type: 3,
+          timestamp: 3,
+          data: { source: 9, id: 2, property: 'drawImage', args: [] },
+        } as any,
+        'https://source.test',
+      ),
+      undefined,
+    );
+  } finally {
+    resources.close();
+  }
+});

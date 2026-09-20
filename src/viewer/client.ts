@@ -351,6 +351,8 @@ export class DOMBrowserView {
       this.replayer = new Replayer([], {
         root: this.surface,
         liveMode: true,
+        // A live projection must not freeze entry animations at their first frame.
+        pauseAnimation: false,
         showWarning: false,
         showDebug: false,
         mouseTail: false,
@@ -367,8 +369,8 @@ export class DOMBrowserView {
           },
         ],
         insertStyleRules: [
-          '[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
-          '[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
+          ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
+          ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
           'a,button,select,input[type=checkbox],input[type=radio]{cursor:pointer}',
         ],
       });

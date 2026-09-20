@@ -3,7 +3,11 @@ import type { CDPSession } from 'playwright';
 import parseCSS from 'postcss-safe-parser';
 import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
-import { STYLESHEET_LINK_ATTRIBUTE, styleAttributes } from '../shared/style.js';
+import {
+  CANVAS_ATTRIBUTE,
+  STYLESHEET_LINK_ATTRIBUTE,
+  styleAttributes,
+} from '../shared/style.js';
 
 export const SOURCE_LINK_ATTRIBUTE = 'data-floebrowser-link';
 const projectedSelectors = selectorParser((selectors) => {
@@ -19,7 +23,11 @@ const projectedSelectors = selectorParser((selectors) => {
         ? `:is(link,style:where([${STYLESHEET_LINK_ATTRIBUTE}]))`
         : name === 'style'
           ? `style:not(:where([${STYLESHEET_LINK_ATTRIBUTE}]))`
-          : undefined;
+          : name === 'canvas'
+            ? `:is(canvas,img:where([${CANVAS_ATTRIBUTE}]))`
+            : name === 'img'
+              ? `img:not(:where([${CANVAS_ATTRIBUTE}]))`
+              : undefined;
     if (selector)
       tag.replaceWith(...selectorParser().astSync(selector).nodes[0]!.nodes);
   }

@@ -2,7 +2,6 @@ import { observeMedia } from './media-source.js';
 import { record } from '@rrweb/record';
 import type { MediaConfiguration } from '../shared/protocol.js';
 import { IncrementalSource, type ICrossOriginIframeMirror } from '@rrweb/types';
-import { UNSUPPORTED_SELECTOR } from '../shared/protocol.js';
 import { styleAttributes, type SourceStylesheet } from '../shared/style.js';
 
 /** Runs inside source documents. Relay credentials must be scoped and short-lived. */
@@ -40,6 +39,10 @@ export function installRecorder(
         .filter((name) => Object.hasOwn(styleAttributes, name))
         .map((name) => [name, element.getAttribute(name)]),
     );
+  const canvasSize = (element: HTMLCanvasElement) => ({
+    width: element.width,
+    height: element.height,
+  });
   const stylesheet = (
     element: HTMLLinkElement | HTMLStyleElement,
     captured?: string,
@@ -74,6 +77,8 @@ export function installRecorder(
     if (node.type === 2) {
       const element = record.mirror.getNode(node.id) as Element | null;
       if (element?.nodeType === 1) {
+        if (element.localName === 'canvas')
+          node.floeCanvas ??= canvasSize(element as HTMLCanvasElement);
         if (element.namespaceURI === 'http://www.w3.org/1998/Math/MathML')
           node.floeNamespace = element.namespaceURI;
         const raw = rawAttributes(element, [
@@ -151,6 +156,8 @@ export function installRecorder(
       for (const entry of event.data.attributes) {
         const element = record.mirror.getNode(entry.id) as Element | null;
         if (element?.nodeType === 1) {
+          if (element.localName === 'canvas')
+            entry.floeCanvas ??= canvasSize(element as HTMLCanvasElement);
           entry.floeAttributes ??= rawAttributes(
             element,
             Object.keys(entry.attributes),
@@ -227,7 +234,8 @@ export function installRecorder(
   };
   const stop = record({
     emit,
-    blockSelector: UNSUPPORTED_SELECTOR,
+    // Canvas element attributes carry layout; its pixels are never recorded.
+    blockSelector: 'object,embed,input[type="file"]',
     inlineStylesheet: true,
     inlineImages: false,
     recordCanvas: false,

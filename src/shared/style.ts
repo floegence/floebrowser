@@ -1,5 +1,6 @@
 /** Preserve selector values separately from attributes made inert for replay. */
 export const STYLESHEET_LINK_ATTRIBUTE = 'data-floebrowser-stylesheet-link';
+export const CANVAS_ATTRIBUTE = 'data-floebrowser-canvas';
 export const MATHML_ATTRIBUTE = 'data-floebrowser-mathml';
 export const styleAttributes: Record<string, string> = {
   href: 'data-floebrowser-href',
@@ -18,3 +19,5 @@ export type SourceStylesheet = {
   enabled: boolean;
   media: string;
 };
+
+export type SourceCanvasSize = { width: number; height: number };
