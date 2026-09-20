@@ -136,10 +136,11 @@ export async function createProjectionServer(
     const viewer = {
       ws,
       release: (): Promise<void> => {
-        released ??= (async () => {
-          await controller?.close();
+        if (!released) {
+          // Revocation is synchronous; draining source work remains page-local.
+          released = controller?.close() ?? Promise.resolve();
           if (active === viewer) active = undefined;
-        })();
+        }
         return released;
       },
     };
@@ -168,8 +169,8 @@ export async function createProjectionServer(
       else if (early.length < 8) early.push(parsed.data);
       else ws.close(1008, 'Connection not ready');
     });
-    // Only this carrier owns its viewers. A handoff drains and revokes the old
-    // controller before granting the next one; opening a URL alone never takes over.
+    // Only this carrier owns its viewers. Revoke before admission; each page
+    // drains old input before its next snapshot. Other tabs remain usable.
     admission = admission
       .then(async () => {
         if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
@@ -187,7 +188,7 @@ export async function createProjectionServer(
               'Control moved to another window',
             );
           }
-          await active.release();
+          void active.release();
         }
         if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
         controller = await session.connect((message) => {

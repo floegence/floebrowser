@@ -269,10 +269,18 @@ test('failed controller admission releases its provisional projection lease', as
       /Consumer rejected the handshake/,
     );
     const messages: ServerMessage[] = [];
+    let ready!: () => void;
+    const snapshot = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
     const controller = await bounded(
-      session.connect((message) => messages.push(message)),
+      session.connect((message) => {
+        messages.push(message);
+        if (message.type === 'snapshot') ready();
+      }),
       'A failed admission must not strand a source lease',
     );
+    await bounded(snapshot, 'The recovered admission must produce fresh DOM');
     assert.ok(messages.some((message) => message.type === 'snapshot'));
     await controller.close();
   } finally {

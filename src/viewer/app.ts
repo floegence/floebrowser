@@ -109,6 +109,13 @@ async function drain(): Promise<void> {
     const work = commands.shift()!;
     current = work;
     updateChrome();
+    if (!work.action.kind.startsWith('tab_')) {
+      // Dispatch in intent order, but page completion never holds browser
+      // chrome. A subsequent tab command can revoke this page immediately.
+      void view!.dispatch(work.action).then(work.resolve);
+      current = undefined;
+      continue;
+    }
     const ok =
       work.action.kind === 'tab_select' && work.action.tab === tabState.active
         ? true
@@ -162,7 +169,11 @@ async function closeTab(id: string): Promise<void> {
 }
 function renderTabs(state: TabState): void {
   const previous = tabState.active;
-  if (previous && previous !== state.active) changingTab = true;
+  if (previous && previous !== state.active) {
+    changingTab = true;
+    clearTimeout(toastTimer);
+    element('toast').hidden = true;
+  }
   tabState = state;
   const list = element('tabs');
   const focusedTab = document.activeElement?.getAttribute('data-tab');

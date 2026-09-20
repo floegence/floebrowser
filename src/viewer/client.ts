@@ -46,6 +46,7 @@ type Pending = {
   epoch: string;
   tab: string;
   hover: boolean;
+  chrome: boolean;
 };
 type Wheel = Extract<Action, { kind: 'wheel' }>;
 const modifiers = (event: MouseEvent | KeyboardEvent) =>
@@ -271,6 +272,12 @@ export class DOMBrowserView {
     }
     if (message.type === 'tabs') {
       if (message.state.active !== this.tab) {
+        for (const [id, pending] of this.pending) {
+          if (pending.chrome) continue;
+          clearTimeout(pending.timer);
+          this.pending.delete(id);
+          pending.resolve(false);
+        }
         this.ready = false;
         this.pageError.hidden = true;
         this.queuedWheel = undefined;
@@ -295,6 +302,9 @@ export class DOMBrowserView {
       }
       this.media.configure(message.media);
       this.connected = true;
+      // Browser controls depend on the carrier, not on a selected renderer
+      // producing its first snapshot (including reconnecting to a hung tab).
+      this.options.onStatus?.('refreshing');
       return;
     }
     if (message.type === 'focus') {
@@ -429,6 +439,7 @@ export class DOMBrowserView {
       pending.resolve(message.ok);
       this.options.onAction?.(Math.round(performance.now() - pending.started));
       if (!message.ok) {
+        if (!pending.chrome && pending.tab !== this.tab) return;
         if (message.code === 'navigation_failed' && !this.pageError.hidden)
           return;
         if (message.code === 'stale_view') {
@@ -544,22 +555,26 @@ export class DOMBrowserView {
       this.options.onNotice?.('Paste up to 16,000 characters at a time.');
       return Promise.resolve(false);
     }
-    if (this.pending.size >= MAX_PENDING_COMMANDS) {
+    const chrome = action.kind.startsWith('tab_');
+    if (
+      [...this.pending.values()].filter((pending) => pending.chrome === chrome)
+        .length >= MAX_PENDING_COMMANDS
+    ) {
       this.options.onNotice?.(
         'The source is catching up. Please wait a moment.',
       );
       return Promise.resolve(false);
     }
     const id = ++this.nextID;
+    const tab = this.tab;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve(false);
-        this.options.onNotice?.(
-          'No confirmation was received. The action has not been repeated.',
-        );
-        this.connection.close();
-        this.disconnected();
+        if (chrome || this.tab === tab)
+          this.options.onNotice?.(
+            'This page did not confirm the action. You can switch tabs or close it. The action has not been repeated.',
+          );
       }, 25000);
       this.pending.set(id, {
         resolve,
@@ -567,6 +582,7 @@ export class DOMBrowserView {
         started: performance.now(),
         epoch: this.epoch,
         tab: this.tab,
+        chrome,
         hover:
           action.kind === 'pointer' &&
           action.phase === 'move' &&

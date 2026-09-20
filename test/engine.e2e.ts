@@ -73,6 +73,7 @@ test('viewport changes require current control and host authorization but surviv
   const controller = await service.engine.connect((message) =>
     messages.push(message),
   );
+  await eventually(() => !!snapshot(messages));
   const original = snapshot(messages);
   const command = (id: number, width: number) => ({
     type: 'command' as const,
@@ -389,9 +390,9 @@ test(
     t.after(() => second.terminate());
     assert.equal(await firstClosed, 4002);
     assert.equal(
-      secondMessages.length,
-      0,
-      'New control waits for the old input to drain',
+      snapshot(secondMessages),
+      undefined,
+      'The session can connect, but this page is not re-admitted before old input drains',
     );
     allow(true);
     await eventually(() => !!snapshot(secondMessages));

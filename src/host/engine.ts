@@ -46,6 +46,7 @@ type Viewer = {
   pending: number;
   resyncPending: boolean;
   mediaPending: Set<string>;
+  observing: boolean;
 };
 
 /** One page, one projection, one controller. Does not own the browser or profile. */
@@ -206,6 +207,11 @@ export class BrowserProjection {
       this.updateState({ status: 'closed' });
       void this.close();
     });
+    this.listen(this.page, 'crash', () => {
+      this.epoch = '';
+      this.mediaNodes.clear();
+      this.updateState({ status: 'error' });
+    });
     this.listen(this.page, 'popup', (page: Page) =>
       this.options.onPopup
         ? this.options.onPopup(page)
@@ -313,7 +319,10 @@ export class BrowserProjection {
       if (typeof title === 'string') this.updateState({ title });
       return;
     }
-    if (!this.viewer?.active) return;
+    if (!this.viewer?.active || !this.viewer.observing) {
+      if (event.type === EventType.FullSnapshot) void this.setMedia(false);
+      return;
+    }
     if (
       event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:media'
@@ -486,14 +495,10 @@ export class BrowserProjection {
   }
 
   async connect(send: (message: ServerMessage) => void): Promise<Controller> {
-    if (this.closed || this.controlFault || this.closing)
+    if (this.closed || this.closing)
       throw new Error('The source page is unavailable.');
     if (this.hasController)
       throw new Error('The source page already has a controller.');
-    // A previous controller's submitted input and key release must finish first.
-    await this.queue;
-    if (this.hasController || this.closed || this.controlFault || this.closing)
-      throw new Error('The source page is unavailable.');
     const viewer: Viewer = {
       send,
       active: true,
@@ -501,21 +506,27 @@ export class BrowserProjection {
       pending: 0,
       resyncPending: false,
       mediaPending: new Set(),
+      observing: false,
     };
     this.viewer = viewer;
+    let retiring: Promise<void> | undefined;
     const controller: Controller = {
       receive: (message) => this.receive(viewer, message),
-      close: async () => {
-        if (!viewer.active) return;
+      close: () => {
+        if (retiring) return retiring;
         viewer.active = false;
-        this.queue = this.queue
-          .then(() => this.releaseInput())
+        viewer.observing = false;
+        const suspended = this.setMedia(false);
+        retiring = this.queue = this.queue
+          .then(async () => {
+            await this.releaseInput();
+            await suspended;
+            if (this.viewer === viewer) this.viewer = undefined;
+          })
           .catch(() => {
             this.controlFault = true;
           });
-        await this.queue;
-        await this.setMedia(false);
-        if (this.viewer === viewer) this.viewer = undefined;
+        return retiring;
       },
     };
     try {
@@ -525,7 +536,22 @@ export class BrowserProjection {
         media: this.options.media ?? {},
       });
       send({ type: 'state', state: this.currentState });
-      await this.snapshot();
+      // Admission is independent of renderer responsiveness. Submitted input,
+      // old-controller cleanup and this snapshot still share one page queue.
+      this.queue = this.queue
+        .then(async () => {
+          if (!viewer.active || this.viewer !== viewer) return;
+          if (this.controlFault) {
+            this.updateState({ status: 'error' });
+            return;
+          }
+          viewer.observing = true;
+          await this.snapshot();
+        })
+        .catch(() => {
+          if (viewer.active && this.viewer === viewer)
+            this.updateState({ status: 'error' });
+        });
       return controller;
     } catch (error) {
       // Admission owns the lease even before the first snapshot completes.
@@ -539,10 +565,16 @@ export class BrowserProjection {
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
-          .evaluate(({ key, active }) => (window as any)[key]?.media(active), {
-            key: this.recorderKey,
-            active: active && !!this.viewer?.active,
-          })
+          .evaluate(
+            ({ key, active }) =>
+              active
+                ? (window as any)[key]?.media(true)
+                : (window as any)[key]?.suspend(),
+            {
+              key: this.recorderKey,
+              active: active && !!this.viewer?.active && this.viewer.observing,
+            },
+          )
           .catch(() => {}),
       ),
     );
@@ -550,12 +582,15 @@ export class BrowserProjection {
 
   private async snapshot(): Promise<void> {
     if (this.snapshotPending || this.closed || !this.contextID) return;
+    const viewer = this.viewer;
     this.snapshotPending = true;
     try {
       await this.evaluate(
         `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
       );
+      if (!viewer?.active || this.viewer !== viewer) return;
       await this.frames.snapshot();
+      if (!viewer.active || this.viewer !== viewer) return;
       await this.setMedia(true);
     } finally {
       this.snapshotPending = false;
@@ -695,6 +730,7 @@ export class BrowserProjection {
         throw new CommandError('stale_view');
     };
     assertCurrent();
+    if (this.controlFault) throw new CommandError('target_unavailable');
     if (action.kind === 'viewport') {
       const size = { width: action.width, height: action.height };
       const current = this.page.viewportSize();

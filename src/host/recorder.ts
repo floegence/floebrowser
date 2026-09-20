@@ -32,6 +32,7 @@ export function installRecorder(
   let styleIDs = new WeakMap<CSSStyleSheet, number>();
   let lastTitle = document.title;
   let mediaActive = false;
+  let projecting = true;
   const media = new Set<ReturnType<typeof observeMedia>>();
   const rawAttributes = (element: Element, keys: string[]) =>
     Object.fromEntries(
@@ -226,6 +227,13 @@ export function installRecorder(
     return event;
   };
   const emit = (event: any) => {
+    // Background pages keep running, but their DOM never fills the host pipe.
+    if (
+      !projecting &&
+      event.type !== 4 &&
+      !(event.type === 5 && event.data.tag === 'floebrowser:title')
+    )
+      return;
     try {
       target[binding](JSON.stringify(event));
     } catch {
@@ -379,10 +387,16 @@ export function installRecorder(
         mediaActive = active;
         for (const observer of media) observer.setEnabled(active);
       },
+      suspend: () => {
+        projecting = false;
+        mediaActive = false;
+        for (const observer of media) observer.setEnabled(false);
+      },
       retireMedia: (streams: string[]) => {
         for (const observer of media) observer.retire(streams);
       },
       snapshot: () => {
+        projecting = true;
         record.takeFullSnapshot();
         emitFocus(document, true);
       },

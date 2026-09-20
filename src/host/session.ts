@@ -19,6 +19,7 @@ type Viewer = {
   controller?: Controller;
   lastID: number;
   pending: number;
+  retiring: Set<Promise<void>>;
 };
 
 /** Owns one initial page, its popups and explicitly created tabs; never adopts unrelated pages. */
@@ -26,6 +27,7 @@ export class BrowserSession {
   private tabs = new Map<string, Tab>();
   private adding = new Map<Page, Promise<Tab>>();
   private selected = '';
+  private selectionRevision = 0;
   private viewer?: Viewer;
   private queue = Promise.resolve();
   private closing?: Promise<void>;
@@ -70,6 +72,7 @@ export class BrowserSession {
     return result;
   }
   private add(page: Page): Promise<Tab> {
+    if (this.closing) return Promise.reject(new Error('Session closed'));
     const existing = [...this.tabs.values()].find((tab) => tab.page === page);
     if (existing) return Promise.resolve(existing);
     const pending = this.adding.get(page);
@@ -86,13 +89,24 @@ export class BrowserSession {
           } else this.publish();
         },
         onPopup: (popup) => {
-          if (!this.closing)
-            void this.enqueue(async () => {
-              const tab = await this.add(popup);
-              await this.select(tab.engine.id);
-            }).catch(() => this.unavailable());
+          if (this.closing) return;
+          const revision = ++this.selectionRevision;
+          // Attaching a popup may wait on its renderer. It never occupies the
+          // session's admission queue or overrides a later explicit selection.
+          void this.add(popup)
+            .then((tab) =>
+              this.enqueue(async () => {
+                if (!this.closing && revision === this.selectionRevision)
+                  await this.select(tab.engine.id);
+              }),
+            )
+            .catch(() => this.unavailable());
         },
       });
+      if (this.closing) {
+        await engine.close();
+        throw new Error('Session closed while attaching a tab');
+      }
       const tab = { page, engine };
       this.tabs.set(engine.id, tab);
       this.publish();
@@ -108,15 +122,24 @@ export class BrowserSession {
         'The source tab could not be opened. Try again from the current tab.',
     });
   }
+  private retire(viewer?: Viewer): void {
+    const controller = viewer?.controller;
+    if (!viewer || !controller) return;
+    viewer.controller = undefined;
+    const drained = controller.close();
+    viewer.retiring.add(drained);
+    void drained.finally(() => viewer.retiring.delete(drained)).catch(() => {});
+  }
   private async select(id: string): Promise<void> {
     const tab = this.tabs.get(id);
     if (!tab || tab.page.isClosed()) throw new Error('Unknown source tab');
     const viewer = this.viewer;
-    await viewer?.controller?.close();
-    if (viewer) viewer.controller = undefined;
+    // close() revokes synchronously. Its renderer cleanup belongs to the old
+    // projection and must not delay admission to an unrelated source page.
+    this.retire(viewer);
     this.selected = id;
     this.publish();
-    await tab.page.bringToFront();
+    void tab.page.bringToFront().catch(() => {});
     if (viewer?.active) {
       viewer.controller = await tab.engine.connect((message) => {
         if (
@@ -135,8 +158,8 @@ export class BrowserSession {
     if (!tab) return;
     const ids = [...this.tabs.keys()];
     const index = ids.indexOf(id);
-    if (this.selected === id) await this.viewer?.controller?.close();
-    await tab.engine.close();
+    if (this.selected === id) this.retire(this.viewer);
+    void tab.engine.close();
     this.tabs.delete(id);
     if (this.selected === id && !this.closing) {
       const next = ids[index + 1] ?? ids[index - 1];
@@ -154,7 +177,13 @@ export class BrowserSession {
     await this.queue;
     if (this.hasController || this.closing)
       throw new Error('Session unavailable');
-    const viewer: Viewer = { active: true, send, lastID: 0, pending: 0 };
+    const viewer: Viewer = {
+      active: true,
+      send,
+      lastID: 0,
+      pending: 0,
+      retiring: new Set(),
+    };
     this.viewer = viewer;
     try {
       await this.select(this.selected);
@@ -169,9 +198,10 @@ export class BrowserSession {
       close: () => {
         closed ??= (async () => {
           viewer.active = false;
-          await viewer.controller?.close();
+          this.retire(viewer);
           await this.queue;
           if (this.viewer === viewer) this.viewer = undefined;
+          await Promise.all(viewer.retiring);
         })();
         return closed;
       },
@@ -199,32 +229,40 @@ export class BrowserSession {
       return Promise.resolve();
     }
     viewer.lastID = message.id;
+    if (!message.action.kind.startsWith('tab_')) {
+      if (message.tab !== this.selected) ack('stale_view');
+      else if (viewer.controller) return viewer.controller.receive(message);
+      else ack('action_failed');
+      return Promise.resolve();
+    }
     if (viewer.pending >= MAX_PENDING_COMMANDS) {
       ack('busy');
       return Promise.resolve();
     }
+    if (message.tab !== this.selected) {
+      ack('stale_view');
+      return Promise.resolve();
+    }
+    const revision = ++this.selectionRevision;
     viewer.pending++;
-    return this.enqueue(async () => {
-      try {
-        if (!viewer.active) return;
-        if (message.tab !== this.selected) {
-          ack('stale_view');
-          return;
-        }
-        const action = message.action;
-        if (!action.kind.startsWith('tab_')) {
-          if (viewer.controller) await viewer.controller.receive(message);
-          else ack('action_failed');
-          return;
-        }
-        if (!(await this.options.authorize(action))) {
-          ack('not_allowed');
-          return;
-        }
-        if (!viewer.active || message.tab !== this.selected) return;
+    let operation: Promise<void> | undefined;
+    const admission = this.enqueue(async () => {
+      if (!viewer.active) return;
+      if (message.tab !== this.selected) {
+        ack('stale_view');
+        return;
+      }
+      const action = message.action;
+      if (!(await this.options.authorize(action))) {
+        ack('not_allowed');
+        return;
+      }
+      if (!viewer.active || message.tab !== this.selected) return;
+      operation = (async () => {
         if (action.kind === 'tab_new') {
           const tab = await this.add(await this.initial.context().newPage());
-          await this.select(tab.engine.id);
+          if (viewer.active && revision === this.selectionRevision)
+            await this.select(tab.engine.id);
         } else if (action.kind === 'tab_select') await this.select(action.tab);
         else if (action.kind === 'tab_close') {
           const tab = this.tabs.get(action.tab);
@@ -236,12 +274,18 @@ export class BrowserSession {
           await this.remove(action.tab);
         }
         ack();
-      } catch {
-        ack('action_failed');
-      } finally {
-        viewer.pending--;
-      }
+      })();
+      // Observe immediately, even while the admission promise is settling.
+      void operation.catch(() => {});
     });
+    return admission
+      .then(() => operation)
+      .catch(() => {
+        ack('action_failed');
+      })
+      .finally(() => {
+        viewer.pending--;
+      });
   }
   async readResource(tab: string, id: string) {
     return this.tabs.get(tab)?.engine.resources.read(id);
@@ -253,7 +297,7 @@ export class BrowserSession {
         await this.viewer.controller?.close();
       }
       await this.queue;
-      await Promise.all(this.adding.values());
+      await Promise.allSettled(this.adding.values());
       await Promise.all(
         [...this.tabs.values()].map(({ engine }) => engine.close()),
       );
