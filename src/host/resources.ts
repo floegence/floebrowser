@@ -1,7 +1,26 @@
 import { randomBytes } from 'node:crypto';
 import type { CDPSession } from 'playwright';
-import postcss from 'postcss';
+import parseCSS from 'postcss-safe-parser';
+import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
+
+export const SOURCE_LINK_ATTRIBUTE = 'data-floebrowser-link';
+const linkSelectors = selectorParser((selectors) => {
+  selectors.walkPseudos((pseudo) => {
+    if (
+      [':link', ':any-link', ':-webkit-any-link'].includes(
+        pseudo.value.toLowerCase(),
+      )
+    )
+      pseudo.replaceWith(
+        selectorParser.attribute({
+          attribute: SOURCE_LINK_ATTRIBUTE,
+          value: undefined,
+          raws: {},
+        }),
+      );
+  });
+});
 
 type Resource = {
   id: string;
@@ -161,27 +180,34 @@ export class ResourceStore {
   }
 
   css(css: string, base: string): string {
-    try {
-      const root = postcss.parse(css, { map: { prev: false } });
-      root.walkDecls((declaration) => {
-        declaration.value = this.value(declaration.value, base);
-      });
-      root.walkAtRules((rule) => {
-        rule.params = this.value(rule.params, base);
-        if (rule.name.toLowerCase() === 'import') {
-          const parsed = valueParser(rule.params);
-          const first = parsed.nodes.find(
-            (node) => node.type !== 'space' && node.type !== 'comment',
-          );
-          if (first?.type === 'string')
-            first.value = this.reference(first.value, base);
-          rule.params = parsed.toString();
-        }
-      });
-      return root.toString();
-    } catch {
-      return '';
-    }
+    // Websites may contain invalid declarations that Chromium ignores. Preserve
+    // the surrounding stylesheet while still rewriting its resource references.
+    const root = parseCSS(css, { map: { prev: false } });
+    root.walkRules((rule) => {
+      try {
+        // A data attribute has the same specificity as the original pseudo-class
+        // and preserves link styling without a client-side navigation target.
+        rule.selector = linkSelectors.processSync(rule.selector);
+      } catch {
+        // An invalid selector must not discard unrelated rules in the sheet.
+      }
+    });
+    root.walkDecls((declaration) => {
+      declaration.value = this.value(declaration.value, base);
+    });
+    root.walkAtRules((rule) => {
+      rule.params = this.value(rule.params, base);
+      if (rule.name.toLowerCase() === 'import') {
+        const parsed = valueParser(rule.params);
+        const first = parsed.nodes.find(
+          (node) => node.type !== 'space' && node.type !== 'comment',
+        );
+        if (first?.type === 'string')
+          first.value = this.reference(first.value, base);
+        rule.params = parsed.toString();
+      }
+    });
+    return root.toString();
   }
 
   private async capture(

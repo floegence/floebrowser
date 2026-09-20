@@ -71,6 +71,8 @@ rrweb records and reconstructs DOM state. FloeBrowser supplies the return input 
 
 The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate encrypted WebRTC path carries captured source audio/video elements. The authorized host transport carries only media state and SDP signaling alongside DOM and input, so encoded video cannot fill the control queue.
 
+Stylesheet rewriting uses a tolerant CSS parser so malformed declarations do not discard the surrounding rules. Imports and resource URLs still resolve only through captured source responses. HTML links retain an inert link marker instead of a navigation target; `:link` and `:any-link` selectors are rewritten with the same specificity, including nested selectors. Adding or removing a source link updates that marker. This preserves link styling without enabling viewer-side navigation or exposing browser visit history.
+
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
 ## Source media

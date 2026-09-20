@@ -1,5 +1,5 @@
 import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
-import type { ResourceStore } from './resources.js';
+import { SOURCE_LINK_ATTRIBUTE, type ResourceStore } from './resources.js';
 
 type Serialized = Record<string, any>;
 const blocked = new Set(['canvas', 'object', 'embed']);
@@ -28,6 +28,12 @@ export class DOMProjection {
   ): Serialized {
     const result: Serialized = {};
     for (const [key, value] of Object.entries(attributes)) {
+      if (key === SOURCE_LINK_ATTRIBUTE) continue;
+      if (key === 'href' && ['a', 'area'].includes(tag)) {
+        result[SOURCE_LINK_ATTRIBUTE] = value === null ? null : '';
+        result[key] = null;
+        continue;
+      }
       if (
         ['video', 'audio'].includes(tag) &&
         (['src', 'autoplay', 'controls', 'preload'].includes(

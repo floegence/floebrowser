@@ -53,6 +53,8 @@
     "@rrweb/types": "2.1.6",
     "playwright": "1.63.0",
     "postcss": "8.5.28",
+    "postcss-safe-parser": "7.1.0",
+    "postcss-selector-parser": "7.1.6",
     "postcss-value-parser": "4.2.0",
     "ws": "8.21.3",
     "zod": "4.1.12"

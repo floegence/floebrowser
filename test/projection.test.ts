@@ -49,6 +49,7 @@ test('reconstructed HTML cannot navigate, submit, execute scripts, or directly l
   assert.equal(nodes[0].attributes.srcset, null);
   assert.equal(nodes[0].attributes.onload, null);
   assert.equal(nodes[1].attributes.href, null);
+  assert.equal(nodes[1].attributes['data-floebrowser-link'], '');
   assert.equal(nodes[2].tagName, 'iframe');
   assert.equal(nodes[2].attributes.src, null);
   assert.equal(nodes[2].attributes.srcdoc, null);
@@ -80,6 +81,53 @@ test('rewrites stylesheet imports and URLs without issuing network requests', as
   );
   assert.equal(await resources.read('unknown'), undefined);
   resources.close();
+});
+
+for (const invalid of ['width::564px', 'zoom;1']) {
+  test(`preserves surrounding CSS and rewrites assets after ${invalid}`, () => {
+    const resources = new ResourceStore(
+      new EventEmitter() as unknown as CDPSession,
+    );
+    try {
+      const css = resources.css(
+        `@import "./theme.css"; .before { color: red } .legacy { ${invalid}; padding: 1px 0; background: url(./image.png) } .after { color: green }`,
+        'https://source.test/css/main.css',
+      );
+      assert.match(css, /\.before\s*\{\s*color: red/);
+      assert.match(css, /padding: 1px 0/);
+      assert.match(css, /\.after\s*\{\s*color: green/);
+      assert.match(css, /@import "\/_floe\/assets\//);
+      assert.match(css, /background: url\("\/_floe\/assets\//);
+      assert.doesNotMatch(css, /theme\.css|image\.png|https?:/);
+    } finally {
+      resources.close();
+    }
+  });
+}
+
+test('link selector rewriting preserves nested selectors, literals and escaped class names', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  try {
+    const css = resources.css(
+      String.raw`
+      :is(a:link, area:any-link):not(.disabled) { color: red; content: ":link"; }
+      .literal\:link[data-label=":any-link"] { color: blue; }
+      a:visited { color: purple; }
+    `,
+      'https://source.test/',
+    );
+    assert.match(
+      css,
+      /:is\(a\[data-floebrowser-link\], area\[data-floebrowser-link\]\):not\(\.disabled\)/,
+    );
+    assert.ok(css.includes(String.raw`.literal\:link[data-label=":any-link"]`));
+    assert.match(css, /content: ":link"/);
+    assert.match(css, /a:visited/);
+  } finally {
+    resources.close();
+  }
 });
 
 test('frame attachment cannot replace a non-frame or the main replay document', () => {
