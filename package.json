@@ -1,0 +1,79 @@
+{
+  "name": "@floegence/floebrowser",
+  "version": "0.1.0",
+  "description": "A DOM-based remote browser engine. Websites execute at the source; clients receive a live DOM projection.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/floegence/floebrowser.git"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/host/index.d.ts",
+      "import": "./dist/host/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/shared/protocol.d.ts",
+      "import": "./dist/shared/protocol.js"
+    },
+    "./viewer": {
+      "types": "./dist/viewer/client.d.ts",
+      "import": "./dist/viewer/client.js"
+    },
+    "./viewer.css": "./dist/assets/app.css"
+  },
+  "bin": {
+    "floebrowser": "dist/host/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "assets/preview.png"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:e2e": "node --import tsx --test --test-concurrency=1 test/*.e2e.ts",
+    "start": "node dist/host/cli.js",
+    "prepack": "npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:package": "node scripts/check-package.mjs"
+  },
+  "dependencies": {
+    "@rrweb/record": "2.1.6",
+    "@rrweb/replay": "2.1.6",
+    "@rrweb/types": "2.1.6",
+    "playwright": "1.63.0",
+    "postcss": "8.5.28",
+    "postcss-value-parser": "4.2.0",
+    "ws": "8.21.3",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@fontsource/inter": "5.3.0",
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.8",
+    "tsx": "^4.20.0",
+    "typescript": "7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "remote-browser",
+    "dom",
+    "rrweb",
+    "chromium",
+    "cdp"
+  ]
+}

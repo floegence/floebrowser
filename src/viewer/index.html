@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FloeBrowser</title>
+    <link rel="stylesheet" href="./app.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="app-header">
+        <a class="brand" aria-label="FloeBrowser home" href="./"
+          ><svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M5 5h18v6H11v5h10v6H5V5Z" fill="currentColor" />
+            <path d="m17 5 6 6V5h-6Z" fill="#b7c6ff" /></svg
+          ><span>FloeBrowser</span><span class="preview-label">PREVIEW</span></a
+        >
+        <div class="header-right">
+          <span class="source-chip"
+            ><span class="source-dot"></span>Source Chromium</span
+          ><span class="status" id="status" role="status"
+            ><span></span>Connecting</span
+          >
+        </div>
+      </header>
+      <main class="browser-window">
+        <div class="tab-strip">
+          <div class="tab">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="7" />
+              <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" /></svg
+            ><span id="page-title">Source browser</span
+            ><span class="tab-live"></span>
+          </div>
+          <span class="mode-label">DOM projection</span>
+        </div>
+        <nav class="toolbar" aria-label="Browser navigation">
+          <div class="navigation-buttons">
+            <button
+              class="icon-button"
+              id="back"
+              title="Back"
+              aria-label="Back"
+            >
+              <svg viewBox="0 0 20 20">
+                <path d="m11 5-5 5 5 5M6 10h10" />
+              </svg></button
+            ><button
+              class="icon-button"
+              id="forward"
+              title="Forward"
+              aria-label="Forward"
+            >
+              <svg viewBox="0 0 20 20">
+                <path d="m9 5 5 5-5 5M14 10H4" />
+              </svg></button
+            ><button
+              class="icon-button"
+              id="reload"
+              title="Reload source page"
+              aria-label="Reload source page"
+            >
+              <svg viewBox="0 0 20 20">
+                <path d="M16 9a6 6 0 1 0-1 4M16 4v5h-5" />
+              </svg>
+            </button>
+          </div>
+          <form class="address-bar" id="address-form">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="7" />
+              <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" /></svg
+            ><input
+              id="address"
+              aria-label="Website address"
+              placeholder="Enter a website address"
+              autocomplete="off"
+              spellcheck="false"
+            /><button
+              type="submit"
+              class="address-go"
+              aria-label="Open website"
+              title="Open website"
+            >
+              <svg viewBox="0 0 20 20"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
+            </button>
+          </form>
+          <button
+            class="fit-button"
+            id="fit"
+            title="Change page scale"
+            aria-label="Change page scale"
+          >
+            Fit
+            <svg viewBox="0 0 16 16">
+              <path d="M2 6V2h4m4 0h4v4M2 10v4h4m4 0h4v-4" />
+            </svg>
+          </button>
+        </nav>
+        <div class="stage">
+          <div id="viewport"></div>
+          <div class="welcome" id="welcome" hidden>
+            <div class="welcome-symbol">
+              <svg viewBox="0 0 32 32" fill="none">
+                <rect x="3" y="5" width="26" height="20" rx="4" />
+                <path d="M3 11h26M12 29h8M16 25v4m-5-11-3 3 3 3m10-6 3 3-3 3" />
+              </svg>
+            </div>
+            <span class="eyebrow">YOUR BROWSER. AT THE SOURCE.</span>
+            <h1>A familiar view.<br />A different place.</h1>
+            <p>
+              Browse with the source machine’s network and login.<br />Your page
+              stays there. Its live DOM appears here.
+            </p>
+            <button id="start-browsing" class="primary-button">
+              Enter a website <span>↗</span>
+            </button>
+            <div class="welcome-features">
+              <span>Selectable text</span><span>Source-side execution</span
+              ><span>No screen streaming</span>
+            </div>
+          </div>
+          <div class="connection-overlay" id="connection-overlay">
+            <div class="connection-card">
+              <span class="connection-symbol" id="connection-symbol"></span>
+              <h2 id="connection-title">Connecting to your browser</h2>
+              <p id="connection-description">
+                Preparing a live view from the source machine.
+              </p>
+              <button class="primary-button" id="reconnect" hidden>
+                Reconnect
+              </button>
+            </div>
+          </div>
+        </div>
+        <footer class="browser-footer">
+          <div>
+            <span class="footer-dot"></span
+            ><span id="page-status">Preparing the source browser</span>
+          </div>
+          <div class="footer-metrics">
+            <span id="action-time"></span
+            ><span id="viewport-size">1280 × 800</span
+            ><span class="footer-divider"></span><span>DOM mode</span>
+          </div>
+        </footer>
+      </main>
+      <div class="app-footer">
+        <span>Websites run on the source machine.</span
+        ><button id="limitations">About DOM mode <span>ⓘ</span></button>
+      </div>
+      <div class="toast" id="toast" role="status" hidden>
+        <span id="toast-message"></span
+        ><button id="dismiss-toast" aria-label="Dismiss message">×</button>
+      </div>
+      <dialog id="about-dialog">
+        <div class="dialog-header">
+          <h2>About DOM mode</h2>
+          <button id="close-about" class="icon-button" aria-label="Close">
+            ×
+          </button>
+        </div>
+        <p>
+          FloeBrowser rebuilds the source page’s DOM here. Website scripts,
+          requests and actions stay in the source browser.
+        </p>
+        <p>
+          This preview supports a single Chromium tab. Embedded frames, canvas,
+          media, file transfer and native browser dialogs are not supported.
+          Unavailable content is marked in the page.
+        </p>
+        <p>
+          Reconnecting loads a fresh view. Unconfirmed actions are never
+          automatically repeated.
+        </p>
+        <button id="about-done" class="primary-button">Got it</button>
+      </dialog>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

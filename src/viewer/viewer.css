@@ -1,0 +1,35 @@
+@import '@rrweb/replay/dist/style.css';
+.floe-viewport {
+  overflow: auto;
+  position: relative;
+}
+.floe-projection {
+  position: absolute;
+  transform-origin: top left;
+  background: #fff;
+  box-shadow: 0 0 0 1px #00000005;
+}
+.floe-projection .replayer-wrapper {
+  position: relative !important;
+}
+.floe-projection .replayer-mouse,
+.floe-projection .replayer-mouse-tail {
+  display: none !important;
+}
+.floe-projection iframe {
+  border: 0 !important;
+  display: block;
+  background: #fff;
+}
+.floe-input-sink {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  left: 12px;
+  bottom: 12px;
+  resize: none;
+  pointer-events: none;
+}

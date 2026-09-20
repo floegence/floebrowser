@@ -1,0 +1,170 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { DOMProjection } from '../src/host/projection.js';
+import { ResourceStore } from '../src/host/resources.js';
+import { EventEmitter } from 'node:events';
+import type { CDPSession } from 'playwright';
+import type { eventWithTime } from '@rrweb/types';
+
+test('reconstructed HTML cannot navigate, submit, execute scripts, or directly load external assets', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const projection = new DOMProjection(resources);
+  const elements = [
+    [
+      'img',
+      {
+        src: 'https://private.test/a.png',
+        srcset: 'https://other.test/a.png 2x',
+        onload: 'steal()',
+      },
+    ],
+    ['a', { href: 'javascript:steal()', ping: 'https://other.test' }],
+    [
+      'iframe',
+      { src: 'https://other.test', srcdoc: '<script>steal()</script>' },
+    ],
+    ['meta', { 'http-equiv': 'refresh', content: '0;url=https://other.test' }],
+    ['script', { src: 'https://other.test/code.js' }],
+    ['form', { action: 'https://other.test', target: '_top' }],
+  ].map(([tagName, attributes], i) => ({
+    type: 2,
+    id: i + 2,
+    tagName,
+    attributes,
+    childNodes: [],
+  }));
+  const event = {
+    type: 2,
+    timestamp: 1,
+    data: {
+      node: { type: 0, id: 1, childNodes: elements },
+      initialOffset: { left: 0, top: 0 },
+    },
+  } as unknown as eventWithTime;
+  const output: any = projection.event(event, 'https://private.test/');
+  const nodes = output.data.node.childNodes;
+  assert.match(nodes[0].attributes.src, /^\/_floe\/assets\//);
+  assert.equal(nodes[0].attributes.srcset, null);
+  assert.equal(nodes[0].attributes.onload, null);
+  assert.equal(nodes[1].attributes.href, null);
+  assert.equal(nodes[2].tagName, 'div');
+  assert.match(
+    nodes[2].attributes['data-floebrowser-unsupported'],
+    /Embedded frame/,
+  );
+  assert.equal(nodes[3].tagName, 'noscript');
+  assert.equal(nodes[4].tagName, 'noscript');
+  assert.equal(nodes[5].attributes.action, null);
+  assert.equal(
+    (event as any).data.node.childNodes[0].attributes.src,
+    'https://private.test/a.png',
+  );
+  resources.close();
+});
+
+test('rewrites stylesheet imports and URLs without issuing network requests', async () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const css = resources.css(
+    '@import "../fonts.css"; .a { background:url(https://private.test/a.png); filter:url(#filter) }',
+    'https://private.test/css/main.css',
+  );
+  assert.doesNotMatch(css, /https:|fonts\.css/);
+  assert.match(css, /@import "\/_floe\/assets\//);
+  assert.match(css, /url\("#filter"\)/);
+  assert.equal(
+    resources.reference('javascript:alert(1)', 'https://private.test'),
+    '/_floe/unavailable',
+  );
+  assert.equal(await resources.read('unknown'), undefined);
+  resources.close();
+});
+
+test('blocked iframe attachment cannot replace the main replay document', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const projection = new DOMProjection(resources);
+  projection.event(
+    {
+      type: 2,
+      timestamp: 1,
+      data: {
+        node: {
+          type: 0,
+          id: 1,
+          childNodes: [
+            {
+              type: 2,
+              id: 2,
+              tagName: 'iframe',
+              attributes: {},
+              childNodes: [],
+            },
+          ],
+        },
+        initialOffset: { left: 0, top: 0 },
+      },
+    } as any,
+    'https://source.test/',
+  );
+  const iframeDocument = {
+    type: 3,
+    timestamp: 2,
+    data: {
+      source: 0,
+      isAttachIframe: true,
+      adds: [
+        {
+          parentId: 2,
+          nextId: null,
+          node: {
+            type: 0,
+            id: 10,
+            childNodes: [
+              {
+                type: 2,
+                id: 11,
+                tagName: 'html',
+                attributes: {},
+                childNodes: [],
+              },
+            ],
+          },
+        },
+      ],
+      removes: [],
+      texts: [],
+      attributes: [],
+    },
+  };
+  assert.equal(
+    projection.event(iframeDocument as any, 'https://source.test/'),
+    undefined,
+  );
+  const mutation: any = projection.event(
+    {
+      type: 3,
+      timestamp: 3,
+      data: {
+        source: 0,
+        adds: [
+          {
+            parentId: 11,
+            nextId: null,
+            node: { type: 3, id: 12, textContent: 'Excluded frame content' },
+          },
+        ],
+        removes: [],
+        texts: [],
+        attributes: [],
+      },
+    } as any,
+    'https://source.test/',
+  );
+  assert.deepEqual(mutation.data.adds, []);
+  resources.close();
+});

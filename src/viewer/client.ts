@@ -1,0 +1,664 @@
+import { Replayer } from '@rrweb/replay';
+import { ReplayerEvents } from '@rrweb/types';
+import type {
+  Action,
+  FocusState,
+  BrowserState,
+  ProjectionConnection,
+  ServerMessage,
+} from '../shared/protocol.js';
+import { MAX_PENDING_COMMANDS, PROTOCOL_VERSION } from '../shared/protocol.js';
+
+type ViewOptions = {
+  onState?: (state: BrowserState) => void;
+  onStatus?: (status: 'connecting' | 'live' | 'disconnected') => void;
+  onNotice?: (message: string) => void;
+  onAction?: (milliseconds: number) => void;
+  onAddressFocus?: () => void;
+};
+type Pending = {
+  resolve: (ok: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+  started: number;
+};
+const modifiers = (event: MouseEvent | KeyboardEvent) =>
+  (event.altKey ? 1 : 0) |
+  (event.ctrlKey ? 2 : 0) |
+  (event.metaKey ? 4 : 0) |
+  (event.shiftKey ? 8 : 0);
+
+/** Renders inert DOM and returns user intent through a host-provided connection. */
+export class DOMBrowserView {
+  private replayer?: Replayer;
+  private epoch = '';
+  private sequence = 0;
+  private nextID = 0;
+  private connected = false;
+  private ready = false;
+  private destroyed = false;
+  private resyncing = false;
+  private eventBytes = 0;
+  private pending = new Map<number, Pending>();
+  private sink: HTMLTextAreaElement;
+  private surface: HTMLDivElement;
+  private resize: ResizeObserver;
+  private disposers: Array<() => void> = [];
+  private frameDisposers: Array<() => void> = [];
+  private viewport = { width: 1280, height: 800 };
+  private fit = true;
+  private composing = false;
+  private suppressCompositionInput = false;
+  private lastMove = 0;
+  private dragging = false;
+  private inputEngaged = false;
+  private sourceFocus?: FocusState;
+
+  constructor(
+    private container: HTMLElement,
+    private connection: ProjectionConnection,
+    private options: ViewOptions = {},
+  ) {
+    container.classList.add('floe-viewport');
+    this.surface = document.createElement('div');
+    this.surface.className = 'floe-projection';
+    this.sink = document.createElement('textarea');
+    this.sink.className = 'floe-input-sink';
+    this.sink.setAttribute('aria-label', 'Type in the source browser');
+    this.sink.setAttribute('autocapitalize', 'off');
+    this.sink.autocomplete = 'off';
+    this.sink.spellcheck = false;
+    container.append(this.surface, this.sink);
+    this.disposers.push(
+      connection.subscribe((message) => this.receive(message)),
+      connection.onDisconnect(() => this.disconnected()),
+    );
+    this.resize = new ResizeObserver(() => this.layout());
+    this.resize.observe(container);
+    this.listen(this.sink, 'keydown', (event) =>
+      this.key(event as KeyboardEvent, 'down'),
+    );
+    this.listen(this.sink, 'keyup', (event) =>
+      this.key(event as KeyboardEvent, 'up'),
+    );
+    this.bindTextInput(this.sink);
+    this.listen(document, 'focusin', (event) => {
+      if (!this.container.contains(event.target as Node))
+        this.inputEngaged = false;
+    });
+    this.listen(window, 'blur', () => {
+      this.dragging = false;
+    });
+    this.options.onStatus?.('connecting');
+  }
+
+  private bindTextInput(target: EventTarget, frame = false): void {
+    this.listen(
+      target,
+      'compositionstart',
+      () => {
+        this.composing = true;
+      },
+      frame,
+    );
+    this.listen(
+      target,
+      'compositionend',
+      (event) => {
+        this.composing = false;
+        this.suppressCompositionInput = true;
+        const text = (event as CompositionEvent).data;
+        if (text) void this.dispatch({ kind: 'text', text });
+        this.sink.value = '';
+        queueMicrotask(() => {
+          this.suppressCompositionInput = false;
+        });
+      },
+      frame,
+    );
+    this.listen(
+      target,
+      'beforeinput',
+      (event) => {
+        const input = event as InputEvent;
+        if (this.composing || input.isComposing) return;
+        input.preventDefault();
+        if (
+          !this.suppressCompositionInput &&
+          input.data &&
+          input.inputType.startsWith('insert')
+        )
+          void this.dispatch({ kind: 'text', text: input.data });
+        this.sink.value = '';
+      },
+      frame,
+    );
+    this.listen(
+      target,
+      'paste',
+      (event) => {
+        event.preventDefault();
+        const text = (event as ClipboardEvent).clipboardData?.getData(
+          'text/plain',
+        );
+        if (text) void this.dispatch({ kind: 'text', text });
+      },
+      frame,
+    );
+  }
+
+  private applyFocus(): void {
+    if (
+      !this.inputEngaged ||
+      this.composing ||
+      !this.sourceFocus ||
+      !this.replayer
+    )
+      return;
+    const element = this.replayer.getMirror().getNode(this.sourceFocus.node) as
+      HTMLInputElement | HTMLTextAreaElement | null;
+    if (
+      !element?.isConnected ||
+      !['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)
+    )
+      return;
+    element.focus({ preventScroll: true });
+    if (
+      this.sourceFocus.start !== null &&
+      this.sourceFocus.end !== null &&
+      'setSelectionRange' in element
+    ) {
+      try {
+        element.setSelectionRange(
+          this.sourceFocus.start,
+          this.sourceFocus.end,
+          this.sourceFocus.direction ?? 'none',
+        );
+      } catch {
+        /* Non-text controls do not expose a selection range. */
+      }
+    }
+  }
+
+  private listen(
+    target: EventTarget,
+    name: string,
+    listener: EventListener,
+    frame = false,
+    options?: AddEventListenerOptions,
+  ): void {
+    target.addEventListener(name, listener, options);
+    (frame ? this.frameDisposers : this.disposers).push(() =>
+      target.removeEventListener(name, listener, options),
+    );
+  }
+
+  private receive(message: ServerMessage): void {
+    if (this.destroyed) return;
+    if (message.type === 'hello') {
+      if (message.version !== PROTOCOL_VERSION) {
+        this.options.onNotice?.(
+          'This viewer and source use different protocol versions.',
+        );
+        this.connection.close();
+        return;
+      }
+      this.connected = true;
+      return;
+    }
+    if (message.type === 'focus') {
+      if (message.epoch === this.epoch) {
+        this.sourceFocus = message.focus;
+        this.applyFocus();
+      }
+      return;
+    }
+    if (message.type === 'state') {
+      this.viewport = {
+        width: message.state.width,
+        height: message.state.height,
+      };
+      if (message.state.status !== 'ready') this.ready = false;
+      this.options.onState?.(message.state);
+      this.layout();
+      if (message.state.status === 'closed') {
+        this.disconnected();
+        this.connection.close();
+      }
+      return;
+    }
+    if (message.type === 'snapshot') {
+      this.ready = false;
+      this.epoch = message.epoch;
+      this.sequence = message.sequence;
+      this.resyncing = false;
+      this.eventBytes = 0;
+      this.sourceFocus = undefined;
+      this.clearFrame();
+      this.replayer?.destroy();
+      const now = Date.now();
+      this.replayer = new Replayer([], {
+        root: this.surface,
+        liveMode: true,
+        showWarning: false,
+        showDebug: false,
+        mouseTail: false,
+        triggerFocus: false,
+        insertStyleRules: [
+          '[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
+          '[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
+          'a,button,select,input[type=checkbox],input[type=radio]{cursor:pointer}',
+          '*::-webkit-scrollbar{width:0!important;height:0!important}',
+        ],
+      });
+      this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {
+        this.installInput();
+        this.layout();
+        this.ready = true;
+        this.options.onStatus?.('live');
+      });
+      this.replayer.on(ReplayerEvents.EventCast, () => this.applyFocus());
+      this.replayer.startLive(now);
+      for (const event of message.events)
+        this.replayer.addEvent({ ...event, timestamp: now });
+      return;
+    }
+    if (message.type === 'events') {
+      if (this.resyncing) return;
+      if (
+        !this.replayer ||
+        message.epoch !== this.epoch ||
+        message.sequence !== this.sequence + 1
+      ) {
+        this.resync();
+        return;
+      }
+      this.sequence = message.sequence;
+      const now = Date.now();
+      for (const event of message.events)
+        this.replayer.addEvent({ ...event, timestamp: now });
+      this.eventBytes += JSON.stringify(message.events).length;
+      if (this.eventBytes > 8 * 1024 * 1024 || this.sequence > 4000)
+        this.resync();
+      return;
+    }
+    if (message.type === 'ack') {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      this.pending.delete(message.id);
+      pending.resolve(message.ok);
+      this.options.onAction?.(Math.round(performance.now() - pending.started));
+      if (!message.ok) {
+        const text = {
+          stale_view:
+            'The page changed before that action. Please try again on the current view.',
+          target_unavailable: 'The source page is unavailable.',
+          unsupported: 'This control is not supported in DOM mode.',
+          action_failed:
+            'The source could not confirm that action. It has not been repeated.',
+          busy: 'The source is catching up. Please wait a moment.',
+          not_allowed: 'The host did not authorize that action.',
+        };
+        this.options.onNotice?.(text[message.code ?? 'action_failed']);
+      }
+      return;
+    }
+    if (message.type === 'notice') this.options.onNotice?.(message.message);
+  }
+
+  private resync(): void {
+    if (this.resyncing || !this.connected) return;
+    this.resyncing = true;
+    this.ready = false;
+    this.options.onStatus?.('connecting');
+    this.connection.send({ type: 'resync' });
+  }
+
+  dispatch(action: Action): Promise<boolean> {
+    if (
+      !this.connected ||
+      (!this.ready &&
+        !['navigate', 'back', 'forward', 'reload'].includes(action.kind))
+    )
+      return Promise.resolve(false);
+    if (action.kind === 'text' && action.text.length > 16000) {
+      this.options.onNotice?.('Paste up to 16,000 characters at a time.');
+      return Promise.resolve(false);
+    }
+    if (this.pending.size >= MAX_PENDING_COMMANDS) {
+      this.options.onNotice?.(
+        'The source is catching up. Please wait a moment.',
+      );
+      return Promise.resolve(false);
+    }
+    const id = ++this.nextID;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve(false);
+        this.options.onNotice?.(
+          'No confirmation was received. The action has not been repeated.',
+        );
+        this.connection.close();
+        this.disconnected();
+      }, 25000);
+      this.pending.set(id, { resolve, timer, started: performance.now() });
+      try {
+        this.connection.send({
+          type: 'command',
+          id,
+          epoch: this.epoch,
+          action,
+        });
+      } catch {
+        this.disconnected();
+      }
+    });
+  }
+
+  setFit(fit: boolean): void {
+    this.fit = fit;
+    this.layout();
+  }
+  private layout(): void {
+    const scale = this.fit
+      ? Math.min(
+          1,
+          this.container.clientWidth / this.viewport.width,
+          this.container.clientHeight / this.viewport.height,
+        )
+      : 1;
+    this.surface.style.width = `${this.viewport.width}px`;
+    this.surface.style.height = `${this.viewport.height}px`;
+    this.surface.style.transform = `scale(${scale})`;
+    this.surface.style.left = `${Math.max(0, (this.container.clientWidth - this.viewport.width * scale) / 2)}px`;
+    this.surface.style.top = this.fit
+      ? `${Math.max(0, (this.container.clientHeight - this.viewport.height * scale) / 2)}px`
+      : '0px';
+  }
+
+  private point(
+    event: MouseEvent,
+  ): { node: number; x: number; y: number } | undefined {
+    const target = event
+      .composedPath()
+      .find((item) => (item as Node)?.nodeType === 1) as Element | undefined;
+    if (!target || target.closest('[data-floebrowser-unsupported]')) return;
+    const node = this.replayer!.getMirror().getId(target);
+    const rect = target.getBoundingClientRect();
+    if (node < 1 || !rect.width || !rect.height) return;
+    return {
+      node,
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    };
+  }
+
+  private installInput(): void {
+    this.clearFrame();
+    const player = this.replayer!;
+    player.enableInteract();
+    player.iframe.setAttribute('scrolling', 'no');
+    const frame = player.iframe.contentDocument;
+    if (!frame) return;
+    this.bindTextInput(frame, true);
+    this.listen(
+      frame,
+      'mousedown',
+      (raw) => {
+        const event = raw as PointerEvent;
+        this.inputEngaged = true;
+        this.sourceFocus = undefined;
+        const target = event.target as Element;
+        if (target.closest('select')) return;
+        const point = this.point(event);
+        if (!point) return;
+        if (target.closest('[data-floebrowser-editable]'))
+          event.preventDefault();
+        this.dragging = true;
+        void this.dispatch({
+          kind: 'pointer',
+          phase: 'down',
+          point,
+          button: mouseButton(event.button),
+          buttons: event.buttons,
+          modifiers: modifiers(event),
+          clicks: Math.max(1, Math.min(3, event.detail || 1)),
+        });
+      },
+      true,
+    );
+    this.listen(
+      frame,
+      'mouseup',
+      (raw) => {
+        const event = raw as PointerEvent;
+        if ((event.target as Element).closest('select')) return;
+        const point = this.point(event);
+        this.dragging = false;
+        if (point)
+          void this.dispatch({
+            kind: 'pointer',
+            phase: 'up',
+            point,
+            button: mouseButton(event.button),
+            buttons: event.buttons,
+            modifiers: modifiers(event),
+            clicks: Math.max(1, Math.min(3, event.detail || 1)),
+          });
+        if (
+          frame.getSelection()?.isCollapsed !== false &&
+          !(event.target as Element).closest('input,textarea,select')
+        )
+          this.sink.focus({ preventScroll: true });
+      },
+      true,
+    );
+    this.listen(
+      frame,
+      'mousemove',
+      (raw) => {
+        const event = raw as PointerEvent;
+        if (performance.now() - this.lastMove < 40) return;
+        this.lastMove = performance.now();
+        const point = this.point(event);
+        if (!point) return;
+        void this.dispatch({
+          kind: 'pointer',
+          phase: 'move',
+          point,
+          button: 'left',
+          buttons: this.dragging ? event.buttons : 0,
+          modifiers: modifiers(event),
+          clicks: 1,
+        });
+      },
+      true,
+    );
+    this.listen(
+      frame,
+      'click',
+      (event) => {
+        if (!(event.target as Element).closest('select'))
+          event.preventDefault();
+      },
+      true,
+    );
+    this.listen(frame, 'submit', (event) => event.preventDefault(), true);
+    this.listen(frame, 'contextmenu', (event) => event.preventDefault(), true);
+    this.listen(
+      frame,
+      'wheel',
+      (raw) => {
+        raw.preventDefault();
+        const event = raw as WheelEvent;
+        const point = this.point(event);
+        if (!point) return;
+        const unit =
+          event.deltaMode === 1
+            ? 16
+            : event.deltaMode === 2
+              ? this.viewport.height
+              : 1;
+        void this.dispatch({
+          kind: 'wheel',
+          point,
+          dx: Math.max(-4000, Math.min(4000, event.deltaX * unit)),
+          dy: Math.max(-4000, Math.min(4000, event.deltaY * unit)),
+          modifiers: modifiers(event),
+        });
+      },
+      true,
+      { passive: false },
+    );
+    this.listen(
+      frame,
+      'keydown',
+      (event) => this.key(event as KeyboardEvent, 'down'),
+      true,
+    );
+    this.listen(
+      frame,
+      'keyup',
+      (event) => this.key(event as KeyboardEvent, 'up'),
+      true,
+    );
+    this.listen(
+      frame,
+      'change',
+      (event) => {
+        const select = event.target as HTMLSelectElement;
+        if (select.tagName === 'SELECT')
+          void this.dispatch({
+            kind: 'select',
+            node: player.getMirror().getId(select),
+            values: Array.from(select.selectedOptions).map(
+              (option) => option.value,
+            ),
+          });
+      },
+      true,
+    );
+  }
+
+  private key(event: KeyboardEvent, phase: 'down' | 'up'): void {
+    if (this.composing || event.isComposing || event.key === 'Process') return;
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      ['l', 'r'].includes(event.key.toLowerCase())
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (phase === 'down') {
+        if (event.key.toLowerCase() === 'l') this.options.onAddressFocus?.();
+        else void this.dispatch({ kind: 'reload' });
+      }
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === 'c' &&
+      this.replayer?.iframe.contentDocument?.getSelection()?.isCollapsed ===
+        false
+    )
+      return;
+    if (
+      event.key.length === 1 &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      if (
+        event.target !== this.sink &&
+        !['INPUT', 'TEXTAREA'].includes((event.target as Element).tagName)
+      ) {
+        event.preventDefault();
+        if (phase === 'down') {
+          this.sink.focus({ preventScroll: true });
+          void this.dispatch({ kind: 'text', text: event.key });
+        }
+      }
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v')
+      return;
+    event.preventDefault();
+    void this.dispatch({
+      kind: 'key',
+      phase,
+      key: event.key,
+      code: event.code,
+      modifiers: modifiers(event),
+    });
+  }
+
+  private disconnected(): void {
+    this.connected = false;
+    this.ready = false;
+    this.dragging = false;
+    this.options.onStatus?.('disconnected');
+    if (this.pending.size)
+      this.options.onNotice?.(
+        'Connection lost. Unconfirmed actions have not been repeated.',
+      );
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    this.pending.clear();
+  }
+  private clearFrame(): void {
+    for (const dispose of this.frameDisposers.splice(0)) dispose();
+  }
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.disconnected();
+    this.clearFrame();
+    for (const dispose of this.disposers.splice(0)) dispose();
+    this.resize.disconnect();
+    this.replayer?.destroy();
+    this.connection.close();
+    this.container.replaceChildren();
+  }
+}
+function mouseButton(button: number): 'left' | 'middle' | 'right' {
+  return button === 1 ? 'middle' : button === 2 ? 'right' : 'left';
+}
+
+/** No automatic reconnect and no command replay. Reconnect creates a fresh view. */
+export function webSocketConnection(url: string): ProjectionConnection {
+  const socket = new WebSocket(url);
+  const messages = new Set<(message: ServerMessage) => void>();
+  const disconnected = new Set<() => void>();
+  socket.addEventListener('message', (event) => {
+    try {
+      const message: ServerMessage = JSON.parse(event.data);
+      for (const listener of messages) listener(message);
+    } catch {
+      socket.close(1008, 'Invalid projection');
+    }
+  });
+  socket.addEventListener('close', () => {
+    for (const listener of disconnected) listener();
+  });
+  return {
+    send: (message) => {
+      if (socket.readyState !== WebSocket.OPEN) throw new Error('Disconnected');
+      socket.send(JSON.stringify(message));
+    },
+    subscribe: (listener) => {
+      messages.add(listener);
+      return () => {
+        messages.delete(listener);
+      };
+    },
+    onDisconnect: (listener) => {
+      disconnected.add(listener);
+      return () => {
+        disconnected.delete(listener);
+      };
+    },
+    close: () => socket.close(),
+  };
+}

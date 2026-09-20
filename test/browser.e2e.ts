@@ -1,0 +1,328 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdir } from 'node:fs/promises';
+import { chromium, type Page } from 'playwright';
+import { createProjectionServer } from '../dist/host/server.js';
+import { fixture } from './fixture.js';
+
+async function setup(t: test.TestContext) {
+  const site = await fixture();
+  const browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+  });
+  const source = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+  });
+  const page = await source.newPage();
+  const service = await createProjectionServer(page, { authorize: () => true });
+  const client = await browser.newContext({
+    viewport: { width: 1440, height: 1080 },
+  });
+  const viewer = await client.newPage();
+  await viewer.addInitScript(() => {
+    const Original = window.WebSocket;
+    (window as any).WebSocket = class extends Original {
+      constructor(...args: ConstructorParameters<typeof WebSocket>) {
+        super(...args);
+        (window as any).testSocket = this;
+      }
+    };
+  });
+  const externalRequests: string[] = [];
+  const errors: string[] = [];
+  viewer.on('pageerror', (error) => errors.push(error.message));
+  await client.route('**/*', (route) => {
+    if (new URL(route.request().url()).origin !== new URL(service.url).origin) {
+      externalRequests.push(route.request().url());
+      return route.abort();
+    }
+    return route.continue();
+  });
+  t.after(async () => {
+    await client.close();
+    await service.close();
+    await browser.close();
+    await site.close();
+  });
+  await page.goto(site.url, { waitUntil: 'networkidle' });
+  await viewer.goto(service.url);
+  await viewer.locator('#status.live').waitFor({ timeout: 15000 });
+  const projected = viewer.frameLocator('#viewport iframe');
+  await projected.locator('#count').waitFor();
+  return {
+    site,
+    page,
+    service,
+    client,
+    viewer,
+    projected,
+    externalRequests,
+    errors,
+  };
+}
+
+async function eventually(
+  check: () => Promise<boolean>,
+  description: string,
+): Promise<void> {
+  const deadline = Date.now() + 7000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(description);
+}
+
+test('projects authenticated DOM, images, CSS and fonts without client website requests', async (t) => {
+  const { page, viewer, projected, externalRequests, errors } = await setup(t);
+  assert.equal(
+    await projected.locator('h1').textContent(),
+    'Good morning, Jamie.',
+  );
+  await eventually(
+    () =>
+      projected
+        .locator('#private-image')
+        .evaluate(
+          (image: HTMLImageElement) =>
+            image.complete && image.naturalWidth === 48,
+        ),
+    'Private source image must load in the viewer',
+  );
+  assert.match(
+    await projected
+      .locator('.private-card')
+      .evaluate((node) => getComputedStyle(node).backgroundImage),
+    /\/session\/.*\/assets\//,
+  );
+  await eventually(
+    () =>
+      projected.locator('body').evaluate(async () => {
+        await document.fonts.ready;
+        return Array.from(document.fonts).some(
+          (font) => font.family === 'FixtureInter' && font.status === 'loaded',
+        );
+      }),
+    'Private source font must load',
+  );
+  assert.equal(await page.evaluate(() => (window as any).fixtureRuns), 1);
+  assert.equal(
+    await projected.locator('body').evaluate(() => (window as any).fixtureRuns),
+    undefined,
+  );
+  assert.equal(
+    await projected.locator('[data-floebrowser-unsupported]').count(),
+    2,
+  );
+  assert.deepEqual(externalRequests, []);
+  assert.deepEqual(errors, []);
+  await mkdir('.test-artifacts', { recursive: true });
+  await viewer.screenshot({ path: '.test-artifacts/dom-projection.png' });
+});
+
+test('clicks, text input, IME, selects and form submission execute in the source browser', async (t) => {
+  const { page, viewer, projected, site, externalRequests } = await setup(t);
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '1',
+    'Source receives the click',
+  );
+  assert.deepEqual(await page.evaluate(() => (window as any).trustedClicks), [
+    true,
+  ]);
+  await eventually(
+    async () => (await projected.locator('#count-value').textContent()) === '1',
+    'Click result reaches the projection',
+  );
+  await projected.locator('#name').click();
+  await viewer.keyboard.type('Floe ');
+  await viewer.keyboard.insertText('你好');
+  await eventually(
+    async () => (await page.locator('#name').inputValue()) === 'Floe 你好',
+    'Text is entered in the source',
+  );
+  const clientCDP = await viewer.context().newCDPSession(viewer);
+  await clientCDP.send('Input.imeSetComposition', {
+    text: '世界',
+    selectionStart: 2,
+    selectionEnd: 2,
+  });
+  await clientCDP.send('Input.insertText', { text: '世界' });
+  await eventually(
+    async () => (await page.locator('#name').inputValue()) === 'Floe 你好世界',
+    'IME commits exactly once in the source',
+  );
+  await projected.locator('#region').selectOption('ap');
+  await eventually(
+    async () => (await page.locator('#region').inputValue()) === 'ap',
+    'Selection reaches the source',
+  );
+  await projected.locator('#save').click();
+  await eventually(
+    async () => site.submissions.length === 1,
+    'Form submits once from the source',
+  );
+  assert.equal(site.submissions[0], 'Floe 你好世界|ap');
+  await eventually(
+    async () =>
+      (await projected.locator('#result').textContent()) ===
+      'Changes saved on the source',
+    'Server result is projected',
+  );
+  assert.ok(
+    site.requests
+      .filter((request) => request.path === '/submit')
+      .every((request) => request.cookie.includes('session=source-only')),
+  );
+  assert.deepEqual(externalRequests, []);
+});
+
+test('streams live mutations and scrolls the source without local navigation', async (t) => {
+  const { page, viewer, projected, externalRequests } = await setup(t);
+  await projected.locator('#mutate').click();
+  await projected.locator('#live-update').waitFor();
+  await projected.locator('h1').hover();
+  await viewer.mouse.wheel(0, 480);
+  await eventually(
+    () => page.evaluate(() => scrollY > 100),
+    'Wheel scrolls the source',
+  );
+  await eventually(
+    () => projected.locator('body').evaluate(() => scrollY > 100),
+    'Source scroll is projected',
+  );
+  await projected.locator('#next').click();
+  await eventually(
+    async () => page.url().endsWith('/second'),
+    'Link navigation happens at the source',
+  );
+  await projected.locator('#second').waitFor();
+  assert.match(viewer.url(), /\/session\//);
+  assert.deepEqual(externalRequests, []);
+});
+
+test('reconnects with a fresh document and never repeats prior input', async (t) => {
+  const { page, viewer, projected } = await setup(t);
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '1',
+    'Initial action executes',
+  );
+  await viewer.evaluate(() => (window as any).testSocket.close());
+  await viewer.locator('#status.disconnected').waitFor();
+  await page.locator('#count').click();
+  await viewer.locator('#reconnect').click();
+  await viewer.locator('#status.live').waitFor();
+  await eventually(
+    async () => (await projected.locator('#count-value').textContent()) === '2',
+    'Reconnect reflects current source state',
+  );
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '3',
+    'Fresh controller executes one new click',
+  );
+});
+
+test('handles scaled input, double clicks, text selection, and multiline editing', async (t) => {
+  const { page, viewer, projected } = await setup(t);
+  await viewer.setViewportSize({ width: 900, height: 720 });
+  await projected.locator('#count').dblclick();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '2',
+    'Both clicks execute at the scaled source target',
+  );
+  await projected.locator('h1').click({ clickCount: 3 });
+  await eventually(
+    () =>
+      projected
+        .locator('body')
+        .evaluate(() => !!getSelection()?.toString().includes('Good morning')),
+    'Projected text remains natively selectable',
+  );
+  await page.evaluate(() => {
+    const editor = document.createElement('textarea');
+    editor.id = 'multiline';
+    editor.style.cssText =
+      'position:fixed;top:100px;left:10px;width:300px;height:80px;z-index:100';
+    document.body.append(editor);
+  });
+  await projected.locator('#multiline').waitFor();
+  await projected.locator('#multiline').click();
+  await viewer.keyboard.type('line one');
+  await viewer.keyboard.press('Enter');
+  await viewer.keyboard.type('line two');
+  await eventually(
+    async () =>
+      (await page.locator('#multiline').inputValue()) === 'line one\nline two',
+    'Enter edits the source textarea',
+  );
+});
+
+test('projects the source-selected responsive image after an image load', async (t) => {
+  const { page, projected, externalRequests } = await setup(t);
+  await page.locator('#private-image').evaluate((image: HTMLImageElement) => {
+    image.srcset = '/private/retina.svg 1x';
+  });
+  await eventually(
+    () =>
+      projected
+        .locator('#private-image')
+        .evaluate(
+          (image: HTMLImageElement) =>
+            image.complete && image.naturalWidth === 64,
+        ),
+    'The source-selected image is projected',
+  );
+  assert.deepEqual(externalRequests, []);
+});
+
+test('keeps the source caret visible and supports insertion in the middle of text', async (t) => {
+  const { page, viewer, projected } = await setup(t);
+  await projected.locator('#name').click();
+  await viewer.keyboard.type('abcd');
+  await eventually(
+    async () => (await page.locator('#name').inputValue()) === 'abcd',
+    'Initial source text is ready',
+  );
+  await viewer.keyboard.press('ArrowLeft');
+  await viewer.keyboard.press('ArrowLeft');
+  await eventually(
+    () =>
+      projected
+        .locator('#name')
+        .evaluate(
+          (input: HTMLInputElement) =>
+            document.activeElement === input && input.selectionStart === 2,
+        ),
+    'The projected field retains native focus and the source caret',
+  );
+  await viewer.keyboard.type('X');
+  await eventually(
+    async () => (await page.locator('#name').inputValue()) === 'abXcd',
+    'Insertion respects source selection',
+  );
+  await eventually(
+    () =>
+      projected
+        .locator('#name')
+        .evaluate(
+          (input: HTMLInputElement) =>
+            input.value === 'abXcd' && input.selectionStart === 3,
+        ),
+    'The source caret follows the inserted text',
+  );
+  await viewer.locator('#address').focus();
+  await page
+    .locator('#name')
+    .evaluate((input: HTMLInputElement) => input.setSelectionRange(0, 0));
+  await viewer.waitForTimeout(50);
+  assert.equal(
+    await viewer
+      .locator('#address')
+      .evaluate((input) => document.activeElement === input),
+    true,
+    'Source focus updates cannot steal browser-chrome focus',
+  );
+});
