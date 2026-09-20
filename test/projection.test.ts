@@ -349,7 +349,7 @@ test('canvas projection retains layout attributes without accepting bitmap paylo
     assert.equal(canvas.attributes.id, 'editor-overlay');
     assert.equal(canvas.attributes.onclick, null);
     assert.equal(canvas.attributes.rr_dataURL, undefined);
-    assert.equal(canvas.attributes['data-floebrowser-canvas'], '');
+    assert.equal(canvas.attributes['data-floebrowser-canvas'], '0,120');
     assert.match(canvas.attributes.src, /^data:image\/svg\+xml,/);
     assert.doesNotMatch(canvas.attributes.src, /secret/);
     assert.match(

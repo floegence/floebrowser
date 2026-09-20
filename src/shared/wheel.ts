@@ -36,7 +36,7 @@ export function mapWheelPoint(
     for (let current: Element | null = node; current; current = parent(current))
       if (
         current.matches(
-          'canvas,object,embed,input[type="file"],[data-floebrowser-unsupported]',
+          'object,embed,input[type="file"],[data-floebrowser-unsupported]',
         )
       )
         return false;

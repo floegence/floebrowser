@@ -1,3 +1,4 @@
+import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
 import { record } from '@rrweb/record';
 import type { MediaConfiguration } from '../shared/protocol.js';
@@ -15,6 +16,9 @@ export function installRecorder(
     !['http:', 'https:', 'about:', 'blob:', 'data:'].includes(location.protocol)
   )
     return;
+  // Observe native rendering before page scripts run, including child frames.
+  // Pixels stay in a bounded source-local cache until an authorized receiver exists.
+  const canvas = observeCanvas(window, `${key}:canvas`);
   // rrweb's parent recorder already covers same-origin child documents.
   if (window !== window.top) {
     try {
@@ -298,6 +302,7 @@ export function installRecorder(
               ...disabled,
               set: setDisabled,
             });
+          const canvasObserver = observeCanvas(win, `${key}:canvas`);
           const observer = observeMedia(
             doc,
             key,
@@ -340,6 +345,7 @@ export function installRecorder(
             )
               Object.defineProperty(prototype, 'disabled', disabled);
             observer.close();
+            canvasObserver.close();
             media.delete(observer);
             for (const event of ['focusin', 'selectionchange', 'input'])
               doc.removeEventListener(event, changed, true);
@@ -421,6 +427,7 @@ export function installRecorder(
       },
       stop: () => {
         for (const observer of media) observer.close();
+        canvas.close();
         media.clear();
         stop?.();
         delete target[key];

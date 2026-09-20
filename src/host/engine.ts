@@ -854,19 +854,27 @@ export class BrowserProjection {
         key: action.key,
         code: action.code,
         modifiers: action.modifiers,
-        windowsVirtualKeyCode: keyCode(action.key),
+        windowsVirtualKeyCode: keyCode(action.key, action.code),
       };
       if (action.phase === 'down') this.heldKeys.set(action.code, parameters);
+      // Native keyDown preserves shortcuts and the page's preventDefault()
+      // decision before text insertion. IME and paste retain insertText.
+      const text =
+        action.key === 'Enter'
+          ? '\r'
+          : action.key.length === 1 && !(action.modifiers & 7)
+            ? action.key
+            : undefined;
       await this.cdp.send('Input.dispatchKeyEvent', {
         type:
           action.phase === 'down'
-            ? action.key === 'Enter'
+            ? text !== undefined
               ? 'keyDown'
               : 'rawKeyDown'
             : 'keyUp',
         ...parameters,
-        ...(action.phase === 'down' && action.key === 'Enter'
-          ? { text: '\r', unmodifiedText: '\r' }
+        ...(action.phase === 'down' && text !== undefined
+          ? { text, unmodifiedText: text }
           : {}),
       });
       if (action.phase === 'up') this.heldKeys.delete(action.code);
@@ -1066,7 +1074,7 @@ function documentIndependent(action: Action): boolean {
     action.kind,
   );
 }
-function keyCode(key: string): number {
+function keyCode(key: string, code: string): number {
   const codes: Record<string, number> = {
     Backspace: 8,
     Tab: 9,
@@ -1086,13 +1094,35 @@ function keyCode(key: string): number {
     ArrowDown: 40,
     Delete: 46,
     Meta: 91,
+    Semicolon: 186,
+    Equal: 187,
+    Comma: 188,
+    Minus: 189,
+    Period: 190,
+    Slash: 191,
+    Backquote: 192,
+    BracketLeft: 219,
+    Backslash: 220,
+    BracketRight: 221,
+    Quote: 222,
+    IntlBackslash: 226,
+    NumpadMultiply: 106,
+    NumpadAdd: 107,
+    NumpadSubtract: 109,
+    NumpadDecimal: 110,
+    NumpadDivide: 111,
   };
   return (
+    codes[code] ??
     codes[key] ??
-    (key.length === 1
-      ? key.toUpperCase().charCodeAt(0)
-      : /^F\d{1,2}$/.test(key)
-        ? 111 + Number(key.slice(1))
-        : 0)
+    (/^Digit[0-9]$/.test(code)
+      ? code.charCodeAt(5)
+      : /^Numpad[0-9]$/.test(code)
+        ? 96 + Number(code.slice(-1))
+        : key.length === 1
+          ? key.toUpperCase().charCodeAt(0)
+          : /^F\d{1,2}$/.test(key)
+            ? 111 + Number(key.slice(1))
+            : 0)
   );
 }

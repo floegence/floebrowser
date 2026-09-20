@@ -808,7 +808,11 @@ export class DOMBrowserView {
         if (target.closest('select')) return;
         const point = this.point(event);
         if (!point) return;
-        if (target.closest('[data-floebrowser-editable]'))
+        if (
+          target.closest(
+            '[data-floebrowser-editable],[data-floebrowser-canvas]',
+          )
+        )
           event.preventDefault();
         this.dragging = true;
         void this.dispatch({
@@ -854,7 +858,7 @@ export class DOMBrowserView {
       'mousemove',
       (raw) => {
         const event = raw as PointerEvent;
-        if (performance.now() - this.lastMove < 40) return;
+        if (!this.dragging && performance.now() - this.lastMove < 40) return;
         this.lastMove = performance.now();
         const point = this.point(event);
         if (!point) return;
@@ -971,24 +975,6 @@ export class DOMBrowserView {
         false
     )
       return;
-    if (
-      event.key.length === 1 &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
-    ) {
-      if (
-        event.target !== this.sink &&
-        !['INPUT', 'TEXTAREA'].includes((event.target as Element).tagName)
-      ) {
-        event.preventDefault();
-        if (phase === 'down') {
-          this.sink.focus({ preventScroll: true });
-          void this.dispatch({ kind: 'text', text: event.key });
-        }
-      }
-      return;
-    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v')
       return;
     event.preventDefault();

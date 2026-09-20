@@ -14,16 +14,21 @@ const blocked = new Set(['object', 'embed']);
 const inert = new Set(['script', 'base', 'meta', 'source', 'track']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
-function canvasPlaceholder(size?: SourceCanvasSize): string {
+function canvasSize(size?: SourceCanvasSize): SourceCanvasSize {
   const dimension = (value: unknown, fallback: number) =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
       ? value
       : fallback;
-  const width = dimension(size?.width, 300);
-  const height = dimension(size?.height, 150);
+  return {
+    width: dimension(size?.width, 300),
+    height: dimension(size?.height, 150),
+  };
+}
+function canvasPlaceholder(size?: SourceCanvasSize): string {
+  const { width, height } = canvasSize(size);
   // Intrinsic sizing must follow the source without inventing DOM attributes
   // that would change selectors such as canvas[width]. Only numbers enter SVG.
-  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"><rect width="300" height="150" fill="#f3f5f8"/><text x="150" y="70" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">Canvas is not supported</text><text x="150" y="90" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">in DOM mode</text></svg>`)}`;
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"></svg>`)}`;
 }
 const reservedStyleAttributes = new Set(Object.values(styleAttributes));
 
@@ -38,7 +43,7 @@ export class DOMProjection {
   ) {}
 
   isMedia(id: number): boolean {
-    return ['video', 'audio'].includes(this.tags.get(id) ?? '');
+    return ['video', 'audio', 'canvas'].includes(this.tags.get(id) ?? '');
   }
 
   private attributes(
@@ -141,12 +146,10 @@ export class DOMProjection {
     if (tag === 'iframe' || tag === 'frame')
       result.sandbox = 'allow-same-origin';
     if (tag === 'canvas') {
-      result[CANVAS_ATTRIBUTE] = '';
+      const { width, height } = canvasSize(canvas);
+      result[CANVAS_ATTRIBUTE] = `${width},${height}`;
       result.src = canvasPlaceholder(canvas);
-      result['data-floebrowser-unsupported'] =
-        'Canvas is not supported in DOM mode';
-      result['aria-label'] = 'Canvas is not supported in DOM mode';
-      result.role = 'img';
+      result.draggable = 'false';
     }
     if (tag === 'link' || (tag === 'style' && sheet)) {
       // A stable style node handles activation, URL changes and CSSOM text;

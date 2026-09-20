@@ -1,10 +1,20 @@
+import { observeCanvas } from './canvas-source.js';
+import {
+  CANVAS_CHANNEL,
+  CANVAS_CHUNK_BYTES,
+  CANVAS_HEADER_BYTES,
+  MAX_CANVAS_BYTES,
+} from '../shared/canvas.js';
 import type {
   MediaConfiguration,
   MediaPacket,
   MediaState,
 } from '../shared/protocol.js';
 
-type CaptureElement = HTMLMediaElement & { captureStream(): MediaStream };
+type CaptureElement =
+  (HTMLMediaElement & { captureStream(): MediaStream }) | HTMLCanvasElement;
+const isCanvas = (element: CaptureElement): element is HTMLCanvasElement =>
+  element.localName === 'canvas';
 type Capture = {
   id: number;
   element: CaptureElement;
@@ -33,11 +43,11 @@ export function observeMedia(
   idFor: (node: Node) => number,
   emit: (packet: MediaPacket) => void,
 ) {
-  const captures = new Map<HTMLMediaElement, Capture>();
+  const captures = new Map<CaptureElement, Capture>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let enabled = false;
-  const sourceObject = (element: HTMLMediaElement) => {
-    const source = element.srcObject;
+  const sourceObject = (element: CaptureElement) => {
+    const source = isCanvas(element) ? null : element.srcObject;
     // Chromium can return a new MediaStream wrapper for the same source.
     return source && 'id' in source ? source.id : source;
   };
@@ -95,9 +105,126 @@ export function observeMedia(
       capture.negotiating = false;
     }
   };
+  const connection = (capture: Capture) => {
+    const peer = capture.peer!;
+    peer.onconnectionstatechange = () => {
+      if (capture.retired) return;
+      if (peer.connectionState === 'connected') {
+        capture.status = 'streaming';
+        capture.retries = 0;
+      } else if (peer.connectionState === 'disconnected')
+        capture.status = 'connecting';
+      else if (peer.connectionState === 'failed') {
+        if (capture.retries++ < 2) void negotiate(capture, true);
+        else
+          unavailable(
+            capture,
+            'Media connection failed. Check the source network or TURN relay configuration.',
+          );
+      }
+    };
+  };
   const start = (capture: Capture) => {
     const element = capture.element;
-    if (capture.peer || capture.retired || element.readyState < 2) return;
+    if (capture.peer || capture.retired) return;
+    if (isCanvas(element)) {
+      if (!element.width || !element.height || !element.checkVisibility())
+        return;
+      const peer = new RTCPeerConnection(configuration);
+      capture.peer = peer;
+      const channel = peer.createDataChannel(CANVAS_CHANNEL, {
+        ordered: false,
+        maxRetransmits: 0,
+      });
+      const canvas = observeCanvas(
+        doc.defaultView as Window & typeof globalThis,
+        `${key}:canvas`,
+      );
+      let encoding = false;
+      let sent = 0;
+      let sequence = 0;
+      let sentAt = 0;
+      let encoded: { revision: number; bytes: Uint8Array } | undefined;
+      const send = async () => {
+        if (
+          capture.retired ||
+          !enabled ||
+          encoding ||
+          channel.readyState !== 'open' ||
+          channel.bufferedAmount
+        )
+          return;
+        const surface = canvas.get(element);
+        if (
+          !surface ||
+          (surface.revision === sent && performance.now() - sentAt < 1000)
+        )
+          return;
+        encoding = true;
+        const revision = surface.revision;
+        const { width, height } = surface;
+        try {
+          if (surface.error) throw new Error(surface.error);
+          if (encoded?.revision !== revision) {
+            const blob = await surface.bitmap.convertToBlob({
+              type: 'image/webp',
+              quality: 0.8,
+            });
+            encoded = {
+              revision,
+              bytes: new Uint8Array(await blob.arrayBuffer()),
+            };
+          }
+          const bytes = encoded.bytes;
+          if (capture.retired || !enabled || channel.readyState !== 'open')
+            return;
+          if (bytes.length > MAX_CANVAS_BYTES)
+            throw new Error('Canvas frame exceeds the graphics limit.');
+          const id = ++sequence;
+          for (
+            let offset = 0;
+            offset < bytes.length;
+            offset += CANVAS_CHUNK_BYTES
+          ) {
+            const data = bytes.subarray(offset, offset + CANVAS_CHUNK_BYTES);
+            const packet = new Uint8Array(CANVAS_HEADER_BYTES + data.length);
+            const header = new DataView(packet.buffer);
+            [id, width, height, bytes.length, offset].forEach((value, index) =>
+              header.setUint32(index * 4, value),
+            );
+            packet.set(data, CANVAS_HEADER_BYTES);
+            channel.send(packet);
+          }
+          sent = revision;
+          sentAt = performance.now();
+        } catch {
+          if (!capture.retired)
+            unavailable(
+              capture,
+              'This canvas cannot be forwarded. Its origin or graphics format may restrict access.',
+            );
+        } finally {
+          encoding = false;
+        }
+      };
+      const timer = setInterval(() => void send(), 42);
+      channel.onopen = () => {
+        capture.status = 'streaming';
+        void send();
+      };
+      channel.onerror = () => {
+        if (!capture.retired)
+          unavailable(capture, 'The canvas connection was interrupted.');
+      };
+      capture.stopWatching = () => {
+        clearInterval(timer);
+        channel.close();
+      };
+      connection(capture);
+      void negotiate(capture);
+      return;
+    }
+    if (element.readyState < 2) return;
     if (element.mediaKeys) {
       unavailable(capture, 'Protected media cannot be forwarded.');
       return;
@@ -157,22 +284,7 @@ export function observeMedia(
         observed.removeEventListener('addtrack', changed);
         observed.removeEventListener('removetrack', changed);
       };
-      peer.onconnectionstatechange = () => {
-        if (capture.retired) return;
-        if (peer.connectionState === 'connected') {
-          capture.status = 'streaming';
-          capture.retries = 0;
-        } else if (peer.connectionState === 'disconnected')
-          capture.status = 'connecting';
-        else if (peer.connectionState === 'failed') {
-          if (capture.retries++ < 2) void negotiate(capture, true);
-          else
-            unavailable(
-              capture,
-              'Media connection failed. Check the source network or TURN relay configuration.',
-            );
-        }
-      };
+      connection(capture);
       void negotiate(capture);
     } catch {
       unavailable(
@@ -183,10 +295,10 @@ export function observeMedia(
   };
   const scan = (force = false) => {
     if (!enabled) return;
-    const elements = new Set<HTMLMediaElement>();
+    const elements = new Set<CaptureElement>();
     const collect = (root: Document | ShadowRoot) => {
       root
-        .querySelectorAll<HTMLMediaElement>('video,audio')
+        .querySelectorAll<CaptureElement>('video,audio,canvas')
         .forEach((element) => elements.add(element));
       root.querySelectorAll('*').forEach((element) => {
         if (element.shadowRoot) collect(element.shadowRoot);
@@ -197,7 +309,8 @@ export function observeMedia(
       if (
         !elements.has(element) ||
         !element.isConnected ||
-        element.currentSrc !== capture.src ||
+        (isCanvas(element) && !element.checkVisibility()) ||
+        (!isCanvas(element) && element.currentSrc !== capture.src) ||
         sourceObject(element) !== capture.sourceObject
       ) {
         release(capture);
@@ -206,6 +319,11 @@ export function observeMedia(
       }
     }
     for (const element of elements) {
+      if (
+        isCanvas(element) &&
+        (!element.width || !element.height || !element.checkVisibility())
+      )
+        continue;
       const id = idFor(element);
       if (id <= 0) continue;
       let capture = captures.get(element);
@@ -219,7 +337,7 @@ export function observeMedia(
           status: 'waiting',
           reason: '',
           previous: '',
-          src: element.currentSrc,
+          src: isCanvas(element) ? '' : element.currentSrc,
           sourceObject: sourceObject(element),
           negotiating: false,
           retries: 0,
@@ -245,17 +363,20 @@ export function observeMedia(
       }
       capture.id = id;
       start(capture);
-      if (!element.paused && element.readyState >= 3)
+      if (!isCanvas(element) && !element.paused && element.readyState >= 3)
         capture.playbackError = '';
       const state: MediaState = {
         kind: 'state',
         id,
         stream: capture.token,
-        paused: element.paused,
-        time: Math.max(0, element.currentTime || 0),
-        duration: Number.isFinite(element.duration) ? element.duration : 0,
-        muted: element.muted,
-        volume: element.volume,
+        paused: isCanvas(element) ? false : element.paused,
+        time: isCanvas(element) ? 0 : Math.max(0, element.currentTime || 0),
+        duration:
+          !isCanvas(element) && Number.isFinite(element.duration)
+            ? element.duration
+            : 0,
+        muted: isCanvas(element) || element.muted,
+        volume: isCanvas(element) ? 0 : element.volume,
         status: capture.status,
         reason: capture.reason || capture.playbackError || '',
       };

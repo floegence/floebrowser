@@ -113,8 +113,9 @@ test('projects authenticated DOM, images, CSS and fonts without client website r
   );
   assert.equal(
     await projected.locator('[data-floebrowser-unsupported]').count(),
-    1,
+    0,
   );
+  assert.equal(await projected.locator('[data-floebrowser-canvas]').count(), 1);
   assert.deepEqual(externalRequests, []);
   assert.deepEqual(errors, []);
   await mkdir('.test-artifacts', { recursive: true });

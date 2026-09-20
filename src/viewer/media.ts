@@ -1,3 +1,5 @@
+import { CANVAS_ATTRIBUTE } from '../shared/style.js';
+import { CANVAS_CHANNEL, CanvasFrames } from '../shared/canvas.js';
 import type {
   Action,
   MediaConfiguration,
@@ -10,6 +12,13 @@ type Playback = {
   peer?: RTCPeerConnection;
   stream?: MediaStream;
   element?: HTMLMediaElement;
+  canvasURL?: string;
+  canvasImage?: string;
+  canvasSize?: string;
+  canvasBytes?: Uint8Array;
+  canvasAnimation?: number;
+  canvas?: HTMLImageElement;
+  channel?: RTCDataChannel;
   offer?: string;
   answer?: string;
   negotiating: boolean;
@@ -135,6 +144,50 @@ export class MediaView {
         const peer = new RTCPeerConnection(this.configuration);
         playback.peer = peer;
         const current = playback;
+        peer.ondatachannel = (event) => {
+          const channel = event.channel;
+          if (
+            channel.label !== CANVAS_CHANNEL ||
+            current.closed ||
+            current.channel
+          ) {
+            channel.close();
+            return;
+          }
+          current.channel = channel;
+          channel.binaryType = 'arraybuffer';
+          const frames = new CanvasFrames();
+          channel.onmessage = (message) => {
+            if (current.closed || !(message.data instanceof ArrayBuffer))
+              return;
+            const frame = frames.receive(message.data);
+            if (!frame) return;
+            current.canvasBytes = frame.bytes;
+            // A busy viewer paints only the newest complete image on its next
+            // animation frame; decoding old images cannot build a UI backlog.
+            if (current.canvasAnimation !== undefined) return;
+            current.canvasAnimation = requestAnimationFrame(() => {
+              current.canvasAnimation = undefined;
+              const bytes = current.canvasBytes;
+              current.canvasBytes = undefined;
+              if (!bytes || current.closed) return;
+              // Source data supplies bounded WebP bytes, never markup or URLs.
+              if (
+                String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF' ||
+                String.fromCharCode(...bytes.subarray(8, 12)) !== 'WEBP'
+              )
+                return;
+              let binary = '';
+              for (let offset = 0; offset < bytes.length; offset += 8192)
+                binary += String.fromCharCode(
+                  ...bytes.subarray(offset, offset + 8192),
+                );
+              current.canvasImage = `data:image/webp;base64,${btoa(binary)}`;
+              current.canvasSize = undefined;
+              this.update();
+            });
+          };
+        };
         peer.ontrack = (event) => {
           if (current.closed) return;
           current.stream = event.streams[0] ?? new MediaStream([event.track]);
@@ -216,7 +269,34 @@ export class MediaView {
   }
   private update() {
     for (const playback of this.playback.values()) {
-      const node = this.node(playback.id) as HTMLMediaElement | null;
+      const projected = this.node(playback.id) as Element | null;
+      if (
+        projected?.isConnected &&
+        projected.tagName === 'IMG' &&
+        projected.hasAttribute(CANVAS_ATTRIBUTE)
+      ) {
+        const image = projected as HTMLImageElement;
+        playback.canvas = image;
+        const size = image.getAttribute(CANVAS_ATTRIBUTE)!;
+        if (
+          playback.canvasImage &&
+          size !== playback.canvasSize &&
+          /^\d+,\d+$/.test(size)
+        ) {
+          const [width, height] = size.split(',').map(Number);
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image width="100%" height="100%" preserveAspectRatio="none" href="${playback.canvasImage}"/></svg>`;
+          const previous = playback.canvasURL;
+          playback.canvasURL = URL.createObjectURL(
+            new Blob([svg], { type: 'image/svg+xml' }),
+          );
+          playback.canvasSize = size;
+          if (previous) URL.revokeObjectURL(previous);
+        }
+        if (playback.canvasURL && image.src !== playback.canvasURL)
+          image.src = playback.canvasURL;
+        continue;
+      }
+      const node = projected as HTMLMediaElement | null;
       if (!node?.isConnected || !['VIDEO', 'AUDIO'].includes(node.tagName))
         continue;
       if (node === playback.element || !playback.stream) continue;
@@ -231,6 +311,26 @@ export class MediaView {
       node.setAttribute('playsinline', '');
       node.srcObject = playback.stream;
       this.volume(playback);
+    }
+    for (const state of this.states.values()) {
+      const image = this.node(state.id) as HTMLImageElement | null;
+      if (image?.tagName !== 'IMG' || !image.hasAttribute(CANVAS_ATTRIBUTE))
+        continue;
+      const failed =
+        state.status === 'unavailable' ||
+        this.playback.get(state.stream)?.failed;
+      if (failed) {
+        image.setAttribute(
+          'data-floebrowser-unsupported',
+          'Canvas unavailable',
+        );
+        const [width, height] = image
+          .getAttribute(CANVAS_ATTRIBUTE)!
+          .split(',')
+          .map(Number);
+        const src = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"><rect width="300" height="150" fill="#f3f5f8"/><text x="150" y="80" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">Canvas unavailable</text></svg>`)}`;
+        if (image.src !== src) image.src = src;
+      } else image.removeAttribute('data-floebrowser-unsupported');
     }
     this.renderControls();
   }
@@ -247,7 +347,7 @@ export class MediaView {
   }
   private relevant(state: MediaState) {
     const node = this.node(state.id) as HTMLMediaElement | null;
-    if (!node?.isConnected) return false;
+    if (!node?.isConnected || node.hasAttribute(CANVAS_ATTRIBUTE)) return false;
     // Background audio remains controllable even without a rendered element.
     if (!state.paused && !state.muted && state.volume > 0) return true;
     for (
@@ -353,7 +453,14 @@ export class MediaView {
     this.playback.delete(token);
     if (!playback) return;
     playback.closed = true;
+    if (playback.canvasAnimation !== undefined)
+      cancelAnimationFrame(playback.canvasAnimation);
+    playback.canvasBytes = undefined;
     playback.peer?.close();
+    playback.channel?.close();
+    if (playback.canvasURL) URL.revokeObjectURL(playback.canvasURL);
+    if (playback.canvas && playback.canvas.src === playback.canvasURL)
+      playback.canvas.removeAttribute('src');
     playback.stream?.getTracks().forEach((track) => track.stop());
     if (playback.element) {
       playback.element.pause();
