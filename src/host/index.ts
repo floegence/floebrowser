@@ -14,4 +14,5 @@ export {
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,
+  type DisconnectReason,
 } from '../shared/protocol.js';

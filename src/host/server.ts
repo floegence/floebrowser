@@ -1,4 +1,8 @@
-import { createServer, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
@@ -13,6 +17,7 @@ import {
   MAX_COMMAND_BYTES,
   MAX_MESSAGE_BYTES,
   clientMessageSchema,
+  DISCONNECT_CODES,
 } from '../shared/protocol.js';
 
 export interface ProjectionServerOptions {
@@ -37,6 +42,8 @@ export async function createProjectionServer(
   });
   let origin = '';
   let closing = false;
+  let admission = Promise.resolve();
+  let active: { ws: WebSocket; release: () => Promise<void> } | undefined;
   const securityHeaders = {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
@@ -111,25 +118,37 @@ export async function createProjectionServer(
       closing ||
       request.headers.host !== new URL(origin).host ||
       request.headers.origin !== origin ||
-      request.url !== `${base}stream`
+      (request.url !== `${base}stream` &&
+        request.url !== `${base}stream?takeover=1`)
     ) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
     sockets.handleUpgrade(request, socket, head, (ws) =>
-      sockets.emit('connection', ws),
+      sockets.emit('connection', ws, request),
     );
   });
-  sockets.on('connection', (ws: WebSocket) => {
+  sockets.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     let controller: Controller | undefined;
     let disconnected = false;
+    let released: Promise<void> | undefined;
+    const viewer = {
+      ws,
+      release: (): Promise<void> => {
+        released ??= (async () => {
+          await controller?.close();
+          if (active === viewer) active = undefined;
+        })();
+        return released;
+      },
+    };
     const early: unknown[] = [];
     ws.on('error', () => {
       ws.close();
     });
     ws.on('close', () => {
       disconnected = true;
-      void controller?.close();
+      if (controller) void viewer.release();
     });
     ws.on('message', (data) => {
       let input: unknown;
@@ -148,39 +167,56 @@ export async function createProjectionServer(
       else if (early.length < 8) early.push(parsed.data);
       else ws.close(1008, 'Connection not ready');
     });
-    void engine
-      .connect((message) => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        const payload = JSON.stringify(message);
-        if (
-          Buffer.byteLength(payload) > MAX_MESSAGE_BYTES ||
-          ws.bufferedAmount > MAX_MESSAGE_BYTES
-        ) {
-          ws.close(1013, 'Projection is behind; reconnect for a fresh view');
-          return;
+    // Only this carrier owns its viewers. A handoff drains and revokes the old
+    // controller before granting the next one; opening a URL alone never takes over.
+    admission = admission
+      .then(async () => {
+        if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
+        if (active) {
+          if (active.ws.readyState === WebSocket.OPEN) {
+            if (request.url !== `${base}stream?takeover=1`) {
+              ws.close(
+                DISCONNECT_CODES.viewer_in_use,
+                'Source active in another window',
+              );
+              return;
+            }
+            active.ws.close(
+              DISCONNECT_CODES.viewer_replaced,
+              'Control moved to another window',
+            );
+          }
+          await active.release();
         }
-        ws.send(payload);
-      })
-      .then(async (value) => {
-        controller = value;
-        if (disconnected) {
-          await controller.close();
+        if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
+        controller = await engine.connect((message) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const payload = JSON.stringify(message);
+          if (
+            Buffer.byteLength(payload) > MAX_MESSAGE_BYTES ||
+            ws.bufferedAmount > MAX_MESSAGE_BYTES
+          ) {
+            ws.close(1013, 'Projection is behind; reconnect for a fresh view');
+            return;
+          }
+          ws.send(payload);
+        });
+        active = viewer;
+        if (disconnected || ws.readyState !== WebSocket.OPEN) {
+          await viewer.release();
           return;
         }
         for (const message of early)
-          await controller.receive(clientMessageSchema.parse(message));
+          void controller.receive(clientMessageSchema.parse(message));
+        early.length = 0;
       })
       .catch(() => {
-        if (ws.readyState === WebSocket.OPEN)
-          ws.send(
-            JSON.stringify({
-              type: 'notice',
-              message: engine.hasController
-                ? 'This source tab already has an active viewer. Close that viewer, then reconnect.'
-                : 'The source browser is unavailable. Reconnect after it is ready.',
-            }),
-          );
-        ws.close(1013, 'Source unavailable');
+        ws.close(
+          engine.hasController
+            ? DISCONNECT_CODES.viewer_in_use
+            : DISCONNECT_CODES.source_unavailable,
+          'Source unavailable',
+        );
       });
   });
   try {
@@ -205,6 +241,8 @@ export async function createProjectionServer(
       closing = true;
       for (const client of sockets.clients) client.terminate();
       sockets.close();
+      await admission;
+      await active?.release();
       await engine.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

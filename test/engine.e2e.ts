@@ -241,6 +241,116 @@ test('loopback carrier rejects unknown capabilities, foreign origins, and raw CD
   assert.equal(rejected, true);
 });
 
+test(
+  'viewer handoff revokes pending input and preserves origin checks',
+  { timeout: 15000 },
+  async (t) => {
+    let allow!: (value: boolean) => void;
+    let entered!: () => void;
+    const authorization = new Promise<boolean>((resolve) => {
+      allow = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    t.after(() => allow(true));
+    let textCommands = 0;
+    const { service, page } = await setup(t, async (action) => {
+      if (action.kind === 'text' && ++textCommands === 1) {
+        entered();
+        return authorization;
+      }
+      return true;
+    });
+    const endpoint = new URL('stream', service.url);
+    endpoint.protocol = 'ws:';
+    const origin = new URL(service.url).origin;
+    const first = new WebSocket(endpoint, { origin });
+    const firstMessages: ServerMessage[] = [];
+    first.on('message', (data) =>
+      firstMessages.push(JSON.parse(data.toString())),
+    );
+    t.after(() => first.terminate());
+    await eventually(() => !!snapshot(firstMessages));
+
+    endpoint.search = '?takeover=1';
+    const rejected = await new Promise<boolean>((resolve) => {
+      const foreign = new WebSocket(endpoint, {
+        origin: 'https://untrusted.test',
+      });
+      foreign.on('open', () => {
+        foreign.close();
+        resolve(false);
+      });
+      foreign.on('unexpected-response', (_request, response) => {
+        response.destroy();
+        foreign.terminate();
+        resolve(response.statusCode === 403);
+      });
+      foreign.on('error', () => {});
+    });
+    assert.equal(rejected, true);
+    assert.equal(first.readyState, WebSocket.OPEN);
+
+    await page.locator('#name').focus();
+    first.send(
+      JSON.stringify({
+        type: 'command',
+        id: 1,
+        epoch: snapshot(firstMessages).epoch,
+        action: { kind: 'text', text: 'revoked' },
+      }),
+    );
+    await waiting;
+    first.send(
+      JSON.stringify({
+        type: 'command',
+        id: 2,
+        epoch: snapshot(firstMessages).epoch,
+        action: { kind: 'text', text: 'queued' },
+      }),
+    );
+    const firstClosed = new Promise<number>((resolve) =>
+      first.on('close', resolve),
+    );
+    const second = new WebSocket(endpoint, { origin });
+    const secondMessages: ServerMessage[] = [];
+    second.on('message', (data) =>
+      secondMessages.push(JSON.parse(data.toString())),
+    );
+    t.after(() => second.terminate());
+    assert.equal(await firstClosed, 4002);
+    assert.equal(
+      secondMessages.length,
+      0,
+      'New control waits for the old input to drain',
+    );
+    allow(true);
+    await eventually(() => !!snapshot(secondMessages));
+    assert.equal(await page.locator('#name').inputValue(), '');
+    assert.equal(
+      textCommands,
+      1,
+      'Queued old input never reaches authorization',
+    );
+    assert.notEqual(
+      snapshot(firstMessages).epoch,
+      snapshot(secondMessages).epoch,
+    );
+    second.send(
+      JSON.stringify({
+        type: 'command',
+        id: 1,
+        epoch: snapshot(secondMessages).epoch,
+        action: { kind: 'text', text: 'new viewer' },
+      }),
+    );
+    await eventually(
+      async () => (await page.locator('#name').inputValue()) === 'new viewer',
+    );
+  },
+);
+
 test('disconnect balances held input without completing a pending button click', async (t) => {
   const { service, page } = await setup(t);
   const messages: ServerMessage[] = [];

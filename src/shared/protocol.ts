@@ -5,6 +5,13 @@ export const PROTOCOL_VERSION = 1;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
+/** Application close codes used only by the optional WebSocket carrier. */
+export const DISCONNECT_CODES = {
+  viewer_in_use: 4001,
+  viewer_replaced: 4002,
+  source_unavailable: 4003,
+} as const;
+export type DisconnectReason = keyof typeof DISCONNECT_CODES;
 export const UNSUPPORTED_SELECTOR =
   'iframe,frame,canvas,video,audio,object,embed,input[type="file"]';
 
@@ -128,6 +135,6 @@ export type ServerMessage =
 export interface ProjectionConnection {
   send(message: ClientMessage): void;
   subscribe(listener: (message: ServerMessage) => void): () => void;
-  onDisconnect(listener: () => void): () => void;
+  onDisconnect(listener: (reason?: DisconnectReason) => void): () => void;
   close(): void;
 }

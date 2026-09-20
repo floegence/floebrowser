@@ -19,6 +19,8 @@ npm start -- --url https://example.com
 
 Open the private viewer URL printed by the CLI. The source browser is headless by default. Website requests, scripts, cookies, storage and form submissions remain in that browser.
 
+Opening the same private URL in another window shows **This browser is open in another window**. Choose **Use in this window** to transfer control. The previous window disconnects with a persistent explanation; the source page, login and browser profile stay open. Opening or refreshing an inactive window never takes control automatically.
+
 ```sh
 # Show the source browser while developing.
 npm start -- --headed --url https://example.com
@@ -152,6 +154,8 @@ Use the same FloeBrowser release on both sides. Protocol version 1 includes the 
 The source page is authoritative. A full snapshot creates a new opaque view epoch. Input carries that epoch and a monotonically increasing command ID. Source node references are resolved and hit-tested just before dispatch. The engine rejects stale epochs, duplicate IDs, disconnected controllers and unauthorized effects.
 
 The host serializes commands. Disconnect discards unstarted commands, drains started work, and releases held input outside the source viewport. It does not undo completed effects. Cleanup failure prevents admitting another controller to that engine. A missing acknowledgement never causes a retry. Reconnection creates a fresh current view; it is not an action replay.
+
+The standalone loopback carrier serializes viewer admission. Its explicit handoff closes and drains its previous controller before admitting the next one; it does not replace controllers owned outside that carrier. The private session URL and exact Host/Origin checks still apply to handoff requests. `webSocketConnection` passes optional `DisconnectReason` values (`viewer_in_use`, `viewer_replaced`, `source_unavailable`) through `ProjectionConnection.onDisconnect` and the viewer's `onStatus` callback so hosts can render persistent recovery actions. This additive transport metadata does not change the DOM/input wire protocol. Product integrations retain ownership of their own target leases and handoff policy.
 
 The viewer detects missing event sequences and requests a fresh snapshot. It also checkpoints after 4,000 incremental messages or 8 MiB of event text to bound rrweb replay history. This is a view refresh, not transport recovery. The embedding transport owns disconnect detection.
 

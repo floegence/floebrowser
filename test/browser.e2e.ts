@@ -225,6 +225,56 @@ test('reconnects with a fresh document and never repeats prior input', async (t)
   );
 });
 
+test('explains an occupied browser and transfers control only on an explicit request', async (t) => {
+  const { page, viewer, projected, client, service } = await setup(t);
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '1',
+    'The first viewer controls the source',
+  );
+  const second = await client.newPage();
+  await second.goto(service.url);
+  await second.locator('#status.disconnected').waitFor();
+  assert.equal(
+    await second.locator('#connection-title').textContent(),
+    'This browser is open in another window',
+  );
+  assert.equal(await second.locator('#address').isDisabled(), true);
+  assert.equal(await viewer.locator('#status.live').count(), 1);
+  await second
+    .getByRole('button', { name: 'Use in this window', exact: true })
+    .click();
+  await second.locator('#status.live').waitFor();
+  await viewer.locator('#status.disconnected').waitFor();
+  assert.equal(
+    await viewer.locator('#connection-title').textContent(),
+    'Control moved to another window',
+  );
+  const secondProjection = second.frameLocator('#viewport iframe');
+  await secondProjection.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '2',
+    'The new viewer controls the same source without replaying previous clicks',
+  );
+  await second.reload();
+  await second.locator('#status.live').waitFor();
+  await eventually(
+    async () =>
+      (await secondProjection.locator('#count-value').textContent()) === '2',
+    'Refreshing the active window preserves the source and releases its old connection',
+  );
+  await second.close();
+  await viewer
+    .getByRole('button', { name: 'Use in this window', exact: true })
+    .click();
+  await viewer.locator('#status.live').waitFor();
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '3',
+    'The original window can recover after the other window closes',
+  );
+});
+
 test('handles scaled input, double clicks, text selection, and multiline editing', async (t) => {
   const { page, viewer, projected } = await setup(t);
   await viewer.setViewportSize({ width: 900, height: 720 });

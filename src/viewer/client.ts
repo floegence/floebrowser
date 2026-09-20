@@ -6,12 +6,20 @@ import type {
   BrowserState,
   ProjectionConnection,
   ServerMessage,
+  DisconnectReason,
 } from '../shared/protocol.js';
-import { MAX_PENDING_COMMANDS, PROTOCOL_VERSION } from '../shared/protocol.js';
+import {
+  DISCONNECT_CODES,
+  MAX_PENDING_COMMANDS,
+  PROTOCOL_VERSION,
+} from '../shared/protocol.js';
 
 type ViewOptions = {
   onState?: (state: BrowserState) => void;
-  onStatus?: (status: 'connecting' | 'live' | 'disconnected') => void;
+  onStatus?: (
+    status: 'connecting' | 'live' | 'disconnected',
+    reason?: DisconnectReason,
+  ) => void;
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
   onAddressFocus?: () => void;
@@ -34,6 +42,7 @@ export class DOMBrowserView {
   private sequence = 0;
   private nextID = 0;
   private connected = false;
+  private disconnectReason?: DisconnectReason;
   private ready = false;
   private destroyed = false;
   private resyncing = false;
@@ -70,7 +79,7 @@ export class DOMBrowserView {
     container.append(this.surface, this.sink);
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
-      connection.onDisconnect(() => this.disconnected()),
+      connection.onDisconnect((reason) => this.disconnected(reason)),
     );
     this.resize = new ResizeObserver(() => this.layout());
     this.resize.observe(container);
@@ -221,7 +230,7 @@ export class DOMBrowserView {
       this.options.onState?.(message.state);
       this.layout();
       if (message.state.status === 'closed') {
-        this.disconnected();
+        this.disconnected('source_unavailable');
         this.connection.close();
       }
       return;
@@ -592,11 +601,12 @@ export class DOMBrowserView {
     });
   }
 
-  private disconnected(): void {
+  private disconnected(reason?: DisconnectReason): void {
+    this.disconnectReason = reason ?? this.disconnectReason;
     this.connected = false;
     this.ready = false;
     this.dragging = false;
-    this.options.onStatus?.('disconnected');
+    this.options.onStatus?.('disconnected', this.disconnectReason);
     if (this.pending.size)
       this.options.onNotice?.(
         'Connection lost. Unconfirmed actions have not been repeated.',
@@ -630,7 +640,7 @@ function mouseButton(button: number): 'left' | 'middle' | 'right' {
 export function webSocketConnection(url: string): ProjectionConnection {
   const socket = new WebSocket(url);
   const messages = new Set<(message: ServerMessage) => void>();
-  const disconnected = new Set<() => void>();
+  const disconnected = new Set<(reason?: DisconnectReason) => void>();
   socket.addEventListener('message', (event) => {
     try {
       const message: ServerMessage = JSON.parse(event.data);
@@ -639,8 +649,11 @@ export function webSocketConnection(url: string): ProjectionConnection {
       socket.close(1008, 'Invalid projection');
     }
   });
-  socket.addEventListener('close', () => {
-    for (const listener of disconnected) listener();
+  socket.addEventListener('close', (event) => {
+    const reason = (Object.keys(DISCONNECT_CODES) as DisconnectReason[]).find(
+      (reason) => DISCONNECT_CODES[reason] === event.code,
+    );
+    for (const listener of disconnected) listener(reason);
   });
   return {
     send: (message) => {
