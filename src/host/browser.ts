@@ -12,6 +12,10 @@ export async function launchSourceBrowser(
     channel: 'chromium',
     headless: options.headless ?? true,
     chromiumSandbox: true,
+    // The source is a user-controlled browser. Explicit WebDriver markers can
+    // cause sites to reject its playback sessions; other detection remains possible.
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled'],
   };
   const browser = await chromium.launch(launch);
   try {

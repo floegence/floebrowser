@@ -34,6 +34,11 @@ test('managed headless Chromium uses its actual Chrome UA and preserves a dedica
         const ua = await page.evaluate(() => navigator.userAgent);
         assert.doesNotMatch(ua, /HeadlessChrome/);
         assert.match(ua, /Chrome\/\d+/);
+        assert.equal(
+          await page.evaluate(() => navigator.webdriver),
+          false,
+          'The user-controlled source does not advertise WebDriver mode',
+        );
         assert.equal(requests.at(-1)!.ua, ua);
         if (i) assert.match(requests.at(-1)!.cookie ?? '', /floe=retained/);
       } finally {

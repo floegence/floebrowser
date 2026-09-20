@@ -10,6 +10,7 @@ import {
   focusSchema,
   MAX_MESSAGE_BYTES,
   MAX_PENDING_COMMANDS,
+  UNSUPPORTED_SELECTOR,
   PROTOCOL_VERSION,
   type Action,
   type BrowserState,
@@ -749,29 +750,31 @@ export class BrowserProjection {
     const element = await this.frames.resolve(point.node);
     if (!element) return;
     try {
-      const local = await element.evaluate((node, point) => {
-        if (
-          !node.isConnected ||
-          node.closest('canvas,video,audio,object,embed,input[type="file"]')
-        )
-          return;
-        const rect = node.getBoundingClientRect();
-        const win = node.ownerDocument.defaultView!;
-        if (!rect.width || !rect.height) return;
-        const x = Math.max(
-          0,
-          Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
-        );
-        const y = Math.max(
-          0,
-          Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
-        );
-        const hit = (
-          node.getRootNode() as Document | ShadowRoot
-        ).elementFromPoint(x, y);
-        if (!hit || !(hit === node || node.contains(hit))) return;
-        return { x: (x - rect.x) / rect.width, y: (y - rect.y) / rect.height };
-      }, point);
+      const local = await element.evaluate(
+        (node, { point, unsupported }) => {
+          if (!node.isConnected || node.closest(unsupported)) return;
+          const rect = node.getBoundingClientRect();
+          const win = node.ownerDocument.defaultView!;
+          if (!rect.width || !rect.height) return;
+          const x = Math.max(
+            0,
+            Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
+          );
+          const y = Math.max(
+            0,
+            Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
+          );
+          const hit = (
+            node.getRootNode() as Document | ShadowRoot
+          ).elementFromPoint(x, y);
+          if (!hit || !(hit === node || node.contains(hit))) return;
+          return {
+            x: (x - rect.x) / rect.width,
+            y: (y - rect.y) / rect.height,
+          };
+        },
+        { point, unsupported: UNSUPPORTED_SELECTOR },
+      );
       const box = await element.boundingBox();
       if (!local || !box) return;
       const position = {

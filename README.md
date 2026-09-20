@@ -17,7 +17,7 @@ npm run build
 npm start -- --url https://example.com
 ```
 
-Open the private viewer URL printed by the CLI. The source browser uses full Chromium in modern headless mode by default, rather than the separate Headless Shell. Its User-Agent keeps the real browser version and platform with the standard `Chrome` product token. This fixes sites that reject `HeadlessChrome` at document request time; it does not promise automation invisibility, CAPTCHA acceptance, or access from every network. Website requests, scripts, cookies, storage and form submissions remain in that browser.
+Open the private viewer URL printed by the CLI. The source browser uses full Chromium in modern headless mode by default, rather than the separate Headless Shell. Its User-Agent keeps the real browser version and platform with the standard `Chrome` product token. Chromium startup settings also disable the explicit WebDriver automation marker. These settings improve site and media-session compatibility; they do not promise automation invisibility, CAPTCHA acceptance, or access from every network. Website requests, scripts, cookies, storage and form submissions remain in that browser.
 
 Opening the same private URL in another window shows **This browser is open in another window**. Choose **Use in this window** to transfer control. The previous window disconnects with a persistent explanation; the source page, login and browser profile stay open. Opening or refreshing an inactive window never takes control automatically.
 
@@ -241,7 +241,7 @@ npm run test:e2e
 npm run check:package
 ```
 
-Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media signaling fences, dropped RTP packets with responsive input, and paused-frame preservation across DOM checkpoints.
+Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, window handoff with source video hover/click input, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media signaling fences, dropped RTP packets with responsive input, and paused-frame preservation across DOM checkpoints.
 
 `npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch.
 
