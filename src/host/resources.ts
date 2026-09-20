@@ -29,6 +29,7 @@ type Resource = {
   type?: string;
   waiters: Set<() => void>;
 };
+type ResponseMetadata = { url: string; kind: string; type: string };
 const MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 
@@ -38,10 +39,7 @@ export class ResourceStore {
   private byID = new Map<string, Resource>();
   private bytes = 0;
   private closed = false;
-  private requests = new Map<
-    string,
-    { url: string; kind: string; type: string }
-  >();
+  private requests = new Map<string, ResponseMetadata>();
   private inFlight = 0;
   private nextSession = 0;
   private disposers = new Set<() => void>();
@@ -54,6 +52,32 @@ export class ResourceStore {
 
   async start(cdp = this.cdp): Promise<void> {
     const prefix = `${++this.nextSession}:`;
+    let disposed = false;
+    let generation = 0;
+    let recovery: Promise<void> | undefined;
+    let recoveryRequested = false;
+    const recover = () => {
+      recoveryRequested = true;
+      if (recovery || disposed || this.closed) return;
+      recovery = (async () => {
+        while (recoveryRequested && !disposed && !this.closed) {
+          recoveryRequested = false;
+          const current = generation;
+          await this.captureLoaded(
+            cdp,
+            () => disposed || current !== generation,
+          );
+        }
+      })()
+        .catch(() => {})
+        .finally(() => {
+          recovery = undefined;
+          if (recoveryRequested) recover();
+        });
+    };
+    const navigated = () => {
+      generation++;
+    };
     const received = (event: any) => {
       if (
         this.closed ||
@@ -93,10 +117,15 @@ export class ResourceStore {
     cdp.on('Network.responseReceived', received);
     cdp.on('Network.loadingFinished', finished);
     cdp.on('Network.loadingFailed', failed);
+    cdp.on('Page.frameNavigated', navigated);
+    cdp.on('Page.frameStoppedLoading', recover);
     const dispose = () => {
+      disposed = true;
       cdp.off('Network.responseReceived', received);
       cdp.off('Network.loadingFinished', finished);
       cdp.off('Network.loadingFailed', failed);
+      cdp.off('Page.frameNavigated', navigated);
+      cdp.off('Page.frameStoppedLoading', recover);
       cdp.off('close', dispose);
       for (const id of this.requests.keys())
         if (id.startsWith(prefix)) this.requests.delete(id);
@@ -109,9 +138,63 @@ export class ResourceStore {
         maxTotalBufferSize: MAX_TOTAL_BYTES,
         maxResourceBufferSize: MAX_RESOURCE_BYTES,
       });
+      await cdp.send('Page.enable');
+      // Popups can finish cached requests before the host attaches. Read the
+      // inspected document's loaded resources as well as future network events.
+      // Keep this work outside the input path; resource reads await their bodies.
+      recover();
     } catch (error) {
       dispose();
       throw error;
+    }
+  }
+
+  private async captureLoaded(
+    cdp: CDPSession,
+    obsolete: () => boolean,
+  ): Promise<void> {
+    const { frameTree } = await cdp.send('Page.getResourceTree');
+    const frames = [frameTree];
+    while (frames.length && !this.closed && !obsolete()) {
+      const tree = frames.shift()!;
+      frames.push(...(tree.childFrames ?? []));
+      for (const entry of tree.resources) {
+        if (this.closed || obsolete()) return;
+        if (
+          !['Stylesheet', 'Image', 'Font'].includes(entry.type) ||
+          entry.failed ||
+          entry.canceled ||
+          (entry.contentSize ?? 0) > MAX_RESOURCE_BYTES
+        )
+          continue;
+        try {
+          this.reference(entry.url, entry.url);
+          const url = new URL(entry.url);
+          url.hash = '';
+          const resource = this.byURL.get(url.href);
+          if (!resource || resource.body) continue;
+          const body = await cdp.send('Page.getResourceContent', {
+            frameId: tree.frame.id,
+            url: entry.url,
+          });
+          // A newer network response, navigation or detachment wins over this
+          // asynchronous read of the document cache.
+          if (this.closed || obsolete()) return;
+          if (!resource.body)
+            this.store(
+              resource,
+              {
+                url: entry.url,
+                kind: entry.type,
+                type: entry.mimeType.toLowerCase(),
+              },
+              Buffer.from(body.content, body.base64Encoded ? 'base64' : 'utf8'),
+            );
+        } catch {
+          // Evicted or still-loading bodies remain unavailable. A document load
+          // event revisits resources missed while the observer was attaching.
+        }
+      }
     }
   }
 
@@ -212,7 +295,7 @@ export class ResourceStore {
 
   private async capture(
     requestID: string,
-    response: { url: string; kind: string; type: string },
+    response: ResponseMetadata,
     cdp: CDPSession,
   ): Promise<void> {
     const url = new URL(response.url);
@@ -224,6 +307,14 @@ export class ResourceStore {
       requestId: requestID,
     });
     const data = Buffer.from(body.body, body.base64Encoded ? 'base64' : 'utf8');
+    this.store(resource, response, data);
+  }
+
+  private store(
+    resource: Resource,
+    response: ResponseMetadata,
+    data: Buffer,
+  ): void {
     if (this.closed) return;
     if (data.length > MAX_RESOURCE_BYTES) {
       this.notice('A page resource exceeds the projection memory limit.');

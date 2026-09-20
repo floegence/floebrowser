@@ -69,7 +69,9 @@ flowchart LR
 
 rrweb records and reconstructs DOM state. FloeBrowser supplies the return input path, document generations, resource capture, projection sanitization and controller lifecycle.
 
-The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate encrypted WebRTC path carries captured source audio/video elements. The authorized host transport carries only media state and SDP signaling alongside DOM and input, so encoded video cannot fill the control queue.
+The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer and the inspected document's resource cache through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate encrypted WebRTC path carries captured source audio/video elements. The authorized host transport carries only media state and SDP signaling alongside DOM and input, so encoded video cannot fill the control queue.
+
+When attaching to an existing page or a fast-loading popup, resource capture also inspects the source frame tree and reads retained stylesheets, images and fonts. Document load completion revisits resources that were still loading during attachment. These reads run outside the input queue, use the same bounded per-tab cache as network capture, and cannot overwrite a newer captured response or survive navigation or detachment. Only URLs observed in that source page and its frames are eligible; resource caches are not shared between tabs. Chromium may already have discarded a body, particularly a decoded font, in which case it remains unavailable.
 
 Stylesheet rewriting uses a tolerant CSS parser so malformed declarations do not discard the surrounding rules. Imports and resource URLs still resolve only through captured source responses. HTML links retain an inert link marker instead of a navigation target; `:link` and `:any-link` selectors are rewritten with the same specificity, including nested selectors. Adding or removing a source link updates that marker. This preserves link styling without enabling viewer-side navigation or exposing browser visit history.
 
@@ -125,7 +127,8 @@ const context = await launchSourceBrowser({
 });
 const page = await context.newPage();
 
-// Attach before navigation so source resource responses can be captured.
+// Prefer attaching before navigation to retain all source response bodies.
+// Already-loaded pages also recover resources retained by Chromium.
 const projection = await BrowserProjection.attach(page, {
   authorize: (action) => hostAllowsCurrentUser(action),
   resourceURL: (id) => hostAuthorizedResourceURL(id),
@@ -242,7 +245,7 @@ Projection data remains in process memory; there is no session recording databas
 | Native dialogs                                               | Dismissed at the source with a notice; no automatic acceptance                                                                                          |
 | Downloads                                                    | Started at the source with a notice; no file-transfer UI                                                                                                |
 | Clipboard                                                    | Text paste and copying projected text; no source OS clipboard synchronization                                                                           |
-| Existing loaded pages                                        | Reload at the source to capture resources loaded before attachment                                                                                      |
+| Existing loaded pages                                        | Recover retained source resources on attachment; bodies already discarded by Chromium remain unavailable                                                |
 | Closed shadow roots, DRM, WebAuthn, browser chrome, DevTools | Not supported or qualified                                                                                                                              |
 | Arbitrary rich editors, custom drag-and-drop, CSS edge cases | Require site-specific compatibility qualification                                                                                                       |
 
@@ -259,7 +262,7 @@ npm run test:e2e
 npm run check:package
 ```
 
-Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, sustained scrolling with delayed DOM, live scroll latency, bounded wheel accumulation, reversal/click ordering and cancellation on rejection/navigation/handoff, zero-height document roots, nested scroll chaining and containment, scaled cross-origin wheel input, rejected scroll targets, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, window handoff with source video hover/click input, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media signaling fences, dropped RTP packets with responsive input, paused-frame preservation across DOM checkpoints, pending source playback without blocked input or shutdown, hidden-media suppression, on-demand media controls, and audio activation without overriding source or client mute.
+Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover attachment to loaded pages, cached popups and in-flight stylesheets, authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, sustained scrolling with delayed DOM, live scroll latency, bounded wheel accumulation, reversal/click ordering and cancellation on rejection/navigation/handoff, zero-height document roots, nested scroll chaining and containment, scaled cross-origin wheel input, rejected scroll targets, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, window handoff with source video hover/click input, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media signaling fences, dropped RTP packets with responsive input, paused-frame preservation across DOM checkpoints, pending source playback without blocked input or shutdown, hidden-media suppression, on-demand media controls, and audio activation without overriding source or client mute.
 
 `npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch.
 
