@@ -122,7 +122,7 @@ function connect(takeover = false): void {
         welcome.hidden = !live || state.url !== 'about:blank';
       },
       onStatus: (status, reason) => {
-        live = status === 'live';
+        live = status === 'live' || status === 'refreshing';
         element<HTMLButtonElement>('new-tab').disabled =
           status === 'disconnected';
         for (const button of element('tabs').querySelectorAll('button'))
@@ -134,11 +134,13 @@ function connect(takeover = false): void {
         element('status').replaceChildren(
           Object.assign(document.createElement('span'), {}),
           document.createTextNode(
-            live
-              ? 'Live'
-              : status === 'connecting'
-                ? 'Connecting'
-                : 'Disconnected',
+            status === 'refreshing'
+              ? 'Updating view'
+              : live
+                ? 'Live'
+                : status === 'connecting'
+                  ? 'Connecting'
+                  : 'Disconnected',
           ),
         );
         overlay.hidden = live;
@@ -172,7 +174,11 @@ function connect(takeover = false): void {
         element<HTMLButtonElement>('reload').disabled = !live;
         address.disabled = !live;
         element<HTMLButtonElement>('address-go').disabled = !live;
-        if (!live)
+        if (status === 'refreshing')
+          element('page-status').textContent = 'Updating the source view…';
+        else if (live)
+          element('page-status').textContent = 'Live from the source machine';
+        else
           element('page-status').textContent = offerTakeover
             ? 'Active in another window'
             : status === 'connecting'

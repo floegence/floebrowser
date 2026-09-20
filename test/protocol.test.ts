@@ -93,3 +93,33 @@ test('media accepts bounded signaling and host-owned ICE servers only', () => {
     false,
   );
 });
+
+test('wheel commands require explicit scroll-region coordinates', () => {
+  const wheel = {
+    type: 'command',
+    tab: 'source-tab',
+    id: 1,
+    epoch: 'current',
+    action: {
+      kind: 'wheel',
+      point: { space: 'viewport', node: 1, x: 0.5, y: 0.5 },
+      dx: 0,
+      dy: 150,
+      modifiers: 0,
+    },
+  };
+  assert.equal(clientMessageSchema.safeParse(wheel).success, true);
+  for (const point of [
+    { node: 1, x: 0.5, y: 0.5 },
+    { space: 'viewport', node: 1, x: 1.5, y: 0.5 },
+    { space: 'viewport', node: 0, x: 0.5, y: 0.5 },
+  ]) {
+    assert.equal(
+      clientMessageSchema.safeParse({
+        ...wheel,
+        action: { ...wheel.action, point },
+      }).success,
+      false,
+    );
+  }
+});

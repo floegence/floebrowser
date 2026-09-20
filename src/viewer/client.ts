@@ -1,4 +1,5 @@
 import { MediaView } from './media.js';
+import { mapWheelPoint } from '../shared/wheel.js';
 import { Replayer } from '@rrweb/replay';
 import { ReplayerEvents } from '@rrweb/types';
 import type {
@@ -19,7 +20,7 @@ import {
 type ViewOptions = {
   onState?: (state: BrowserState) => void;
   onStatus?: (
-    status: 'connecting' | 'live' | 'disconnected',
+    status: 'connecting' | 'refreshing' | 'live' | 'disconnected',
     reason?: DisconnectReason,
   ) => void;
   onNotice?: (message: string) => void;
@@ -392,7 +393,7 @@ export class DOMBrowserView {
     if (this.resyncing || !this.connected) return;
     this.resyncing = true;
     this.ready = false;
-    this.options.onStatus?.('connecting');
+    this.options.onStatus?.(this.replayer ? 'refreshing' : 'connecting');
     this.connection.send({ type: 'resync' });
   }
 
@@ -611,8 +612,21 @@ export class DOMBrowserView {
       (raw) => {
         raw.preventDefault();
         const event = raw as WheelEvent;
-        const point = this.point(event);
-        if (!point) return;
+        const target = event
+          .composedPath()
+          .find((item) => (item as Node)?.nodeType === 1) as
+          Element | undefined;
+        if (!target) return;
+        const mapped = mapWheelPoint(target, {
+          space: 'client',
+          x: event.clientX,
+          y: event.clientY,
+          dx: event.deltaX,
+          dy: event.deltaY,
+        });
+        if (!mapped?.node) return;
+        const node = player.getMirror().getId(mapped.node);
+        if (node < 1) return;
         const unit =
           event.deltaMode === 1
             ? 16
@@ -621,7 +635,7 @@ export class DOMBrowserView {
               : 1;
         void this.dispatch({
           kind: 'wheel',
-          point,
+          point: { space: 'viewport', node, x: mapped.x, y: mapped.y },
           dx: Math.max(-4000, Math.min(4000, event.deltaX * unit)),
           dy: Math.max(-4000, Math.min(4000, event.deltaY * unit)),
           modifiers: modifiers(event),

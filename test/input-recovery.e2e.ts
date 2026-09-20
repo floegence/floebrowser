@@ -30,11 +30,22 @@ test(
         acks: [],
         snapshots: 0,
         resyncs: 0,
+        refreshNonblocking: false,
       });
       const Socket = WebSocket;
       (window as any).WebSocket = class extends Socket {
         send(data: string) {
-          if (JSON.parse(data).type === 'resync') state.resyncs++;
+          if (JSON.parse(data).type === 'resync') {
+            state.resyncs++;
+            state.refreshNonblocking =
+              document
+                .querySelector('#status')!
+                .classList.contains('refreshing') &&
+              (document.querySelector('#connection-overlay') as HTMLElement)
+                .hidden &&
+              !(document.querySelector('#address') as HTMLInputElement)
+                .disabled;
+          }
           super.send(data);
         }
         addEventListener(type: string, listener: any, options?: any) {
@@ -101,6 +112,13 @@ test(
       await viewer.evaluate(() => (window as any).testCarrier.resyncs),
       1,
       'Down/up rejection requests one fresh view',
+    );
+    assert.equal(
+      await viewer.evaluate(
+        () => (window as any).testCarrier.refreshNonblocking,
+      ),
+      true,
+      'Refreshing a view keeps its content and navigation visible without a connection overlay',
     );
     assert.equal(
       await source.evaluate(() => (window as any).clicks),

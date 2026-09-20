@@ -21,6 +21,7 @@ import {
 import { DOMProjection } from './projection.js';
 import { ResourceStore } from './resources.js';
 import { FrameBridge } from './frames.js';
+import { mapWheelPoint } from '../shared/wheel.js';
 
 const attachedPages = new WeakSet<Page>();
 
@@ -688,7 +689,10 @@ export class BrowserProjection {
       return;
     }
     if (action.kind === 'pointer' || action.kind === 'wheel') {
-      const point = await this.resolvePoint(action.point);
+      const point = await this.resolvePoint(
+        action.point,
+        action.kind === 'wheel' ? action : undefined,
+      );
       assertCurrent();
       if (!point) throw new CommandError('stale_view');
       if (action.kind === 'wheel') {
@@ -783,46 +787,51 @@ export class BrowserProjection {
     }
   }
 
-  private async resolvePoint(point: {
-    node: number;
-    x: number;
-    y: number;
-  }): Promise<{ x: number; y: number } | undefined> {
+  private async resolvePoint(
+    point: {
+      node: number;
+      x: number;
+      y: number;
+    },
+    wheel?: Extract<Action, { kind: 'wheel' }>,
+  ): Promise<{ x: number; y: number } | undefined> {
     const element = await this.frames.resolve(point.node);
     if (!element) return;
     try {
-      const local = await element.evaluate(
-        (node, { point, unsupported }) => {
-          if (!node.isConnected || node.closest(unsupported)) return;
-          const rect = node.getBoundingClientRect();
-          const win = node.ownerDocument.defaultView!;
-          if (!rect.width || !rect.height) return;
-          const x = Math.max(
-            0,
-            Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
+      const local = wheel
+        ? await element.evaluate(mapWheelPoint, {
+            space: 'viewport' as const,
+            x: point.x,
+            y: point.y,
+            dx: wheel.dx,
+            dy: wheel.dy,
+          })
+        : await element.evaluate(
+            (node, { point, unsupported }) => {
+              if (!node.isConnected || node.closest(unsupported)) return;
+              const rect = node.getBoundingClientRect();
+              const win = node.ownerDocument.defaultView!;
+              if (!rect.width || !rect.height) return;
+              const x = Math.max(
+                0,
+                Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
+              );
+              const y = Math.max(
+                0,
+                Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
+              );
+              const hit = (
+                node.getRootNode() as Document | ShadowRoot
+              ).elementFromPoint(x, y);
+              if (!hit || !(hit === node || node.contains(hit))) return;
+              return { x, y };
+            },
+            { point, unsupported: UNSUPPORTED_SELECTOR },
           );
-          const y = Math.max(
-            0,
-            Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
-          );
-          const hit = (
-            node.getRootNode() as Document | ShadowRoot
-          ).elementFromPoint(x, y);
-          if (!hit || !(hit === node || node.contains(hit))) return;
-          return {
-            x: (x - rect.x) / rect.width,
-            y: (y - rect.y) / rect.height,
-          };
-        },
-        { point, unsupported: UNSUPPORTED_SELECTOR },
-      );
-      const box = await element.boundingBox();
-      if (!local || !box) return;
-      const position = {
-        x: box.x + box.width * local.x,
-        y: box.y + box.height * local.y,
-      };
-      // Hit-test each containing frame so an overlay cannot redirect remote input.
+      if (!local) return;
+      let position = { x: local.x, y: local.y };
+      // Map viewport coordinates through each frame, checking its hit target.
+      // Never derive viewport input from the document's moving content box.
       for (
         let frame = await element.ownerFrame();
         frame?.parentFrame();
@@ -830,25 +839,31 @@ export class BrowserProjection {
       ) {
         const owner = await frame.frameElement();
         try {
-          const bounds = await owner.boundingBox();
-          if (!bounds) return;
-          const visible = await owner.evaluate(
-            (node, fraction) => {
-              const rect = (node as Element).getBoundingClientRect();
-              const hit = (
-                node.getRootNode() as Document | ShadowRoot
-              ).elementFromPoint(
-                rect.x + rect.width * fraction.x,
-                rect.y + rect.height * fraction.y,
-              );
-              return hit === node;
-            },
-            {
-              x: (position.x - bounds.x) / bounds.width,
-              y: (position.y - bounds.y) / bounds.height,
-            },
-          );
-          if (!visible) return;
+          const mapped = await owner.evaluate((node, point) => {
+            const frame = node as HTMLElement;
+            const rect = frame.getBoundingClientRect();
+            if (
+              !frame.isConnected ||
+              !rect.width ||
+              !rect.height ||
+              !frame.offsetWidth ||
+              !frame.offsetHeight
+            )
+              return;
+            const x =
+              rect.x +
+              ((frame.clientLeft + point.x) * rect.width) / frame.offsetWidth;
+            const y =
+              rect.y +
+              ((frame.clientTop + point.y) * rect.height) / frame.offsetHeight;
+            const hit = (
+              frame.getRootNode() as Document | ShadowRoot
+            ).elementFromPoint(x, y);
+            if (hit !== frame) return;
+            return { x, y };
+          }, position);
+          if (!mapped) return;
+          position = mapped;
         } finally {
           await owner.dispose();
         }

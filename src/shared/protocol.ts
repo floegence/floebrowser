@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
@@ -37,7 +37,7 @@ export const actionSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('wheel'),
-      point,
+      point: point.extend({ space: z.literal('viewport') }),
       dx: z.number().min(-4000).max(4000),
       dy: z.number().min(-4000).max(4000),
       modifiers,
