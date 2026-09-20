@@ -1,3 +1,4 @@
+import { MediaView } from './media.js';
 import { Replayer } from '@rrweb/replay';
 import { ReplayerEvents } from '@rrweb/types';
 import type {
@@ -40,6 +41,7 @@ const modifiers = (event: MouseEvent | KeyboardEvent) =>
 /** Renders inert DOM and returns user intent through a host-provided connection. */
 export class DOMBrowserView {
   private replayer?: Replayer;
+  private media: MediaView;
   private epoch = '';
   private tab = '';
   private sequence = 0;
@@ -81,6 +83,11 @@ export class DOMBrowserView {
     this.sink.autocomplete = 'off';
     this.sink.spellcheck = false;
     container.append(this.surface, this.sink);
+    this.media = new MediaView(
+      container,
+      (id) => this.replayer?.getMirror().getNode(id),
+      (action) => this.dispatch(action),
+    );
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
       connection.onDisconnect((reason) => this.disconnected(reason)),
@@ -207,10 +214,16 @@ export class DOMBrowserView {
 
   private receive(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'media') {
+      if (message.epoch === this.epoch && this.connected)
+        this.media.receive(message.packet);
+      return;
+    }
     if (message.type === 'tabs') {
       if (message.state.active !== this.tab) {
         this.ready = false;
         this.clearFrame();
+        this.media.reset();
         this.replayer?.destroy();
         this.replayer = undefined;
         this.tab = message.state.active;
@@ -244,7 +257,10 @@ export class DOMBrowserView {
         width: message.state.width,
         height: message.state.height,
       };
-      if (message.state.status !== 'ready') this.ready = false;
+      if (message.state.status !== 'ready') {
+        this.ready = false;
+        this.media.reset();
+      }
       this.options.onState?.(message.state);
       this.layout();
       if (message.state.status === 'closed') {
@@ -261,6 +277,7 @@ export class DOMBrowserView {
       this.eventBytes = 0;
       this.sourceFocus = undefined;
       this.clearFrame();
+      this.media.reset();
       this.replayer?.destroy();
       const now = Date.now();
       this.replayer = new Replayer([], {
@@ -659,6 +676,7 @@ export class DOMBrowserView {
   }
 
   private disconnected(reason?: DisconnectReason): void {
+    this.media.reset();
     this.disconnectReason = reason ?? this.disconnectReason;
     this.connected = false;
     this.ready = false;
@@ -685,6 +703,7 @@ export class DOMBrowserView {
     this.clearFrame();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.resize.disconnect();
+    this.media.destroy();
     this.replayer?.destroy();
     this.connection.close();
     this.container.replaceChildren();

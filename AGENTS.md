@@ -11,7 +11,10 @@ lifecycle, authentication, site grants and target-control leases. Keep one activ
 controller and one serialized input path per projection. Never replay input after
 an uncertain result, reconnect, navigation or takeover.
 
-Resources come only from observed source-browser responses. Do not add a host
+Static resources come only from observed source-browser responses. Audio/video
+may additionally come from capture of individual source media elements through
+the authorized controller transport; never capture a display, tab, camera or
+microphone. Media must stop on controller revocation and use current view epochs. Do not add a host
 HTTP fetch fallback, expose cookies, or publish a raw CDP endpoint. Preserve the
 scriptless replay sandbox and same-origin resource policy. Unsupported surfaces
 must remain explicit. Do not enable rrweb's unsafe canvas replay option.

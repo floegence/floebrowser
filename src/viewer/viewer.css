@@ -33,3 +33,46 @@
   resize: none;
   pointer-events: none;
 }
+
+.floe-media-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  max-width: 320px;
+  padding: 10px 14px;
+  border: 1px solid #dce2ec;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 8px 30px #15274718;
+  color: #24334b;
+  font: 12px/1.5 system-ui;
+}
+.floe-media-dock[hidden] {
+  display: none;
+}
+.floe-media-dock summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.floe-media-dock button {
+  cursor: pointer;
+  border: 1px solid #dce2ec;
+  border-radius: 6px;
+  background: #f5f7fb;
+  color: inherit;
+  padding: 5px 9px;
+  margin-top: 8px;
+}
+.floe-media-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+.floe-media-row input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #6472ee;
+}

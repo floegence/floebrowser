@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
@@ -12,8 +12,7 @@ export const DISCONNECT_CODES = {
   source_unavailable: 4003,
 } as const;
 export type DisconnectReason = keyof typeof DISCONNECT_CODES;
-export const UNSUPPORTED_SELECTOR =
-  'canvas,video,audio,object,embed,input[type="file"]';
+export const UNSUPPORTED_SELECTOR = 'canvas,object,embed,input[type="file"]';
 
 const point = z
   .object({
@@ -74,6 +73,14 @@ export const actionSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   z.object({ kind: z.enum(['back', 'forward', 'reload']) }).strict(),
+  z
+    .object({
+      kind: z.literal('media'),
+      node: z.number().int().positive(),
+      operation: z.enum(['play', 'pause', 'seek']),
+      time: z.number().finite().min(0).max(1e9).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal('tab_new') }).strict(),
   z
     .object({
@@ -120,7 +127,43 @@ export type TabState = {
   active: string;
   tabs: Array<{ id: string; title: string; url: string }>;
 };
+export const mediaStateSchema = z
+  .object({
+    id: z.number().int().positive(),
+    kind: z.literal('state'),
+    paused: z.boolean(),
+    time: z.number().finite().min(0),
+    duration: z.number().finite().min(0),
+    muted: z.boolean(),
+    volume: z.number().min(0).max(1),
+    status: z.enum(['waiting', 'streaming', 'unavailable']),
+    reason: z.string().max(180),
+  })
+  .strict();
+export const mediaPacketSchema = z.discriminatedUnion('kind', [
+  mediaStateSchema,
+  z
+    .object({
+      kind: z.literal('chunk'),
+      id: z.number().int().positive(),
+      stream: z.string().min(1).max(80),
+      sequence: z.number().int().min(0),
+      mime: z.enum([
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp8',
+        'audio/webm;codecs=opus',
+      ]),
+      data: z.string().max(700000),
+    })
+    .strict(),
+  z
+    .object({ kind: z.literal('removed'), id: z.number().int().positive() })
+    .strict(),
+]);
+export type MediaPacket = z.infer<typeof mediaPacketSchema>;
+export type MediaState = z.infer<typeof mediaStateSchema>;
 export type ServerMessage =
+  | { type: 'media'; epoch: string; packet: MediaPacket }
   | { type: 'tabs'; state: TabState }
   | { type: 'focus'; epoch: string; focus: FocusState }
   | { type: 'hello'; version: typeof PROTOCOL_VERSION }

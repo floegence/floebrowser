@@ -4,6 +4,7 @@ import { EventType, type eventWithTime } from '@rrweb/types';
 import type { Page, CDPSession } from 'playwright';
 import {
   clientMessageSchema,
+  mediaPacketSchema,
   focusSchema,
   MAX_MESSAGE_BYTES,
   MAX_PENDING_COMMANDS,
@@ -64,6 +65,7 @@ export class BrowserProjection {
   private heldKeys = new Map<string, Record<string, unknown>>();
   private heldButtons = new Set<string>();
   private state: BrowserState;
+  private mediaNodes = new Set<number>();
   private disposers: Array<() => void> = [];
 
   private constructor(
@@ -283,6 +285,27 @@ export class BrowserProjection {
     if (!this.viewer?.active) return;
     if (
       event.type === EventType.Custom &&
+      event.data.tag === 'floebrowser:media'
+    ) {
+      const packet = mediaPacketSchema.safeParse(event.data.payload);
+      if (
+        packet.success &&
+        this.epoch &&
+        this.projection.isMedia(packet.data.id)
+      ) {
+        if (packet.data.kind === 'removed')
+          this.mediaNodes.delete(packet.data.id);
+        else {
+          if (!this.mediaNodes.has(packet.data.id) && this.mediaNodes.size >= 8)
+            return;
+          this.mediaNodes.add(packet.data.id);
+        }
+        this.send({ type: 'media', epoch: this.epoch, packet: packet.data });
+      }
+      return;
+    }
+    if (
+      event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:image'
     ) {
       const { id, src } = event.data.payload as { id: number; src: string };
@@ -315,9 +338,20 @@ export class BrowserProjection {
     }
     const projected = this.projection.event(event, this.page.url());
     if (!projected) return;
+    for (const id of this.mediaNodes) {
+      if (!this.projection.isMedia(id)) {
+        this.mediaNodes.delete(id);
+        this.send({
+          type: 'media',
+          epoch: this.epoch,
+          packet: { kind: 'removed', id },
+        });
+      }
+    }
     if (event.type === EventType.FullSnapshot) {
       this.epoch = `${this.recorderKey.slice(-12)}:${++this.generation}`;
       this.sequence = 0;
+      this.mediaNodes.clear();
       const meta = this.metadata ?? {
         type: EventType.Meta,
         timestamp: event.timestamp,
@@ -340,8 +374,14 @@ export class BrowserProjection {
         events: [meta, projected],
       });
       this.updateState({ status: 'ready', url: this.page.url() });
+      if (!this.snapshotPending) void this.setMedia(true, true);
       return;
     }
+    if (
+      event.type === EventType.IncrementalSnapshot &&
+      (event.data as any).isAttachIframe
+    )
+      void this.setMedia(true);
     if (this.epoch)
       this.send({
         type: 'events',
@@ -382,9 +422,28 @@ export class BrowserProjection {
             this.controlFault = true;
           });
         await this.queue;
+        await this.setMedia(false);
         if (this.viewer === viewer) this.viewer = undefined;
       },
     };
+  }
+
+  private async setMedia(active: boolean, reset = false): Promise<void> {
+    await Promise.all(
+      this.page.frames().map((frame) =>
+        frame
+          .evaluate(
+            ({ key, active, reset }) =>
+              (window as any)[key]?.media(active, reset),
+            {
+              key: this.recorderKey,
+              active: active && !!this.viewer?.active,
+              reset,
+            },
+          )
+          .catch(() => {}),
+      ),
+    );
   }
 
   private async snapshot(): Promise<void> {
@@ -395,6 +454,7 @@ export class BrowserProjection {
         `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
       );
       await this.frames.snapshot();
+      await this.setMedia(true, true);
     } finally {
       this.snapshotPending = false;
     }
@@ -497,6 +557,28 @@ export class BrowserProjection {
         throw new CommandError('stale_view');
     };
     assertCurrent();
+    if (action.kind === 'media') {
+      const element = await this.frames.resolve(action.node);
+      if (!element) throw new CommandError('target_unavailable');
+      try {
+        assertCurrent();
+        const result = await element.evaluate(async (node, action) => {
+          if (!['VIDEO', 'AUDIO'].includes(node.tagName) || !node.isConnected)
+            return false;
+          const media = node as HTMLMediaElement;
+          if (action.operation === 'play') await media.play();
+          else if (action.operation === 'pause') media.pause();
+          else if (action.time !== undefined && Number.isFinite(media.duration))
+            media.currentTime = Math.min(action.time, media.duration);
+          else return false;
+          return true;
+        }, action);
+        if (!result) throw new CommandError('unsupported');
+      } finally {
+        await element.dispose();
+      }
+      return;
+    }
     if (action.kind.startsWith('tab_')) throw new CommandError('unsupported');
     if (action.kind === 'navigate') {
       await this.page.goto(action.url, {

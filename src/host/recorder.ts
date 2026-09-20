@@ -1,3 +1,4 @@
+import { observeMedia } from './media-recorder.js';
 import { record } from '@rrweb/record';
 import type { ICrossOriginIframeMirror } from '@rrweb/types';
 import { UNSUPPORTED_SELECTOR } from '../shared/protocol.js';
@@ -17,6 +18,8 @@ export function installRecorder(binding: string, key: string): void {
   let frameMirror: ICrossOriginIframeMirror;
   const frameIDs = new Set<number>();
   let lastTitle = document.title;
+  let mediaActive = false;
+  const media = new Set<ReturnType<typeof observeMedia>>();
   const currentImage = (node: any) => {
     if (node.type === 2 && ['iframe', 'frame'].includes(node.tagName))
       frameIDs.add(node.id);
@@ -71,6 +74,13 @@ export function installRecorder(binding: string, key: string): void {
         eventProcessor: prepare,
         observer: (_callback, win) => {
           const doc = win.document;
+          const observer = observeMedia(
+            doc,
+            (node) => record.mirror.getId(node),
+            (packet) => record.addCustomEvent('floebrowser:media', packet),
+          );
+          media.add(observer);
+          observer.setEnabled(mediaActive);
           const changed = () => queueMicrotask(() => emitFocus(doc));
           const loaded = (event: Event) => {
             const image = event.target as HTMLImageElement;
@@ -86,6 +96,8 @@ export function installRecorder(binding: string, key: string): void {
             doc.addEventListener(event, changed, true);
           doc.addEventListener('load', loaded, true);
           return () => {
+            observer.close();
+            media.delete(observer);
             for (const event of ['focusin', 'selectionchange', 'input'])
               doc.removeEventListener(event, changed, true);
             doc.removeEventListener('load', loaded, true);
@@ -128,6 +140,11 @@ export function installRecorder(binding: string, key: string): void {
   Object.defineProperty(target, key, {
     configurable: true,
     value: {
+      media: (active: boolean, reset = false) => {
+        if (active === mediaActive && !reset) return;
+        mediaActive = active;
+        for (const observer of media) observer.setEnabled(active);
+      },
       snapshot: () => {
         record.takeFullSnapshot();
         emitFocus(document, true);
@@ -152,6 +169,8 @@ export function installRecorder(binding: string, key: string): void {
         return {};
       },
       stop: () => {
+        for (const observer of media) observer.close();
+        media.clear();
         stop?.();
         delete target[key];
       },

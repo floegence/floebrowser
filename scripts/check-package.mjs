@@ -50,14 +50,16 @@ try {
     `
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { createProjectionServer, PROTOCOL_VERSION } from '@floegence/floebrowser';
+import { createProjectionServer, launchSourceBrowser, PROTOCOL_VERSION } from '@floegence/floebrowser';
 import { clientMessageSchema } from '@floegence/floebrowser/protocol';
-assert.equal(PROTOCOL_VERSION, 2);
+assert.equal(PROTOCOL_VERSION, 3);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 const browser = await chromium.launch({ chromiumSandbox: true });
-let server;
+let server, context;
 try {
-  const source = await browser.newPage();
+  context = await launchSourceBrowser();
+  const source = await context.newPage();
+  assert.doesNotMatch(await source.evaluate(() => navigator.userAgent), /HeadlessChrome/);
   server = await createProjectionServer(source, { authorize: () => true });
   await source.goto('data:text/html,<h1 id="packed">Packed source</h1>');
   const viewer = await browser.newPage();
@@ -67,7 +69,7 @@ try {
   const css = await fetch(new URL('app.css', server.url));
   assert.equal(css.status, 200);
   assert.match(await css.text(), /floe-viewport/);
-} finally { await server?.close(); await browser.close(); }
+} finally { await server?.close(); await context?.close(); await browser.close(); }
 `,
   );
   execFileSync(process.execPath, [join(directory, 'smoke.mjs')], {

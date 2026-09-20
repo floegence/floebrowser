@@ -2,8 +2,8 @@ import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { ResourceStore } from './resources.js';
 
 type Serialized = Record<string, any>;
-const blocked = new Set(['canvas', 'video', 'audio', 'object', 'embed']);
-const inert = new Set(['script', 'base', 'meta']);
+const blocked = new Set(['canvas', 'object', 'embed']);
+const inert = new Set(['script', 'base', 'meta', 'source', 'track']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
 
@@ -12,9 +12,14 @@ export class DOMProjection {
   private tags = new Map<number, string>();
   private excluded = new Set<number>();
   private bases = new Map<number, string>();
+  private children = new Map<number, Set<number>>();
   constructor(
     private resources: Pick<ResourceStore, 'reference' | 'css' | 'value'>,
   ) {}
+
+  isMedia(id: number): boolean {
+    return ['video', 'audio'].includes(this.tags.get(id) ?? '');
+  }
 
   private attributes(
     attributes: Serialized,
@@ -23,6 +28,17 @@ export class DOMProjection {
   ): Serialized {
     const result: Serialized = {};
     for (const [key, value] of Object.entries(attributes)) {
+      if (
+        ['video', 'audio'].includes(tag) &&
+        (['src', 'autoplay', 'controls', 'preload'].includes(
+          key.toLowerCase(),
+        ) ||
+          key.startsWith('rr_media'))
+      ) {
+        // The trusted viewer alone supplies a local MediaSource, never a site URL.
+        if (!key.startsWith('rr_')) result[key] = null;
+        continue;
+      }
       if (
         (tag === 'iframe' || tag === 'frame') &&
         ['src', 'rr_src', 'sandbox', 'allow', 'allowfullscreen'].includes(
@@ -70,6 +86,10 @@ export class DOMProjection {
         result[key] = this.resources.reference(String(value), base);
       else result[key] = value;
     }
+    if (['video', 'audio'].includes(tag)) {
+      result['data-floebrowser-media'] = tag;
+      result.preload = 'none';
+    }
     if (tag === 'iframe' || tag === 'frame')
       result.sandbox = 'allow-same-origin';
     return result;
@@ -80,7 +100,17 @@ export class DOMProjection {
     for (const child of node.childNodes ?? []) this.exclude(child);
   }
 
-  private node(node: Serialized, base: string, parentTag = ''): void {
+  private node(
+    node: Serialized,
+    base: string,
+    parentTag = '',
+    parentID?: number,
+  ): void {
+    if (parentID !== undefined) {
+      const children = this.children.get(parentID) ?? new Set<number>();
+      children.add(node.id);
+      this.children.set(parentID, children);
+    }
     base = node.floeBase ?? this.bases.get(node.rootId) ?? base;
     this.bases.set(node.id, base);
     delete node.floeBase;
@@ -131,7 +161,15 @@ export class DOMProjection {
       node.textContent = this.resources.css(node.textContent, base);
     }
     for (const child of node.childNodes ?? [])
-      this.node(child, base, parentTag);
+      this.node(child, base, parentTag, node.id);
+  }
+
+  private forget(id: number): void {
+    for (const child of this.children.get(id) ?? []) this.forget(child);
+    this.children.delete(id);
+    this.tags.delete(id);
+    this.bases.delete(id);
+    this.excluded.delete(id);
   }
 
   event(input: eventWithTime, base: string): eventWithTime | undefined {
@@ -140,6 +178,7 @@ export class DOMProjection {
       this.tags.clear();
       this.excluded.clear();
       this.bases.clear();
+      this.children.clear();
       this.node(event.data.node, base);
     } else if (event.type === EventType.IncrementalSnapshot) {
       const data = event.data;
@@ -174,11 +213,16 @@ export class DOMProjection {
         data.removes = data.removes.filter(
           (entry: Serialized) => !this.excluded.has(entry.parentId),
         );
+        for (const removal of data.removes) {
+          this.children.get(removal.parentId)?.delete(removal.id);
+          this.forget(removal.id);
+        }
         for (const addition of data.adds)
           this.node(
             addition.node,
             this.bases.get(addition.parentId) ?? base,
             this.tags.get(addition.parentId),
+            addition.parentId,
           );
         data.attributes = data.attributes.filter(
           (entry: Serialized) =>

@@ -1,6 +1,6 @@
 # FloeBrowser
 
-A DOM-based remote browser engine. Websites execute in source Chromium; a remote client receives a live, inert DOM projection and sends input back to the source.
+A DOM-based remote browser engine. Websites execute in source Chromium; a remote client receives a live, inert DOM projection, source media streams, and sends input back to the source.
 
 **Status: working DOM browser preview, not a general-purpose browser replacement.**
 
@@ -8,7 +8,7 @@ A DOM-based remote browser engine. Websites execute in source Chromium; a remote
 
 ## Run locally
 
-Requires Node.js 26 or later and Chromium supported by Playwright.
+Requires Node.js 26 or later and the full Chromium build managed by the pinned Playwright release. No system Chrome, desktop environment, display server, or physical screen is required for headless operation. Linux still needs Chromium system libraries and fonts; provision those in the runtime image with `npx playwright install-deps chromium`.
 
 ```sh
 npm ci
@@ -17,7 +17,7 @@ npm run build
 npm start -- --url https://example.com
 ```
 
-Open the private viewer URL printed by the CLI. The source browser is headless by default. Website requests, scripts, cookies, storage and form submissions remain in that browser.
+Open the private viewer URL printed by the CLI. The source browser uses full Chromium in modern headless mode by default, rather than the separate Headless Shell. Its User-Agent keeps the real browser version and platform with the standard `Chrome` product token. This fixes sites that reject `HeadlessChrome` at document request time; it does not promise automation invisibility, CAPTCHA acceptance, or access from every network. Website requests, scripts, cookies, storage and form submissions remain in that browser.
 
 Opening the same private URL in another window shows **This browser is open in another window**. Choose **Use in this window** to transfer control. The previous window disconnects with a persistent explanation; the source page, login and browser profile stay open. Opening or refreshing an inactive window never takes control automatically.
 
@@ -48,6 +48,7 @@ A product integration should use its existing authenticated, encrypted transport
 - Navigation, redirects, back, forward, reload, fit-to-window and actual-size viewing.
 - Source tab creation, switching and closing, including links and scripts that open new windows.
 - Same-origin and cross-origin iframe DOM, styles, images, nested input and frame navigation.
+- Source video and audio, including capturable blob/MSE media and media inside cross-origin frames.
 - Native selection and copying of text in the projected document.
 - One active controller per page. Reconnection obtains a new snapshot and never resends commands.
 - Scriptless replay, restricted viewer network access, bounded resources, message limits and stale-view rejection.
@@ -67,21 +68,32 @@ flowchart LR
 
 rrweb records and reconstructs DOM state. FloeBrowser supplies the return input path, document generations, resource capture, projection sanitization and controller lifecycle.
 
-The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, screen capture or video stream.
+The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate media path captures individual source audio/video elements and forwards encoded media through the same authorized transport.
 
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
+
+## Source media
+
+Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` and `MediaRecorder` encode the element's audio/video into VP8/Opus WebM chunks. The host forwards bounded, sequenced media packets scoped to the current view epoch. The trusted viewer supplies a local `blob:` MediaSource to the reconstructed media element; source URLs, child `<source>` tags and rrweb playback commands cannot start client website requests. The replay sandbox still disallows website scripts. Embedding hosts must permit `media-src blob:` in their CSP.
+
+Use the website's projected controls, or open **Media** for source play/pause and seeking. Playback starts muted on the client; choose **Enable sound** in that panel. The source's mute/volume settings also apply. The client decodes a rolling live stream, while seeking changes the original media element at the source. The transport adds buffering and re-encoding cost; this is not a lossless or zero-latency media relay.
+
+Capture runs only for the selected, controlled tab and is released on disconnect, handoff, tab switch, removed elements and changed source documents. Reconnection starts fresh encoder headers rather than replaying buffered media. At most eight media elements per source document are observed, and the host/viewer admit at most eight media nodes per tab. Each encoded chunk is limited to 512 KiB, source conversion queues to four chunks per stream, and viewer append queues to 2 MiB per stream. The viewer trims old decoded media and catches up when more than 1.5 seconds behind. A blocked or slow transport closes under the existing WebSocket buffer limit; no unbounded media recording is retained.
+
+DRM-protected media is refused explicitly. Origin-restricted streams, unsupported codecs, source autoplay restrictions, inaccessible media elements, and client browser limitations can prevent playback. This preview requires a client with WebM VP8/Opus MediaSource support; qualify the actual Desktop webview, especially on platforms using WebKit. Canvas, tab/display capture, camera and microphone capture are not used.
+
+External qualification on the development Mac verified X's public homepage and YouTube's public “Me at the zoo” video using managed headless Chromium. The YouTube viewer decoded video and an audio track without requesting the website. These observations do not certify login flows, every video, other operating systems, or future site policies.
 
 ## Embed the engine
 
 The public package name is `@floegence/floebrowser`. Version `0.1.0` in this repository is not automatically an npm release.
 
 ```ts
-import { chromium } from 'playwright';
-import { BrowserProjection } from '@floegence/floebrowser';
+import { BrowserProjection, launchSourceBrowser } from '@floegence/floebrowser';
 
-const browser = await chromium.launch({ chromiumSandbox: true });
-const context = await browser.newContext({
-  viewport: { width: 1280, height: 800 },
+// Optional helper. Hosts may also supply their own Chromium page.
+const context = await launchSourceBrowser({
+  profile: '/path/to/source-profile',
 });
 const page = await context.newPage();
 
@@ -108,7 +120,7 @@ const resource = await projection.resources.read(requestedResourceID);
 await controller.close();
 await projection.close();
 // The page, context and browser are still owned by the embedding host.
-await browser.close();
+await context.close();
 ```
 
 `authorize` is checked immediately before an effect. It is not a target mutex or a site-navigation firewall. The host must preserve its existing tab ownership, network policies, origin grants and user/AI takeover rules for the controller's entire lifetime. Attaching does not authorize sibling tabs. Page-originated navigation, redirects and popups remain website behavior at the source.
@@ -157,7 +169,7 @@ view.setFit(true);
 
 Give `container` a constrained width and height. The viewer uses a sandboxed, scriptless iframe that the trusted parent can inspect for node mapping. An embedding host must preserve the same restrictions as the standalone carrier: no target-site network access, no form submission, no plugins, and no website access to a native bridge. Resource URLs must resolve through a protected host route permitted by the viewer's CSP. The loopback server's CSP is the reference policy in `src/host/server.ts`.
 
-Use the same FloeBrowser release on both sides. Protocol version 2 includes the pinned rrweb event format; it is not a promise of compatibility with independently upgraded rrweb packages.
+Use the same FloeBrowser release on both sides. Protocol version 3 includes the pinned rrweb event format; it is not a promise of compatibility with independently upgraded rrweb packages.
 
 ## State and failure boundaries
 
@@ -178,7 +190,8 @@ Projection data remains in process memory; there is no session recording databas
 | Surface                                                      | Preview behavior                                                                                                                                        |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser                                                      | Multiple source tabs and one active controlling viewer per session                                                                                      |
-| Canvas, video, audio, embeds, file inputs                    | Explicit unavailable placeholders; no pixel fallback                                                                                                    |
+| Canvas, embeds, file inputs                                  | Explicit unavailable placeholders; no pixel fallback                                                                                                    |
+| Video and audio                                              | Source element capture to WebM (VP8/Opus); client MediaSource decoding; no screen capture                                                               |
 | Frames                                                       | Same-origin, cross-origin and nested iframe DOM; no client website execution                                                                            |
 | New tabs                                                     | Initial page, its descendant popups, and explicitly created tabs; unrelated pages remain outside the session                                            |
 | CAPTCHA                                                      | DOM-based widgets can be shown and operated by the user; site acceptance, image challenges and anti-automation compatibility require site qualification |
@@ -202,7 +215,7 @@ npm run test:e2e
 npm run check:package
 ```
 
-Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources.
+Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery.
 
 `npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch.
 

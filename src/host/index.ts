@@ -1,3 +1,4 @@
+export { launchSourceBrowser } from './browser.js';
 export {
   BrowserProjection,
   type AttachOptions,

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { resolve } from 'node:path';
-import { chromium } from 'playwright';
+import { launchSourceBrowser } from './browser.js';
 import { createProjectionServer } from './server.js';
 
 const { values } = parseArgs({
@@ -23,15 +22,10 @@ if (values.help) {
     throw new Error('Port must be an integer between 0 and 65535.');
   if (values.url && !['http:', 'https:'].includes(new URL(values.url).protocol))
     throw new Error('Only HTTP(S) addresses are supported.');
-  const options = {
+  const context = await launchSourceBrowser({
+    profile: values.profile,
     headless: !values.headed,
-    viewport: { width: 1280, height: 800 },
-    chromiumSandbox: true,
-  };
-  const browser = values.profile ? undefined : await chromium.launch(options);
-  const context = values.profile
-    ? await chromium.launchPersistentContext(resolve(values.profile), options)
-    : await browser!.newContext({ viewport: options.viewport });
+  });
   const page = context.pages()[0] ?? (await context.newPage());
   let service: Awaited<ReturnType<typeof createProjectionServer>> | undefined;
   let stopping = false;
@@ -40,7 +34,6 @@ if (values.help) {
     stopping = true;
     await service?.close();
     await context.close();
-    await browser?.close();
   };
   try {
     service = await createProjectionServer(page, {

@@ -167,3 +167,84 @@ test('frame attachment cannot replace a non-frame or the main replay document', 
   assert.deepEqual(mutation.data.adds, []);
   resources.close();
 });
+
+test('media keeps its DOM geometry but cannot load site URLs or replay source playback', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const projection = new DOMProjection(resources);
+  const snapshot: any = projection.event(
+    {
+      type: 2,
+      timestamp: 1,
+      data: {
+        initialOffset: { left: 0, top: 0 },
+        node: {
+          type: 0,
+          id: 1,
+          childNodes: [
+            {
+              type: 2,
+              id: 2,
+              tagName: 'video',
+              attributes: {
+                src: 'https://site.test/private.mp4',
+                controls: '',
+                autoplay: '',
+                class: 'player',
+                width: '640',
+                rr_mediaState: 'played',
+                rr_mediaCurrentTime: 12,
+              },
+              childNodes: [
+                {
+                  type: 2,
+                  id: 3,
+                  tagName: 'source',
+                  attributes: { src: 'https://site.test/source.mp4' },
+                  childNodes: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    } as any,
+    'https://site.test/',
+  );
+  const video = snapshot.data.node.childNodes[0];
+  assert.equal(video.tagName, 'video');
+  assert.equal(video.attributes.class, 'player');
+  assert.equal(video.attributes.width, '640');
+  assert.equal(video.attributes.src, null);
+  assert.equal(video.attributes.controls, null);
+  assert.equal(video.attributes.autoplay, null);
+  assert.equal(video.attributes.rr_mediaState, undefined);
+  assert.equal(video.attributes.rr_mediaCurrentTime, undefined);
+  assert.equal(video.childNodes[0].tagName, 'noscript');
+  const mutation: any = projection.event(
+    {
+      type: 3,
+      timestamp: 2,
+      data: {
+        source: 0,
+        adds: [],
+        removes: [],
+        texts: [],
+        attributes: [
+          {
+            id: 2,
+            attributes: {
+              src: 'blob:https://site.test/secret',
+              autoplay: '',
+              controls: '',
+            },
+          },
+        ],
+      },
+    } as any,
+    'https://site.test/',
+  );
+  assert.equal(mutation.data.attributes[0].attributes.src, null);
+  resources.close();
+});
