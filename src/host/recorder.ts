@@ -120,7 +120,7 @@ export function installRecorder(
     sampling: {
       mousemove: false,
       mouseInteraction: false,
-      scroll: 30,
+      scroll: 16,
       input: 'all',
     },
   });

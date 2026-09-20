@@ -1,7 +1,13 @@
 import { MediaView } from './media.js';
+import { liveEvent, liveScroll } from './replay.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import { Replayer } from '@rrweb/replay';
-import { ReplayerEvents } from '@rrweb/types';
+import {
+  EventType,
+  IncrementalSource,
+  ReplayerEvents,
+  type eventWithTime,
+} from '@rrweb/types';
 import type {
   Action,
   FocusState,
@@ -39,6 +45,7 @@ type Pending = {
   tab: string;
   hover: boolean;
 };
+type Wheel = Extract<Action, { kind: 'wheel' }>;
 const modifiers = (event: MouseEvent | KeyboardEvent) =>
   (event.altKey ? 1 : 0) |
   (event.ctrlKey ? 2 : 0) |
@@ -60,6 +67,8 @@ export class DOMBrowserView {
   private resyncing = false;
   private eventBytes = 0;
   private pending = new Map<number, Pending>();
+  private queuedWheel?: Wheel;
+  private wheelsInFlight = 0;
   private sink: HTMLTextAreaElement;
   private surface: HTMLDivElement;
   private resize: ResizeObserver;
@@ -243,6 +252,7 @@ export class DOMBrowserView {
     if (message.type === 'tabs') {
       if (message.state.active !== this.tab) {
         this.ready = false;
+        this.queuedWheel = undefined;
         this.clearFrame();
         this.media.reset();
         this.replayer?.destroy();
@@ -274,6 +284,7 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'state') {
+      if (this.tab !== message.state.id) this.queuedWheel = undefined;
       this.tab = message.state.id;
       this.viewport = {
         width: message.state.width,
@@ -281,6 +292,7 @@ export class DOMBrowserView {
       };
       if (message.state.status !== 'ready') {
         this.ready = false;
+        this.queuedWheel = undefined;
         this.media.reset();
       }
       this.options.onState?.(message.state);
@@ -293,6 +305,7 @@ export class DOMBrowserView {
     }
     if (message.type === 'snapshot') {
       this.ready = false;
+      this.queuedWheel = undefined;
       this.epoch = message.epoch;
       this.sequence = message.sequence;
       this.resyncing = false;
@@ -309,6 +322,7 @@ export class DOMBrowserView {
         mouseTail: false,
         triggerFocus: false,
         plugins: [
+          liveScroll,
           {
             onBuild: (node) => {
               if (node.nodeName === 'HTML')
@@ -330,13 +344,25 @@ export class DOMBrowserView {
         this.layout();
         this.options.onStatus?.('live');
       });
-      this.replayer.on(ReplayerEvents.EventCast, () => {
-        this.bindFrameDocuments();
-        this.applyFocus();
+      this.replayer.on(ReplayerEvents.EventCast, (raw) => {
+        const event = raw as eventWithTime;
+        if (
+          event.type === EventType.FullSnapshot ||
+          (event.type === EventType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Mutation)
+        ) {
+          this.bindFrameDocuments();
+          this.applyFocus();
+        } else if (
+          event.type === EventType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Input
+        ) {
+          this.applyFocus();
+        }
       });
       this.replayer.startLive(now);
       for (const event of message.events)
-        this.replayer.addEvent({ ...event, timestamp: now });
+        this.replayer.addEvent(liveEvent(event, now));
       return;
     }
     if (message.type === 'events') {
@@ -352,7 +378,7 @@ export class DOMBrowserView {
       this.sequence = message.sequence;
       const now = Date.now();
       for (const event of message.events)
-        this.replayer.addEvent({ ...event, timestamp: now });
+        this.replayer.addEvent(liveEvent(event, now));
       this.eventBytes += JSON.stringify(message.events).length;
       if (this.eventBytes > 8 * 1024 * 1024 || this.sequence > 4000)
         this.resync();
@@ -399,11 +425,57 @@ export class DOMBrowserView {
     if (this.resyncing || !this.connected) return;
     this.resyncing = true;
     this.ready = false;
+    this.queuedWheel = undefined;
     this.options.onStatus?.(this.replayer ? 'refreshing' : 'connecting');
     this.connection.send({ type: 'resync' });
   }
 
   dispatch(action: Action): Promise<boolean> {
+    // A click, key, navigation or other action is an ordering barrier.
+    this.flushWheel();
+    return this.sendAction(action);
+  }
+
+  private queueWheel(action: Wheel): void {
+    if (!this.connected || !this.ready) return;
+    const prior = this.queuedWheel;
+    if (
+      prior &&
+      prior.point.node === action.point.node &&
+      prior.point.x === action.point.x &&
+      prior.point.y === action.point.y &&
+      prior.modifiers === action.modifiers &&
+      Math.sign(prior.dx) === Math.sign(action.dx) &&
+      Math.sign(prior.dy) === Math.sign(action.dy) &&
+      Math.abs(prior.dx + action.dx) <= 4000 &&
+      Math.abs(prior.dy + action.dy) <= 4000
+    ) {
+      prior.dx += action.dx;
+      prior.dy += action.dy;
+    } else {
+      this.flushWheel();
+      this.queuedWheel = action;
+    }
+    if (!this.wheelsInFlight) this.flushWheel();
+  }
+
+  private flushWheel(): void {
+    const action = this.queuedWheel;
+    if (!action) return;
+    this.queuedWheel = undefined;
+    const epoch = this.epoch;
+    const tab = this.tab;
+    this.wheelsInFlight++;
+    void this.sendAction(action).then((ok) => {
+      this.wheelsInFlight--;
+      // Merge only unsent input. An uncertain/rejected gesture is never retried.
+      if (!ok && epoch === this.epoch && tab === this.tab)
+        this.queuedWheel = undefined;
+      if (!this.wheelsInFlight) this.flushWheel();
+    });
+  }
+
+  private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
       (!this.ready &&
@@ -688,7 +760,7 @@ export class DOMBrowserView {
             : event.deltaMode === 2
               ? this.viewport.height
               : 1;
-        void this.dispatch({
+        this.queueWheel({
           kind: 'wheel',
           point: { space: 'viewport', node, x: mapped.x, y: mapped.y },
           dx: Math.max(-4000, Math.min(4000, event.deltaX * unit)),
@@ -782,6 +854,7 @@ export class DOMBrowserView {
 
   private disconnected(reason?: DisconnectReason): void {
     clearTimeout(this.viewportTimer);
+    this.queuedWheel = undefined;
     this.media.reset();
     this.disconnectReason = reason ?? this.disconnectReason;
     this.connected = false;

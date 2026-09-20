@@ -264,11 +264,12 @@ for (const layout of ['document', 'nested', 'absolute body'] as const) {
         return {
           failures: state.acks.filter((a: any) => !a.ok),
           resyncs: state.resyncs,
-          wheels: state.commands.filter((c: any) => c.action.kind === 'wheel')
-            .length,
+          distance: state.commands
+            .filter((c: any) => c.action.kind === 'wheel')
+            .reduce((sum: number, c: any) => sum + c.action.dy, 0),
         };
       });
-      assert.deepEqual(result, { failures: [], resyncs: 0, wheels: 24 });
+      assert.deepEqual(result, { failures: [], resyncs: 0, distance: 3600 });
       await source.waitForFunction(
         (nested) =>
           (nested ? document.querySelector('#region')!.scrollTop : scrollY) ===
