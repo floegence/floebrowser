@@ -1,4 +1,5 @@
 import { MediaView } from './media.js';
+import { ReplayPresentation } from './presentation.js';
 import { liveEvent, liveScroll, svgStyles, mathElements } from './replay.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import { Replayer } from '@rrweb/replay';
@@ -47,6 +48,7 @@ type Pending = {
   tab: string;
   hover: boolean;
   chrome: boolean;
+  documentBound: boolean;
 };
 type Wheel = Extract<Action, { kind: 'wheel' }>;
 const modifiers = (event: MouseEvent | KeyboardEvent) =>
@@ -58,6 +60,7 @@ const modifiers = (event: MouseEvent | KeyboardEvent) =>
 /** Renders inert DOM and returns user intent through a host-provided connection. */
 export class DOMBrowserView {
   private replayer?: Replayer;
+  private presentation?: ReplayPresentation;
   private media: MediaView;
   private epoch = '';
   private tab = '';
@@ -83,7 +86,7 @@ export class DOMBrowserView {
   private viewport = { width: 1280, height: 800 };
   private viewportMode: ViewportMode = 'responsive';
   private viewportTimer?: ReturnType<typeof setTimeout>;
-  private viewportPending = false;
+  private viewportPending?: Promise<boolean>;
   private requestedViewport = '';
   private composing = false;
   private suppressCompositionInput = false;
@@ -283,6 +286,7 @@ export class DOMBrowserView {
         this.queuedWheel = undefined;
         this.clearFrame();
         this.media.reset();
+        this.presentation?.dispose();
         this.replayer?.destroy();
         this.replayer = undefined;
         this.tab = message.state.active;
@@ -322,6 +326,7 @@ export class DOMBrowserView {
         height: message.state.height,
       };
       if (message.state.status !== 'ready') {
+        this.presentation?.dispose();
         this.ready = false;
         this.queuedWheel = undefined;
         this.media.reset();
@@ -332,6 +337,7 @@ export class DOMBrowserView {
         this.resyncing = false;
         this.sourceFocus = undefined;
         this.clearFrame();
+        this.presentation?.dispose();
         this.replayer?.destroy();
         this.replayer = undefined;
         this.surface.replaceChildren();
@@ -356,7 +362,44 @@ export class DOMBrowserView {
       this.eventBytes = 0;
       this.sourceFocus = undefined;
       this.clearFrame();
+      this.presentation?.dispose();
       this.replayer?.destroy();
+      this.surface.style.opacity = '0';
+      this.surface.style.visibility = 'hidden';
+      this.surface.inert = true;
+      this.options.onStatus?.('refreshing');
+      const presentation = new ReplayPresentation(
+        async () => {
+          const current = () =>
+            this.connected &&
+            !this.destroyed &&
+            presentation.active &&
+            this.presentation === presentation;
+          if (!current()) return;
+          // Settle initial responsive sizing before exposing clickable content.
+          // Otherwise its scale can change between mouse down and mouse up.
+          if (this.viewportPending) await this.viewportPending;
+          while (current() && this.viewportMode === 'responsive') {
+            const resized = this.resizeViewport();
+            if (!resized) break;
+            await resized;
+          }
+          if (!current()) return;
+          this.installInput();
+          this.ready = true;
+          this.layout();
+          this.surface.style.opacity = '';
+          this.surface.style.visibility = '';
+          this.surface.inert = false;
+          this.applyFocus();
+          this.options.onStatus?.('live');
+        },
+        () =>
+          this.options.onNotice?.(
+            'Some page styles took too long to load. Reload the page if it looks incomplete.',
+          ),
+      );
+      this.presentation = presentation;
       const now = Date.now();
       this.replayer = new Replayer([], {
         root: this.surface,
@@ -373,6 +416,7 @@ export class DOMBrowserView {
           mathElements,
           {
             onBuild: (node) => {
+              if ('getRootNode' in node) presentation.build(node as Node);
               if (node.nodeName === 'HTML')
                 this.bindFrameDocuments(node.ownerDocument as Document);
             },
@@ -385,11 +429,7 @@ export class DOMBrowserView {
         ],
       });
       this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {
-        if (!this.connected || this.destroyed) return;
-        this.installInput();
-        this.ready = true;
-        this.layout();
-        this.options.onStatus?.('live');
+        presentation.start();
       });
       this.replayer.on(ReplayerEvents.EventCast, (raw) => {
         const event = raw as eventWithTime;
@@ -440,13 +480,19 @@ export class DOMBrowserView {
       this.options.onAction?.(Math.round(performance.now() - pending.started));
       if (!message.ok) {
         if (!pending.chrome && pending.tab !== this.tab) return;
+        // Hover has no confirmed user effect. Likewise, an old document's
+        // late failure must not interrupt the page that replaced it.
+        if (
+          pending.hover ||
+          (pending.documentBound && pending.epoch !== this.epoch)
+        )
+          return;
         if (message.code === 'navigation_failed' && !this.pageError.hidden)
           return;
         if (message.code === 'stale_view') {
           // Hover can overtake a changing DOM without a user action failing.
           // A rejected action refreshes only its current view, never its input.
           if (
-            pending.hover ||
             pending.epoch !== this.epoch ||
             pending.tab !== this.tab ||
             this.resyncing
@@ -545,6 +591,7 @@ export class DOMBrowserView {
           'back',
           'forward',
           'reload',
+          'viewport',
           'tab_new',
           'tab_select',
           'tab_close',
@@ -567,11 +614,28 @@ export class DOMBrowserView {
     }
     const id = ++this.nextID;
     const tab = this.tab;
+    const epoch = this.epoch;
+    const hover =
+      action.kind === 'pointer' &&
+      action.phase === 'move' &&
+      action.buttons === 0;
+    const documentBound = [
+      'pointer',
+      'wheel',
+      'key',
+      'text',
+      'select',
+      'media',
+    ].includes(action.kind);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve(false);
-        if (chrome || this.tab === tab)
+        if (
+          !hover &&
+          (!documentBound || epoch === this.epoch) &&
+          (chrome || this.tab === tab)
+        )
           this.options.onNotice?.(
             'This page did not confirm the action. You can switch tabs or close it. The action has not been repeated.',
           );
@@ -583,10 +647,8 @@ export class DOMBrowserView {
         epoch: this.epoch,
         tab: this.tab,
         chrome,
-        hover:
-          action.kind === 'pointer' &&
-          action.phase === 'move' &&
-          action.buttons === 0,
+        documentBound,
+        hover,
       });
       try {
         this.connection.send({
@@ -630,33 +692,45 @@ export class DOMBrowserView {
         this.tabCommands
       )
         return;
-      const width = Math.min(
-        MAX_VIEWPORT_DIMENSION,
-        this.container.clientWidth,
-      );
-      const height = Math.min(
-        MAX_VIEWPORT_DIMENSION,
-        this.container.clientHeight,
-      );
-      if (
-        width < 1 ||
-        height < 1 ||
-        (width === this.viewport.width && height === this.viewport.height)
-      )
-        return;
-      const request = `${this.tab}:${width}:${height}`;
-      if (request === this.requestedViewport) return;
-      this.requestedViewport = request;
-      this.viewportPending = true;
-      void this.dispatch({ kind: 'viewport', width, height }).finally(() => {
-        this.viewportPending = false;
-        // A changed size/tab is fresh intent. Failed dimensions are not retried.
-        this.scheduleViewport();
-      });
+      void this.resizeViewport();
     }, 80);
+  }
+  private resizeViewport(): Promise<boolean> | undefined {
+    if (this.viewportPending) return this.viewportPending;
+    const width = Math.min(MAX_VIEWPORT_DIMENSION, this.container.clientWidth);
+    const height = Math.min(
+      MAX_VIEWPORT_DIMENSION,
+      this.container.clientHeight,
+    );
+    if (
+      width < 1 ||
+      height < 1 ||
+      this.tabCommands ||
+      (width === this.viewport.width && height === this.viewport.height)
+    )
+      return;
+    const request = `${this.tab}:${width}:${height}`;
+    if (request === this.requestedViewport) return;
+    this.requestedViewport = request;
+    this.viewportPending = this.dispatch({
+      kind: 'viewport',
+      width,
+      height,
+    }).finally(() => {
+      this.viewportPending = undefined;
+      // A changed size/tab is fresh intent. Failed dimensions are not retried.
+      this.scheduleViewport();
+    });
+    return this.viewportPending;
   }
   private layout(): void {
     this.container.dataset.viewportMode = this.viewportMode;
+    // State confirms source sizing before rrweb's sampled resize event arrives.
+    // Keep the replay viewport and its coordinate transform in the same layout.
+    if (this.replayer) {
+      this.replayer.iframe.width = String(this.viewport.width);
+      this.replayer.iframe.height = String(this.viewport.height);
+    }
     const scale =
       this.viewportMode !== 'actual'
         ? Math.min(
@@ -935,6 +1009,7 @@ export class DOMBrowserView {
     this.connected = false;
     this.ready = false;
     this.dragging = false;
+    this.presentation?.dispose();
     this.options.onStatus?.('disconnected', this.disconnectReason);
     if (this.pending.size)
       this.options.onNotice?.(

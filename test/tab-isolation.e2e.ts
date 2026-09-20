@@ -6,6 +6,136 @@ import { BrowserProjection } from '../dist/host/engine.js';
 import { fixture } from './fixture.js';
 import type { Action } from '../src/shared/protocol.js';
 
+for (const navigated of [false, true])
+  test(
+    `snapshot failure belongs only to its source document: navigated=${navigated}`,
+    { timeout: 15000 },
+    async (t) => {
+      const site = await fixture();
+      const browser = await chromium.launch({ chromiumSandbox: true });
+      const source = await browser.newPage();
+      await source.goto('data:text/html,<h1>Original</h1>');
+      const engine = await BrowserProjection.attach(source, {
+        authorize: () => true,
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      t.after(async () => {
+        release();
+        await browser.close();
+        await engine.close();
+        await site.close();
+      });
+      const cdp = (engine as any).cdp;
+      const send = cdp.send.bind(cdp);
+      let entered!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      cdp.send = async (method: string, params: any) => {
+        if (
+          method === 'Runtime.evaluate' &&
+          params.expression.endsWith('?.snapshot()')
+        ) {
+          entered();
+          await gate;
+          throw new Error('Snapshot context was lost');
+        }
+        return send(method, params);
+      };
+      const messages: any[] = [];
+      const controller = await engine.connect((message) =>
+        messages.push(message),
+      );
+      await waiting;
+      if (navigated) {
+        // Browser navigation must not wait for a snapshot of the old document.
+        await controller.receive({
+          type: 'command',
+          id: 1,
+          tab: engine.id,
+          epoch: '',
+          action: { kind: 'navigate', url: `${site.url}/second` },
+        });
+        assert.equal(engine.currentState.status, 'ready');
+        assert.ok(messages.some((message) => message.type === 'snapshot'));
+      }
+      release();
+      // Flush the snapshot failure handler after the injected CDP response.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(engine.currentState.status, navigated ? 'ready' : 'error');
+      assert.equal(
+        messages.some(
+          (message) =>
+            message.type === 'state' && message.state.status === 'error',
+        ),
+        !navigated,
+      );
+    },
+  );
+
+test(
+  're-admission rejects the previous epoch before its fresh snapshot',
+  { timeout: 15000 },
+  async (t) => {
+    const browser = await chromium.launch({ chromiumSandbox: true });
+    const source = await browser.newPage();
+    await source.goto('data:text/html,<input autofocus>');
+    const engine = await BrowserProjection.attach(source, {
+      authorize: () => true,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    t.after(async () => {
+      release();
+      await browser.close();
+      await engine.close();
+    });
+    let snapshot!: (message: any) => void;
+    const initial = new Promise<any>((resolve) => {
+      snapshot = resolve;
+    });
+    const first = await engine.connect((message) => {
+      if (message.type === 'snapshot') snapshot(message);
+    });
+    const old = await initial;
+    await first.close();
+    const cdp = (engine as any).cdp;
+    const send = cdp.send.bind(cdp);
+    cdp.send = async (method: string, params: any) => {
+      if (
+        method === 'Runtime.evaluate' &&
+        params.expression.endsWith('?.snapshot()')
+      )
+        await gate;
+      return send(method, params);
+    };
+    const messages: any[] = [];
+    const second = await engine.connect((message) => messages.push(message));
+    await second.receive({
+      type: 'command',
+      id: 1,
+      tab: engine.id,
+      epoch: old.epoch,
+      action: { kind: 'text', text: 'must not type' },
+    });
+    assert.ok(
+      messages.some(
+        (message) =>
+          message.type === 'ack' &&
+          !message.ok &&
+          message.code === 'stale_view',
+      ),
+    );
+    assert.equal(await source.locator('input').inputValue(), '');
+    release();
+  },
+);
+
 async function setup(
   t: test.TestContext,
   authorize: (action: Action) => boolean | Promise<boolean> = () => true,

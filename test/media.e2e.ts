@@ -144,14 +144,28 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
           }
         };
       });
+      const pageErrors: string[] = [];
+      viewer.on('pageerror', (error) => pageErrors.push(error.message));
       const packets: any[] = [];
-      viewer.on('websocket', (ws) =>
+      const acks: any[] = [];
+      const commands: any[] = [];
+      viewer.on('websocket', (ws) => {
+        ws.on('framesent', (f) => {
+          const m = JSON.parse(String(f.payload));
+          if (m.type === 'command')
+            commands.push({
+              id: m.id,
+              kind: m.action.kind,
+              phase: m.action.phase,
+            });
+        });
         ws.on('framereceived', (f) => {
           const m = JSON.parse(String(f.payload));
           if (m.type === 'media')
             packets.push({ ...m.packet, data: m.packet.data?.length });
-        }),
-      );
+          if (m.type === 'ack') acks.push(m);
+        });
+      });
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
       const root = viewer.frameLocator('#viewport iframe').first();
@@ -175,6 +189,39 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
             return;
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
+        t.diagnostic(
+          JSON.stringify({
+            source: await mediaFrame
+              .locator('#clip')
+              .evaluate((v: HTMLVideoElement) => ({
+                paused: v.paused,
+                readyState: v.readyState,
+                time: v.currentTime,
+                width: v.videoWidth,
+                peers: (window as any).activeMediaPeers,
+              })),
+            viewer: await projected
+              .locator('#clip')
+              .evaluate((v: HTMLVideoElement) => ({
+                paused: v.paused,
+                readyState: v.readyState,
+                time: v.currentTime,
+                width: v.videoWidth,
+                frames: v.getVideoPlaybackQuality().totalVideoFrames,
+                tracks: (v.srcObject as MediaStream | null)
+                  ?.getTracks()
+                  .map((track) => ({
+                    kind: track.kind,
+                    state: track.readyState,
+                    muted: track.muted,
+                  })),
+              })),
+            pageErrors,
+            packets: packets.map(({ kind, stream }) => ({ kind, stream })),
+            acks,
+            commands,
+          }),
+        );
         assert.fail('Viewer must decode moving source video');
       };
       await decoded();

@@ -3,6 +3,130 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
+for (const confirmation of ['rejected', 'expired'] as const)
+  for (const failure of ['hover', 'old document', 'current click'] as const)
+    test(
+      `input failure feedback distinguishes ${failure}: ${confirmation}`,
+      { timeout: 15000 },
+      async (t) => {
+        const browser = await chromium.launch({ chromiumSandbox: true });
+        const source = await browser.newPage();
+        await source.goto(
+          'data:text/html,<button id="target" onclick="window.clicks++">Original</button><script>window.clicks=0</script>',
+        );
+        const service = await createProjectionServer(source, {
+          authorize: () => true,
+        });
+        const viewer = await browser.newPage();
+        viewer.setDefaultTimeout(4000);
+        if (confirmation === 'expired')
+          await viewer.addInitScript(() => {
+            const original = window.setTimeout;
+            window.setTimeout = ((
+              handler: TimerHandler,
+              delay?: number,
+              ...args: any[]
+            ) => {
+              if (delay !== 25000) return original(handler, delay, ...args);
+              return original(() => {
+                if (typeof handler === 'function') handler(...args);
+                (window as any).actionExpired = true;
+              }, 1200);
+            }) as typeof setTimeout;
+          });
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        t.after(async () => {
+          release();
+          await browser.close();
+          await service.close();
+        });
+        const acks: any[] = [];
+        viewer.on('websocket', (socket) =>
+          socket.on('framereceived', ({ payload }) => {
+            const message = JSON.parse(String(payload));
+            if (message.type === 'ack') acks.push(message);
+          }),
+        );
+        await viewer.goto(service.url);
+        await viewer.locator('#status.live').waitFor();
+        const cdp = (service.engine as any).cdp;
+        const send = cdp.send.bind(cdp);
+        let injected = false;
+        let completed!: () => void;
+        const failed = new Promise<void>((resolve) => {
+          completed = resolve;
+        });
+        let clicks = 0;
+        cdp.send = async (method: string, params: any) => {
+          if (
+            !injected &&
+            method === 'Input.dispatchMouseEvent' &&
+            params.type ===
+              (failure === 'hover' ? 'mouseMoved' : 'mouseReleased')
+          ) {
+            injected = true;
+            if (failure === 'old document') {
+              await send(method, params);
+              clicks = await source.evaluate(() => (window as any).clicks);
+              await source.goto(
+                'data:text/html,<h1 id="current">Current document</h1>',
+              );
+              await viewer
+                .frameLocator('#viewport iframe')
+                .locator('#current')
+                .waitFor();
+            }
+            completed();
+            if (confirmation === 'expired') await gate;
+            throw new Error('Injected input acknowledgement failure');
+          }
+          return send(method, params);
+        };
+        const target = viewer
+          .frameLocator('#viewport iframe')
+          .locator('#target');
+        if (failure === 'hover') await target.hover();
+        else await target.click();
+        await failed;
+        if (confirmation === 'expired') {
+          await viewer.waitForFunction(() => (window as any).actionExpired);
+          assert.equal(
+            await viewer.locator('#toast').isVisible(),
+            failure === 'current click',
+          );
+          release();
+        }
+        for (
+          let attempt = 0;
+          attempt < 100 && !acks.some((ack) => !ack.ok);
+          attempt++
+        )
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.ok(
+          acks.some((ack) => !ack.ok),
+          'The source must still reject unconfirmed actions',
+        );
+        assert.equal(
+          await viewer.locator('#toast').isVisible(),
+          failure === 'current click',
+          'Only a failed action in the current document needs user-facing feedback',
+        );
+        assert.equal(
+          await viewer.locator('#connection-overlay').isVisible(),
+          false,
+        );
+        if (failure === 'old document')
+          assert.equal(
+            clicks,
+            1,
+            'An uncertain completed click must not be replayed',
+          );
+      },
+    );
+
 test(
   'stale hover is quiet and a rejected click refreshes the view without replaying input',
   { timeout: 15000 },

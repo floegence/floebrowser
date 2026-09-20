@@ -41,6 +41,73 @@ async function adapted(source: Page, viewer: Page) {
   );
 }
 
+for (const allowed of [true, false])
+  test(
+    `initial presentation settles viewport authorization before accepting clicks: allowed=${allowed}`,
+    { timeout: 15000 },
+    async (t) => {
+      const site = await fixture();
+      const browser = await chromium.launch({ chromiumSandbox: true });
+      const source = await browser.newPage();
+      await source.goto(site.url);
+      let entered!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const service = await createProjectionServer(source, {
+        authorize: async (action) => {
+          if (action.kind !== 'viewport') return true;
+          entered();
+          await gate;
+          return allowed;
+        },
+      });
+      t.after(async () => {
+        release();
+        await browser.close();
+        await service.close();
+        await site.close();
+      });
+      const viewer = await browser.newPage({
+        viewport: { width: 1100, height: 850 },
+      });
+      viewer.setDefaultTimeout(4000);
+      await viewer.goto(service.url);
+      await waiting;
+      assert.equal(
+        await viewer.locator('#status.live').count(),
+        0,
+        'A pending initial resize must not expose a view that will change scale under the first click',
+      );
+      assert.equal(await viewer.locator('#new-tab').isEnabled(), true);
+      release();
+      await viewer.locator('#status.live').waitFor();
+      if (allowed) {
+        const size = await dimensions(viewer);
+        assert.deepEqual(source.viewportSize(), size);
+        assert.deepEqual(
+          await viewer
+            .locator('#viewport iframe')
+            .evaluate((frame: HTMLIFrameElement) => ({
+              width: frame.contentWindow!.innerWidth,
+              height: frame.contentWindow!.innerHeight,
+            })),
+          size,
+        );
+      }
+      await viewer.frameLocator('#viewport iframe').locator('#count').click();
+      await source.waitForFunction(
+        () => document.querySelector('#count-value')?.textContent === '1',
+        null,
+        { timeout: 4000 },
+      );
+    },
+  );
+
 test(
   'the source and projection fill the client viewport and reflow without reloading or replacing media',
   { timeout: 20000 },

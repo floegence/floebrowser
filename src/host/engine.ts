@@ -509,6 +509,7 @@ export class BrowserProjection {
       observing: false,
     };
     this.viewer = viewer;
+    this.epoch = '';
     let retiring: Promise<void> | undefined;
     const controller: Controller = {
       receive: (message) => this.receive(viewer, message),
@@ -536,17 +537,20 @@ export class BrowserProjection {
         media: this.options.media ?? {},
       });
       send({ type: 'state', state: this.currentState });
-      // Admission is independent of renderer responsiveness. Submitted input,
-      // old-controller cleanup and this snapshot still share one page queue.
+      // Begin observation after old input drains. Snapshot completion must not
+      // hold navigation; DOM input remains fenced by the fresh snapshot epoch.
       this.queue = this.queue
-        .then(async () => {
+        .then(() => {
           if (!viewer.active || this.viewer !== viewer) return;
           if (this.controlFault) {
             this.updateState({ status: 'error' });
             return;
           }
           viewer.observing = true;
-          await this.snapshot();
+          void this.snapshot().catch(() => {
+            if (viewer.active && this.viewer === viewer)
+              this.updateState({ status: 'error' });
+          });
         })
         .catch(() => {
           if (viewer.active && this.viewer === viewer)
@@ -583,15 +587,22 @@ export class BrowserProjection {
   private async snapshot(): Promise<void> {
     if (this.snapshotPending || this.closed || !this.contextID) return;
     const viewer = this.viewer;
+    const contextID = this.contextID;
+    const current = () =>
+      viewer?.active && this.viewer === viewer && this.contextID === contextID;
     this.snapshotPending = true;
     try {
       await this.evaluate(
         `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
       );
-      if (!viewer?.active || this.viewer !== viewer) return;
+      if (!current()) return;
       await this.frames.snapshot();
-      if (!viewer.active || this.viewer !== viewer) return;
+      if (!current()) return;
       await this.setMedia(true);
+    } catch (error) {
+      // Navigation destroys the old execution context. Its snapshot failure
+      // cannot invalidate the replacement document or another controller.
+      if (current()) throw error;
     } finally {
       this.snapshotPending = false;
     }
@@ -734,8 +745,10 @@ export class BrowserProjection {
     if (action.kind === 'viewport') {
       const size = { width: action.width, height: action.height };
       const current = this.page.viewportSize();
-      if (current?.width !== size.width || current.height !== size.height)
+      if (current?.width !== size.width || current.height !== size.height) {
         await this.page.setViewportSize(size);
+        this.updateState(size);
+      }
       return;
     }
     if (action.kind === 'media') {
