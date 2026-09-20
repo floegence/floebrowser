@@ -123,3 +123,27 @@ test('wheel commands require explicit scroll-region coordinates', () => {
     );
   }
 });
+
+test('viewport commands accept only bounded integer CSS dimensions', () => {
+  for (const [width, height, valid] of [
+    [1280, 800, true],
+    [1, 1, true],
+    [8192, 8192, true],
+    [0, 600, false],
+    [900, -1, false],
+    [8193, 600, false],
+    [900, 8193, false],
+    [700.5, 600, false],
+  ] as const) {
+    assert.equal(
+      clientMessageSchema.safeParse({
+        type: 'command',
+        id: 1,
+        tab: 'tab',
+        epoch: '',
+        action: { kind: 'viewport', width, height },
+      }).success,
+      valid,
+    );
+  }
+});

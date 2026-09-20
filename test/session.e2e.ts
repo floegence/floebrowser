@@ -72,6 +72,20 @@ test('fences stale tab commands, authorizes tab creation and leaves unrelated pa
     });
     assert.equal(context.pages().length, 2);
     assert.equal(unrelated.isClosed(), false);
+    const size = page.viewportSize();
+    await controller.receive({
+      type: 'command',
+      id: 6,
+      tab: next,
+      epoch: '',
+      action: { kind: 'viewport', width: 900, height: 600 },
+    });
+    assert.equal(ack()?.code, 'stale_view');
+    assert.deepEqual(
+      page.viewportSize(),
+      size,
+      'A resize from another tab cannot change the selected tab',
+    );
   } finally {
     await controller.close();
     await session.close();

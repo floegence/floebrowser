@@ -88,17 +88,16 @@
               <svg viewBox="0 0 20 20"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
             </button>
           </form>
-          <button
-            class="fit-button"
-            id="fit"
-            title="Change page scale"
-            aria-label="Change page scale"
+          <select
+            class="viewport-mode"
+            id="viewport-mode"
+            title="Auto size adapts the source browser to this window"
+            aria-label="Page size"
           >
-            Fit
-            <svg viewBox="0 0 16 16">
-              <path d="M2 6V2h4m4 0h4v4M2 10v4h4m4 0h4v-4" />
-            </svg>
-          </button>
+            <option value="responsive">Auto size</option>
+            <option value="fit">Fit page</option>
+            <option value="actual">Actual size</option>
+          </select>
         </nav>
         <div class="stage">
           <div id="viewport"></div>

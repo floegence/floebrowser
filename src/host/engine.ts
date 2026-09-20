@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { EventType, type eventWithTime } from '@rrweb/types';
+import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { Page, CDPSession } from 'playwright';
 import {
   clientMessageSchema,
@@ -288,6 +288,19 @@ export class BrowserProjection {
       return;
     }
     if (
+      event.type === EventType.IncrementalSnapshot &&
+      event.data.source === IncrementalSource.ViewportResize
+    ) {
+      const { width, height } = event.data;
+      if (this.metadata?.type === EventType.Meta)
+        this.metadata = {
+          ...this.metadata,
+          data: { ...this.metadata.data, width, height },
+        };
+      if (width !== this.state.width || height !== this.state.height)
+        this.updateState({ width, height });
+    }
+    if (
       event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:title'
     ) {
@@ -567,11 +580,9 @@ export class BrowserProjection {
     this.queue = this.queue.then(async () => {
       try {
         if (!viewer.active || this.viewer !== viewer) return;
-        const navigation = ['navigate', 'back', 'forward', 'reload'].includes(
-          message.action.kind,
-        );
+        const independent = documentIndependent(message.action);
         if (
-          (!navigation && (!this.epoch || message.epoch !== this.epoch)) ||
+          (!independent && (!this.epoch || message.epoch !== this.epoch)) ||
           this.closed ||
           message.tab !== this.id
         )
@@ -615,20 +626,25 @@ export class BrowserProjection {
     const action = command.action;
     if (!(await this.options.authorize(action)))
       throw new CommandError('not_allowed');
-    const navigation = ['navigate', 'back', 'forward', 'reload'].includes(
-      action.kind,
-    );
+    const independent = documentIndependent(action);
     const assertCurrent = () => {
       if (
         !viewer.active ||
         this.viewer !== viewer ||
         this.closed ||
         command.tab !== this.id ||
-        (!navigation && command.epoch !== this.epoch)
+        (!independent && command.epoch !== this.epoch)
       )
         throw new CommandError('stale_view');
     };
     assertCurrent();
+    if (action.kind === 'viewport') {
+      const size = { width: action.width, height: action.height };
+      const current = this.page.viewportSize();
+      if (current?.width !== size.width || current.height !== size.height)
+        await this.page.setViewportSize(size);
+      return;
+    }
     if (action.kind === 'media') {
       const element = await this.frames.resolve(action.node);
       if (!element) throw new CommandError('target_unavailable');
@@ -938,6 +954,11 @@ class CommandError extends Error {
   ) {
     super(code);
   }
+}
+function documentIndependent(action: Action): boolean {
+  return ['navigate', 'back', 'forward', 'reload', 'viewport'].includes(
+    action.kind,
+  );
 }
 function keyCode(key: string): number {
   const codes: Record<string, number> = {

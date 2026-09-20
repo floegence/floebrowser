@@ -47,6 +47,63 @@ async function eventually(
   assert.fail('Expected state was not reached');
 }
 
+test('viewport changes require current control and host authorization but survive document navigation', async (t) => {
+  let allow = false;
+  let block = false;
+  let release!: () => void;
+  let entered!: () => void;
+  const authorization = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => {
+    release();
+  });
+  const { page, service, site } = await setup(t, async (action) => {
+    if (action.kind !== 'viewport') return true;
+    if (block) {
+      entered();
+      await gate;
+    }
+    return allow;
+  });
+  const messages: ServerMessage[] = [];
+  const controller = await service.engine.connect((message) =>
+    messages.push(message),
+  );
+  const original = snapshot(messages);
+  const command = (id: number, width: number) => ({
+    type: 'command' as const,
+    id,
+    tab: service.engine.id,
+    epoch: original.epoch,
+    action: { kind: 'viewport' as const, width, height: 700 },
+  });
+  const initialSize = page.viewportSize();
+  await controller.receive(command(1, 1000));
+  assert.equal(messages.findLast((m) => m.type === 'ack')?.code, 'not_allowed');
+  assert.deepEqual(page.viewportSize(), initialSize);
+  allow = true;
+  await page.goto(`${site.url}/second`);
+  await eventually(() => snapshot(messages).epoch !== original.epoch);
+  await controller.receive(command(2, 1000));
+  assert.deepEqual(page.viewportSize(), { width: 1000, height: 700 });
+  await eventually(() => service.engine.currentState.width === 1000);
+  block = true;
+  const pending = controller.receive(command(3, 900));
+  await authorization;
+  const closing = controller.close();
+  release();
+  await Promise.all([pending, closing]);
+  assert.deepEqual(
+    page.viewportSize(),
+    { width: 1000, height: 700 },
+    'A revoked window cannot resize after authorization finishes',
+  );
+});
+
 test('fences duplicate IDs, stale documents, and a revoked controller', async (t) => {
   const { service, page, site } = await setup(t);
   await assert.rejects(

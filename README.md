@@ -45,7 +45,7 @@ A product integration should use its existing authenticated, encrypted transport
 - Source-loaded HTTP(S) images, CSS and fonts, including assets protected by source cookies. Responsive images use the source browser's selected image.
 - Mouse input, double clicks, wheel scrolling, keyboard editing, text paste, Chinese IME composition, native selects and form submission.
 - Native text-field focus and carets, synchronized to the source selection.
-- Navigation, redirects, back, forward, reload, fit-to-window and actual-size viewing.
+- Navigation, redirects, back, forward, reload, automatic source viewport sizing, fit-to-window and actual-size viewing.
 - Source tab creation, switching and closing, including links and scripts that open new windows.
 - Same-origin and cross-origin iframe DOM, styles, images, nested input and frame navigation.
 - Source video and audio, including capturable blob/MSE media and media inside cross-origin frames.
@@ -189,13 +189,18 @@ const view = new DOMBrowserView(container, connection, {
 });
 
 await view.dispatch({ kind: 'navigate', url: 'https://example.com' });
-view.setFit(true);
+// The default: resize the source viewport to the available client area.
+view.setViewportMode('responsive');
 // Later: view.destroy();
 ```
 
 Give `container` a constrained width and height. The viewer uses a sandboxed, scriptless iframe that the trusted parent can inspect for node mapping. An embedding host must preserve the same restrictions as the standalone carrier: no target-site network access, no form submission, no plugins, and no website access to a native bridge. Resource URLs must resolve through a protected host route permitted by the viewer's CSP. The loopback server's CSP is the reference policy in `src/host/server.ts`.
 
-Use the same FloeBrowser release on both sides. Protocol version 5 includes scroll-region wheel coordinates and the pinned rrweb event format; it is not compatible with earlier wheel commands or independently upgraded rrweb packages.
+The default **Auto size** mode measures the viewer container in CSS pixels and resizes the controlled source tab to match. Source CSS media queries, responsive images and website resize handlers run there; the viewer receives the resulting DOM and viewport updates without a page reload, projection reset or media reconnection. Window resizing, fullscreen changes and host panel resizing use the same container observer. Selected tabs and a newly controlling window apply their current size; inactive or disconnected viewers cannot resize a source tab. Hidden containers do not send zero dimensions. Each dimension is bounded to 1–8,192 CSS pixels. Resize requests are coalesced, with at most one in flight and only the latest pending dimensions sent afterwards.
+
+Choose **Fit page** (`setViewportMode('fit')`) to retain the current source viewport and scale it to fit, or **Actual size** (`setViewportMode('actual')`) to retain its size with client-side overflow. `setFit(true/false)` selects these two fixed-viewport modes. Return to **Auto size** to resume adapting the source. Hosts authorize `viewport` actions through the same callback as other commands; a rejected size is not automatically retried.
+
+Use the same FloeBrowser release on both sides. Protocol version 6 adds viewport commands alongside scroll-region wheel coordinates and the pinned rrweb event format; it is not compatible with earlier viewers or independently upgraded rrweb packages.
 
 ## State and failure boundaries
 
@@ -204,6 +209,8 @@ The source page is authoritative. A full snapshot creates a new opaque view epoc
 Pointer input identifies the visible content node. Wheel input instead identifies the nearest scrolling container for its axes, with normalized coordinates in the frame's viewport; document scrolling identifies the document element. The viewport may remain usable even when the document element has no content box. This keeps continuous scrolling valid when preceding wheel input has already moved the content away. The source verifies that the current hit belongs to the same scroll region or an exhausted region's scroll ancestor with native chaining allowed, then maps viewport coordinates through each containing frame and checks for occlusion. Removed or replaced regions, unrelated scroll targets, stale documents and covered frames are rejected. Chromium owns native wheel handling and scroll chaining; the viewer does not scroll the website locally or retry rejected input.
 
 The host serializes commands. Disconnect discards unstarted commands, drains started work, and releases held input outside the source viewport. It does not undo completed effects. Cleanup failure prevents admitting another controller to that engine. A missing acknowledgement never causes a retry. Reconnection creates a fresh current view; it is not an action replay.
+
+Viewport sizing is independent of document epochs, like browser navigation, and remains fenced by the active controller, command ID, selected tab and host authorization. Ordinary viewport changes preserve the current epoch. Main-frame rrweb resize events update the authoritative source dimensions, the replay iframe and the UI; child-frame resize events cannot overwrite the main viewport size.
 
 The standalone loopback carrier serializes viewer admission. Its explicit handoff closes and drains its previous controller before admitting the next one; it does not replace controllers owned outside that carrier. The private session URL and exact Host/Origin checks still apply to handoff requests. `webSocketConnection` passes optional `DisconnectReason` values (`viewer_in_use`, `viewer_replaced`, `source_unavailable`) through `ProjectionConnection.onDisconnect` and the viewer's `onStatus` callback so hosts can render persistent recovery actions. Product integrations retain ownership of their own target leases and handoff policy.
 

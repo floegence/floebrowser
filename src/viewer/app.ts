@@ -1,5 +1,9 @@
 import './viewer.css';
-import { DOMBrowserView, webSocketConnection } from './client.js';
+import {
+  DOMBrowserView,
+  webSocketConnection,
+  type ViewportMode,
+} from './client.js';
 import type { TabState } from '../shared/protocol.js';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -14,7 +18,7 @@ let tabState: TabState = { active: '', tabs: [] };
 let live = false;
 let canGoBack = false;
 let canGoForward = false;
-let fit = true;
+let viewportMode: ViewportMode = 'responsive';
 let offerTakeover = false;
 let toastTimer: ReturnType<typeof setTimeout>;
 
@@ -195,7 +199,7 @@ function connect(takeover = false): void {
       },
     },
   );
-  view.setFit(fit);
+  view.setViewportMode(viewportMode);
 }
 element('new-tab').addEventListener('click', async () => {
   if (await view?.dispatch({ kind: 'tab_new' })) address.focus();
@@ -224,10 +228,10 @@ element('start-browsing').addEventListener('click', () => {
   address.focus();
   address.select();
 });
-element('fit').addEventListener('click', () => {
-  fit = !fit;
-  view?.setFit(fit);
-  element('fit').firstChild!.textContent = fit ? 'Fit ' : '100% ';
+element('viewport-mode').addEventListener('change', () => {
+  viewportMode = element<HTMLSelectElement>('viewport-mode')
+    .value as ViewportMode;
+  view?.setViewportMode(viewportMode);
 });
 element('dismiss-toast').addEventListener('click', () => {
   element('toast').hidden = true;

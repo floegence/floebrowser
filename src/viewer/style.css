@@ -36,6 +36,7 @@ button:disabled {
   opacity: 0.4;
 }
 button:focus-visible,
+select:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
@@ -268,23 +269,18 @@ button svg,
   width: 17px;
   height: 17px;
 }
-.fit-button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+.viewport-mode {
   background: #fff;
   color: #8390a6;
+  font-family: inherit;
   font-size: 11px;
-  padding: 6px 7px;
+  padding: 7px 4px;
+  border: 1px solid transparent;
   border-radius: 5px;
-  min-width: 62px;
-  justify-content: space-between;
+  max-width: 105px;
+  cursor: pointer;
 }
-.fit-button svg {
-  width: 15px;
-  height: 15px;
-}
-.fit-button:hover {
+.viewport-mode:hover {
   background: #f5f7fb;
 }
 .stage {
@@ -558,8 +554,8 @@ dialog > .primary-button {
     padding: 0 8px;
     gap: 6px;
   }
-  .fit-button {
-    min-width: 48px;
+  .viewport-mode {
+    max-width: 90px;
     padding: 5px;
   }
   .welcome h1 {

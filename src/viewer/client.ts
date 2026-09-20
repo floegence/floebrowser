@@ -14,8 +14,11 @@ import type {
 import {
   DISCONNECT_CODES,
   MAX_PENDING_COMMANDS,
+  MAX_VIEWPORT_DIMENSION,
   PROTOCOL_VERSION,
 } from '../shared/protocol.js';
+
+export type ViewportMode = 'responsive' | 'fit' | 'actual';
 
 type ViewOptions = {
   onState?: (state: BrowserState) => void;
@@ -64,7 +67,10 @@ export class DOMBrowserView {
   private frameDisposers: Array<() => void> = [];
   private inputDocuments = new WeakMap<Document, Element | null>();
   private viewport = { width: 1280, height: 800 };
-  private fit = true;
+  private viewportMode: ViewportMode = 'responsive';
+  private viewportTimer?: ReturnType<typeof setTimeout>;
+  private viewportPending = false;
+  private requestedViewport = '';
   private composing = false;
   private suppressCompositionInput = false;
   private lastMove = 0;
@@ -320,8 +326,8 @@ export class DOMBrowserView {
       this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {
         if (!this.connected || this.destroyed) return;
         this.installInput();
-        this.layout();
         this.ready = true;
+        this.layout();
         this.options.onStatus?.('live');
       });
       this.replayer.on(ReplayerEvents.EventCast, () => {
@@ -459,24 +465,73 @@ export class DOMBrowserView {
   }
 
   setFit(fit: boolean): void {
-    this.fit = fit;
+    this.setViewportMode(fit ? 'fit' : 'actual');
+  }
+  setViewportMode(mode: ViewportMode): void {
+    this.viewportMode = mode;
+    this.requestedViewport = '';
     this.layout();
   }
+
+  private scheduleViewport(): void {
+    clearTimeout(this.viewportTimer);
+    if (
+      this.destroyed ||
+      !this.connected ||
+      !this.ready ||
+      this.viewportMode !== 'responsive'
+    )
+      return;
+    // Keep one in-flight resize and coalesce a drag to its latest dimensions.
+    this.viewportTimer = setTimeout(() => {
+      if (this.viewportPending || !this.connected || !this.ready) return;
+      const width = Math.min(
+        MAX_VIEWPORT_DIMENSION,
+        this.container.clientWidth,
+      );
+      const height = Math.min(
+        MAX_VIEWPORT_DIMENSION,
+        this.container.clientHeight,
+      );
+      if (
+        width < 1 ||
+        height < 1 ||
+        (width === this.viewport.width && height === this.viewport.height)
+      )
+        return;
+      const request = `${this.tab}:${width}:${height}`;
+      if (request === this.requestedViewport) return;
+      this.requestedViewport = request;
+      this.viewportPending = true;
+      void this.dispatch({ kind: 'viewport', width, height }).finally(() => {
+        this.viewportPending = false;
+        // A changed size/tab is fresh intent. Failed dimensions are not retried.
+        this.scheduleViewport();
+      });
+    }, 80);
+  }
   private layout(): void {
-    const scale = this.fit
-      ? Math.min(
-          1,
-          this.container.clientWidth / this.viewport.width,
-          this.container.clientHeight / this.viewport.height,
-        )
-      : 1;
+    this.container.dataset.viewportMode = this.viewportMode;
+    const scale =
+      this.viewportMode !== 'actual'
+        ? Math.min(
+            1,
+            this.container.clientWidth / this.viewport.width,
+            this.container.clientHeight / this.viewport.height,
+          )
+        : 1;
     this.surface.style.width = `${this.viewport.width}px`;
     this.surface.style.height = `${this.viewport.height}px`;
     this.surface.style.transform = `scale(${scale})`;
-    this.surface.style.left = `${Math.max(0, (this.container.clientWidth - this.viewport.width * scale) / 2)}px`;
-    this.surface.style.top = this.fit
-      ? `${Math.max(0, (this.container.clientHeight - this.viewport.height * scale) / 2)}px`
-      : '0px';
+    this.surface.style.left =
+      this.viewportMode === 'responsive'
+        ? '0px'
+        : `${Math.max(0, (this.container.clientWidth - this.viewport.width * scale) / 2)}px`;
+    this.surface.style.top =
+      this.viewportMode === 'fit'
+        ? `${Math.max(0, (this.container.clientHeight - this.viewport.height * scale) / 2)}px`
+        : '0px';
+    this.scheduleViewport();
   }
 
   private point(
@@ -726,6 +781,7 @@ export class DOMBrowserView {
   }
 
   private disconnected(reason?: DisconnectReason): void {
+    clearTimeout(this.viewportTimer);
     this.media.reset();
     this.disconnectReason = reason ?? this.disconnectReason;
     this.connected = false;

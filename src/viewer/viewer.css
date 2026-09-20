@@ -1,7 +1,10 @@
 @import '@rrweb/replay/dist/style.css';
 .floe-viewport {
-  overflow: auto;
+  overflow: hidden;
   position: relative;
+}
+.floe-viewport[data-viewport-mode='actual'] {
+  overflow: auto;
 }
 .floe-projection {
   position: absolute;
