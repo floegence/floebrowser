@@ -213,7 +213,8 @@ export class BrowserSession {
         }
         const action = message.action;
         if (!action.kind.startsWith('tab_')) {
-          await viewer.controller?.receive(message);
+          if (viewer.controller) await viewer.controller.receive(message);
+          else ack('action_failed');
           return;
         }
         if (!(await this.options.authorize(action))) {

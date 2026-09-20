@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
@@ -157,7 +157,7 @@ export type BrowserState = {
   id: string;
   url: string;
   title: string;
-  status: 'loading' | 'ready' | 'closed';
+  status: 'loading' | 'ready' | 'error' | 'closed';
   width: number;
   height: number;
   canGoBack: boolean;
@@ -223,6 +223,7 @@ export type ServerMessage =
         | 'target_unavailable'
         | 'unsupported'
         | 'action_failed'
+        | 'navigation_failed'
         | 'busy'
         | 'not_allowed';
     }

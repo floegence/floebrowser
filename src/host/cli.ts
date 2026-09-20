@@ -50,10 +50,16 @@ if (values.help) {
       media,
     });
     if (values.url)
-      await page.goto(values.url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 20000,
-      });
+      await page
+        .goto(values.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 20000,
+        })
+        .catch(() => {
+          console.warn(
+            'The initial page could not be loaded. Open the viewer to enter another address.',
+          );
+        });
     console.log(
       `FloeBrowser is ready.\n\nOpen the private viewer:\n${service.url}\n\nSource: ${values.headed ? 'visible' : 'headless'} Chromium · 1280 × 800\nPress Ctrl+C to stop.`,
     );

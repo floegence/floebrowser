@@ -74,6 +74,7 @@ export class DOMBrowserView {
   private wheelsInFlight = 0;
   private sink: HTMLTextAreaElement;
   private surface: HTMLDivElement;
+  private pageError: HTMLElement;
   private resize: ResizeObserver;
   private disposers: Array<() => void> = [];
   private frameDisposers: Array<() => void> = [];
@@ -105,6 +106,22 @@ export class DOMBrowserView {
     this.sink.autocomplete = 'off';
     this.sink.spellcheck = false;
     container.append(this.surface, this.sink);
+    this.pageError = document.createElement('section');
+    this.pageError.className = 'floe-page-error';
+    this.pageError.hidden = true;
+    const heading = document.createElement('h1');
+    heading.textContent = 'This page couldn’t be loaded';
+    const explanation = document.createElement('p');
+    explanation.textContent =
+      'Check the address and your connection, or try opening another website.';
+    const reload = document.createElement('button');
+    reload.type = 'button';
+    reload.textContent = 'Reload page';
+    this.listen(reload, 'click', () => {
+      void this.dispatch({ kind: 'reload' });
+    });
+    this.pageError.append(heading, explanation, reload);
+    container.append(this.pageError);
     this.media = new MediaView(
       options.mediaControls,
       (id) => this.replayer?.getMirror().getNode(id),
@@ -255,6 +272,7 @@ export class DOMBrowserView {
     if (message.type === 'tabs') {
       if (message.state.active !== this.tab) {
         this.ready = false;
+        this.pageError.hidden = true;
         this.queuedWheel = undefined;
         this.clearFrame();
         this.media.reset();
@@ -298,6 +316,18 @@ export class DOMBrowserView {
         this.queuedWheel = undefined;
         this.media.reset();
       }
+      this.pageError.hidden = message.state.status !== 'error';
+      if (message.state.status === 'error') {
+        this.epoch = '';
+        this.resyncing = false;
+        this.sourceFocus = undefined;
+        this.clearFrame();
+        this.replayer?.destroy();
+        this.replayer = undefined;
+        this.surface.replaceChildren();
+        // The connection and browser chrome remain usable without website DOM.
+        this.options.onStatus?.('live');
+      }
       this.options.onState?.(message.state);
       this.layout();
       if (message.state.status === 'closed') {
@@ -308,6 +338,7 @@ export class DOMBrowserView {
     }
     if (message.type === 'snapshot') {
       this.ready = false;
+      this.pageError.hidden = true;
       this.queuedWheel = undefined;
       this.epoch = message.epoch;
       this.sequence = message.sequence;
@@ -396,6 +427,8 @@ export class DOMBrowserView {
       pending.resolve(message.ok);
       this.options.onAction?.(Math.round(performance.now() - pending.started));
       if (!message.ok) {
+        if (message.code === 'navigation_failed' && !this.pageError.hidden)
+          return;
         if (message.code === 'stale_view') {
           // Hover can overtake a changing DOM without a user action failing.
           // A rejected action refreshes only its current view, never its input.
@@ -415,6 +448,8 @@ export class DOMBrowserView {
           unsupported: 'This control is not supported in DOM mode.',
           action_failed:
             'The source could not confirm that action. It has not been repeated.',
+          navigation_failed:
+            'This page couldn’t be loaded. Check the address or try again.',
           busy: 'The source is catching up. Please wait a moment.',
           not_allowed: 'The host did not authorize that action.',
         };

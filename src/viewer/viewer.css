@@ -37,6 +37,45 @@
   pointer-events: none;
 }
 
+.floe-page-error {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: clamp(40px, 12vh, 120px) max(24px, calc((100% - 520px) / 2));
+  overflow: auto;
+  background: #fff;
+  color: #303640;
+  font:
+    14px/1.65 system-ui,
+    sans-serif;
+}
+.floe-page-error[hidden] {
+  display: none;
+}
+.floe-page-error h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+.floe-page-error p {
+  margin: 0 0 28px;
+  color: #737c89;
+}
+.floe-page-error button {
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 6px;
+  background: #406ca6;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.floe-page-error button:focus-visible {
+  outline: 2px solid #406ca6;
+  outline-offset: 3px;
+}
+
 .floe-media-controls[hidden],
 .floe-media-row[hidden] {
   display: none;

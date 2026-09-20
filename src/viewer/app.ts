@@ -248,6 +248,7 @@ function connect(takeover = false): void {
     mediaControls: element('media-controls'),
     onTabs: renderTabs,
     onState: (state) => {
+      if (state.status === 'error') element('toast').hidden = true;
       const changedTab = sourceID !== state.id;
       sourceID = state.id;
       sourceURL = state.url;

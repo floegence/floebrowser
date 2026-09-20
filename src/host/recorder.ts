@@ -11,6 +11,11 @@ export function installRecorder(
   key: string,
   configuration: MediaConfiguration,
 ): void {
+  // Browser-owned error and security documents are not website DOM.
+  if (
+    !['http:', 'https:', 'about:', 'blob:', 'data:'].includes(location.protocol)
+  )
+    return;
   // rrweb's parent recorder already covers same-origin child documents.
   if (window !== window.top) {
     try {

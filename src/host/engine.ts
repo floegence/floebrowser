@@ -191,7 +191,8 @@ export class BrowserProjection {
     });
     this.listen(this.page, 'framenavigated', (frame) => {
       if (frame === this.page.mainFrame()) {
-        this.updateState({ url: frame.url() });
+        if (!frame.url().startsWith('chrome-error:'))
+          this.updateState({ url: frame.url() });
         void this.refreshState();
       }
     });
@@ -263,14 +264,18 @@ export class BrowserProjection {
     const history = await this.cdp
       .send('Page.getNavigationHistory')
       .catch(() => undefined);
+    const tree = await this.cdp
+      .send('Page.getFrameTree')
+      .catch(() => undefined);
+    const failedURL = tree?.frameTree.frame.unreachableUrl;
     if (!this.closed)
       this.updateState({
-        url: this.page.url(),
+        url: failedURL || this.page.url(),
         title,
         canGoBack: !!history && history.currentIndex > 0,
         canGoForward:
           !!history && history.currentIndex < history.entries.length - 1,
-        status: this.epoch ? 'ready' : 'loading',
+        status: failedURL ? 'error' : this.epoch ? 'ready' : 'loading',
       });
   }
   private updateState(state: Partial<BrowserState>): void {
@@ -498,14 +503,7 @@ export class BrowserProjection {
       mediaPending: new Set(),
     };
     this.viewer = viewer;
-    send({
-      type: 'hello',
-      version: PROTOCOL_VERSION,
-      media: this.options.media ?? {},
-    });
-    send({ type: 'state', state: this.currentState });
-    await this.snapshot();
-    return {
+    const controller: Controller = {
       receive: (message) => this.receive(viewer, message),
       close: async () => {
         if (!viewer.active) return;
@@ -520,6 +518,20 @@ export class BrowserProjection {
         if (this.viewer === viewer) this.viewer = undefined;
       },
     };
+    try {
+      send({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        media: this.options.media ?? {},
+      });
+      send({ type: 'state', state: this.currentState });
+      await this.snapshot();
+      return controller;
+    } catch (error) {
+      // Admission owns the lease even before the first snapshot completes.
+      await controller.close();
+      throw error;
+    }
   }
 
   private async setMedia(active: boolean): Promise<void> {
@@ -639,7 +651,14 @@ export class BrowserProjection {
             type: 'ack',
             id: message.id,
             ok: false,
-            code: error instanceof CommandError ? error.code : 'action_failed',
+            code:
+              error instanceof CommandError
+                ? error.code
+                : ['navigate', 'back', 'forward', 'reload'].includes(
+                      message.action.kind,
+                    )
+                  ? 'navigation_failed'
+                  : 'action_failed',
           });
       } finally {
         viewer.pending--;
