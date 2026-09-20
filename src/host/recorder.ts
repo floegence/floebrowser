@@ -1,10 +1,15 @@
-import { observeMedia } from './media-recorder.js';
+import { observeMedia } from './media-source.js';
 import { record } from '@rrweb/record';
+import type { MediaConfiguration } from '../shared/protocol.js';
 import type { ICrossOriginIframeMirror } from '@rrweb/types';
 import { UNSUPPORTED_SELECTOR } from '../shared/protocol.js';
 
-/** Runs exclusively inside the source page; contains no host credentials. */
-export function installRecorder(binding: string, key: string): void {
+/** Runs inside source documents. Relay credentials must be scoped and short-lived. */
+export function installRecorder(
+  binding: string,
+  key: string,
+  configuration: MediaConfiguration,
+): void {
   // rrweb's parent recorder already covers same-origin child documents.
   if (window !== window.top) {
     try {
@@ -76,6 +81,8 @@ export function installRecorder(binding: string, key: string): void {
           const doc = win.document;
           const observer = observeMedia(
             doc,
+            key,
+            configuration,
             (node) => record.mirror.getId(node),
             (packet) => record.addCustomEvent('floebrowser:media', packet),
           );
@@ -140,8 +147,7 @@ export function installRecorder(binding: string, key: string): void {
   Object.defineProperty(target, key, {
     configurable: true,
     value: {
-      media: (active: boolean, reset = false) => {
-        if (active === mediaActive && !reset) return;
+      media: (active: boolean) => {
         mediaActive = active;
         for (const observer of media) observer.setEnabled(active);
       },

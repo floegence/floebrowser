@@ -1,22 +1,27 @@
-import type { Action, MediaPacket, MediaState } from '../shared/protocol.js';
+import type {
+  Action,
+  MediaConfiguration,
+  MediaPacket,
+  MediaState,
+} from '../shared/protocol.js';
 
 type Playback = {
-  stream: string;
-  next: number;
-  mime: string;
-  queue: Uint8Array<ArrayBuffer>[];
-  bytes: number;
+  id: number;
+  peer?: RTCPeerConnection;
+  stream?: MediaStream;
   element?: HTMLMediaElement;
-  source?: MediaSource;
-  buffer?: SourceBuffer;
-  dispose?: () => void;
+  offer?: string;
+  answer?: string;
+  negotiating: boolean;
   failed?: string;
+  closed: boolean;
 };
 
-/** Trusted parent code decodes source media in the scriptless replay document. */
+/** Media uses a separate encrypted realtime connection. The browser's jitter
+ * buffer discards late frames without blocking DOM or input transport. */
 export class MediaView {
   private states = new Map<number, MediaState>();
-  private playback = new Map<number, Playback>();
+  private playback = new Map<string, Playback>();
   private rows = new Map<
     number,
     {
@@ -31,12 +36,13 @@ export class MediaView {
   private sound = document.createElement('button');
   private list = document.createElement('div');
   private audible = false;
+  private configuration: MediaConfiguration = {};
   private timer: ReturnType<typeof setInterval>;
-
   constructor(
     container: HTMLElement,
     private node: (id: number) => Node | null | undefined,
     private dispatch: (action: Action) => Promise<boolean>,
+    private answer: (node: number, stream: string, sdp: string) => void,
   ) {
     this.dock.className = 'floe-media-dock';
     this.dock.hidden = true;
@@ -48,167 +54,140 @@ export class MediaView {
       this.audible = !this.audible;
       this.sound.textContent = this.audible ? 'Mute playback' : 'Enable sound';
       this.sound.setAttribute('aria-pressed', String(this.audible));
-      for (const [id, playback] of this.playback) this.volume(id, playback);
+      for (const playback of this.playback.values()) this.volume(playback);
     };
     this.dock.append(this.summary, this.sound, this.list);
     container.append(this.dock);
     this.timer = setInterval(() => this.update(), 100);
+  }
+  configure(configuration: MediaConfiguration) {
+    this.configuration = configuration;
   }
   receive(packet: MediaPacket) {
     if (packet.kind === 'removed') {
       this.remove(packet.id);
       return;
     }
+    for (const [token, playback] of this.playback)
+      if (playback.id === packet.id && token !== packet.stream)
+        this.release(token);
     if (packet.kind === 'state') {
       if (!this.states.has(packet.id) && this.states.size >= 8) return;
+      const playback = this.playback.get(packet.stream);
+      if (playback && playback.id !== packet.id) {
+        this.states.delete(playback.id);
+        this.rows.get(playback.id)?.root.remove();
+        this.rows.delete(playback.id);
+        playback.id = packet.id;
+      }
       this.states.set(packet.id, packet);
       this.render(packet);
-      const playback = this.playback.get(packet.id);
-      if (playback) this.volume(packet.id, playback);
+      if (playback) this.volume(playback);
       return;
     }
-    let playback = this.playback.get(packet.id);
-    if (!playback || playback.stream !== packet.stream) {
-      if (packet.sequence !== 0) return;
-      this.release(packet.id);
-      playback = {
-        stream: packet.stream,
-        next: 0,
-        mime: packet.mime,
-        queue: [],
-        bytes: 0,
-      };
+    void this.offer(packet);
+  }
+  private async offer(packet: Extract<MediaPacket, { kind: 'offer' }>) {
+    let playback = this.playback.get(packet.stream);
+    if (!playback) {
       if (this.playback.size >= 8) return;
-      this.playback.set(packet.id, playback);
+      playback = { id: packet.id, negotiating: false, closed: false };
+      this.playback.set(packet.stream, playback);
     }
-    if (playback.failed) return;
-    if (packet.sequence !== playback.next++) {
-      this.fail(packet.id, 'Media interrupted. Reconnect for a fresh stream.');
+    if (playback.negotiating) return;
+    if (playback.offer === packet.sdp && playback.answer) {
+      this.answer(packet.id, packet.stream, playback.answer);
       return;
     }
+    playback.negotiating = true;
+    playback.id = packet.id;
     try {
-      const binary = atob(packet.data);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      if ((playback.bytes += bytes.byteLength) > 2 * 1024 * 1024) {
-        this.fail(packet.id, 'Media is behind. Reconnect for a fresh stream.');
-        return;
+      if (!playback.peer) {
+        const peer = new RTCPeerConnection(this.configuration);
+        playback.peer = peer;
+        const current = playback;
+        peer.ontrack = (event) => {
+          if (current.closed) return;
+          current.stream = event.streams[0] ?? new MediaStream([event.track]);
+          this.update();
+        };
+        peer.onconnectionstatechange = () => {
+          if (current.closed) return;
+          if (peer.connectionState === 'failed')
+            current.failed = 'Media connection interrupted. Reconnecting…';
+          else if (peer.connectionState === 'connected')
+            current.failed = undefined;
+          const state = this.states.get(current.id);
+          if (state) this.render(state);
+        };
       }
-      playback.queue.push(bytes);
-      this.update();
+      const peer = playback.peer;
+      await peer.setRemoteDescription({ type: 'offer', sdp: packet.sdp });
+      if (playback.closed) return;
+      await peer.setLocalDescription(await peer.createAnswer());
+      if (peer.iceGatheringState !== 'complete')
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timeout);
+            peer.removeEventListener('icegatheringstatechange', changed);
+            resolve();
+          };
+          const changed = () => {
+            if (peer.iceGatheringState === 'complete' || playback!.closed)
+              finish();
+          };
+          const timeout = setTimeout(finish, 3000);
+          peer.addEventListener('icegatheringstatechange', changed);
+          changed();
+        });
+      if (playback.closed) return;
+      playback.offer = packet.sdp;
+      playback.answer = peer.localDescription!.sdp;
+      this.answer(playback.id, packet.stream, playback.answer);
     } catch {
-      this.fail(packet.id, 'The media stream could not be decoded.');
+      if (!playback.closed) {
+        playback.failed =
+          'The client could not establish the media connection.';
+        const state = this.states.get(playback.id);
+        if (state) this.render(state);
+      }
+    } finally {
+      playback.negotiating = false;
     }
   }
-  private volume(id: number, playback: Playback) {
+  private volume(playback: Playback) {
     const element = playback.element;
     if (!element) return;
-    const state = this.states.get(id);
+    const state = this.states.get(playback.id);
     element.muted = !this.audible || (state?.muted ?? true);
     element.volume = state?.volume ?? 1;
     void element.play().catch(() => {
       if (!element.muted) {
-        element.muted = true;
+        this.audible = false;
         this.sound.textContent = 'Enable sound';
         this.sound.setAttribute('aria-pressed', 'false');
-        this.audible = false;
         for (const active of this.playback.values())
           if (active.element) active.element.muted = true;
       }
     });
   }
   private update() {
-    for (const [id, playback] of this.playback) {
-      if (playback.failed) continue;
-      const node = this.node(id) as HTMLMediaElement | null;
-      if (!node?.isConnected || !['VIDEO', 'AUDIO'].includes(node.tagName)) {
-        if (playback.element) this.remove(id);
+    for (const playback of this.playback.values()) {
+      const node = this.node(playback.id) as HTMLMediaElement | null;
+      if (!node?.isConnected || !['VIDEO', 'AUDIO'].includes(node.tagName))
         continue;
+      if (node === playback.element || !playback.stream) continue;
+      if (playback.element) {
+        playback.element.pause();
+        playback.element.srcObject = null;
       }
-      if (playback.element && playback.element !== node) {
-        this.fail(id, 'Media document changed. Reconnect to resume.');
-        continue;
-      }
-      if (!playback.element) {
-        if (
-          typeof MediaSource === 'undefined' ||
-          !MediaSource.isTypeSupported(playback.mime)
-        ) {
-          this.fail(id, 'This client cannot decode the source media format.');
-          continue;
-        }
-        const source = new MediaSource();
-        const url = URL.createObjectURL(source);
-        playback.element = node;
-        playback.source = source;
-        const opened = () => {
-          try {
-            playback.buffer = source.addSourceBuffer(playback.mime);
-            playback.buffer.addEventListener('updateend', append);
-            playback.buffer.addEventListener('error', error);
-            append();
-          } catch {
-            error();
-          }
-        };
-        const append = () => this.append(id, playback);
-        const error = () =>
-          this.fail(id, 'The media stream could not be decoded.');
-        source.addEventListener('sourceopen', opened);
-        node.addEventListener('error', error);
-        playback.dispose = () => {
-          source.removeEventListener('sourceopen', opened);
-          node.removeEventListener('error', error);
-          playback.buffer?.removeEventListener('updateend', append);
-          playback.buffer?.removeEventListener('error', error);
-          node.pause();
-          node.removeAttribute('src');
-          node.load();
-          URL.revokeObjectURL(url);
-        };
-        node.controls = false;
-        node.muted = true;
-        node.autoplay = true;
-        node.setAttribute('playsinline', '');
-        node.src = url;
-        this.volume(id, playback);
-      }
-      this.append(id, playback);
-    }
-  }
-  private append(id: number, playback: Playback) {
-    const buffer = playback.buffer,
-      element = playback.element;
-    if (
-      !buffer ||
-      !element ||
-      buffer.updating ||
-      playback.failed ||
-      playback.source?.readyState !== 'open'
-    )
-      return;
-    try {
-      if (buffer.buffered.length) {
-        const end = buffer.buffered.end(buffer.buffered.length - 1);
-        if (end - element.currentTime > 1.5)
-          element.currentTime = Math.max(buffer.buffered.start(0), end - 0.35);
-        if (
-          element.currentTime > 20 &&
-          buffer.buffered.start(0) < element.currentTime - 15
-        ) {
-          buffer.remove(0, element.currentTime - 10);
-          return;
-        }
-      }
-      const next = playback.queue.shift();
-      if (next) {
-        playback.bytes -= next.byteLength;
-        buffer.appendBuffer(next);
-      }
-    } catch {
-      this.fail(
-        id,
-        'The media buffer could not be updated. Reconnect to resume.',
-      );
+      playback.element = node;
+      node.controls = false;
+      node.autoplay = true;
+      node.muted = true;
+      node.setAttribute('playsinline', '');
+      node.srcObject = playback.stream;
+      this.volume(playback);
     }
   }
   private render(state: MediaState) {
@@ -247,15 +226,21 @@ export class MediaView {
       row = { root, label, play, seek };
       this.rows.set(state.id, row);
     }
-    if (state.status === 'unavailable') this.dock.open = true;
+    if (
+      state.status === 'unavailable' ||
+      this.playback.get(state.stream)?.failed
+    )
+      this.dock.open = true;
     row.label.textContent =
-      this.playback.get(state.id)?.failed ||
       state.reason ||
+      this.playback.get(state.stream)?.failed ||
       (state.paused
         ? 'Paused at source'
         : state.status === 'streaming'
           ? 'Playing from source'
-          : 'Waiting for source media');
+          : state.status === 'connecting'
+            ? 'Connecting media…'
+            : 'Waiting for source media');
     row.play.textContent = state.paused ? 'Play' : 'Pause';
     row.play.setAttribute(
       'aria-label',
@@ -268,25 +253,21 @@ export class MediaView {
     this.dock.hidden = false;
     this.summary.textContent = `Media · ${this.states.size}`;
   }
-  private fail(id: number, reason: string) {
-    const playback = this.playback.get(id);
-    if (!playback || playback.failed) return;
-    playback.failed = reason;
-    playback.dispose?.();
-    playback.dispose = undefined;
-    playback.queue = [];
-    playback.bytes = 0;
-    const state = this.states.get(id);
-    if (state) this.render(state);
-    this.dock.open = true;
-  }
-  private release(id: number) {
-    const playback = this.playback.get(id);
-    this.playback.delete(id);
-    playback?.dispose?.();
+  private release(token: string) {
+    const playback = this.playback.get(token);
+    this.playback.delete(token);
+    if (!playback) return;
+    playback.closed = true;
+    playback.peer?.close();
+    playback.stream?.getTracks().forEach((track) => track.stop());
+    if (playback.element) {
+      playback.element.pause();
+      playback.element.srcObject = null;
+    }
   }
   private remove(id: number) {
-    this.release(id);
+    for (const [token, playback] of this.playback)
+      if (playback.id === id) this.release(token);
     this.states.delete(id);
     this.rows.get(id)?.root.remove();
     this.rows.delete(id);
@@ -294,7 +275,7 @@ export class MediaView {
     this.summary.textContent = `Media · ${this.states.size}`;
   }
   reset() {
-    for (const id of this.playback.keys()) this.release(id);
+    for (const token of this.playback.keys()) this.release(token);
     this.states.clear();
     this.rows.clear();
     this.list.replaceChildren();

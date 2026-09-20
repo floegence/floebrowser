@@ -13,8 +13,12 @@ an uncertain result, reconnect, navigation or takeover.
 
 Static resources come only from observed source-browser responses. Audio/video
 may additionally come from capture of individual source media elements through
-the authorized controller transport; never capture a display, tab, camera or
-microphone. Media must stop on controller revocation and use current view epochs. Do not add a host
+a controller-authorized WebRTC connection; only media state and SDP signaling
+use the DOM/control carrier. Never enqueue encoded media ahead of user input, or
+capture a display, tab, camera or microphone. Media must stop on controller
+revocation; signaling uses current view epochs and stream identities. Preserve
+media connections across DOM-only checkpoints. The host owns ICE/TURN policy
+and credentials; do not add an implicit public relay. Do not add a host
 HTTP fetch fallback, expose cookies, or publish a raw CDP endpoint. Preserve the
 scriptless replay sandbox and same-origin resource policy. Unsupported surfaces
 must remain explicit. Do not enable rrweb's unsafe canvas replay option.

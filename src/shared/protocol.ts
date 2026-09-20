@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
@@ -89,6 +89,28 @@ export const actionSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
 ]);
+const iceURLSchema = z
+  .string()
+  .max(2048)
+  .regex(/^(stun|stuns|turn|turns):[^\s]+$/i);
+export const mediaConfigurationSchema = z
+  .object({
+    iceServers: z
+      .array(
+        z
+          .object({
+            urls: z.union([iceURLSchema, z.array(iceURLSchema).min(1).max(8)]),
+            username: z.string().max(1024).optional(),
+            credential: z.string().max(2048).optional(),
+          })
+          .strict(),
+      )
+      .max(8)
+      .default([]),
+    iceTransportPolicy: z.enum(['all', 'relay']).default('all'),
+  })
+  .strict();
+export type MediaConfiguration = z.input<typeof mediaConfigurationSchema>;
 export const clientMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -100,6 +122,16 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('resync') }).strict(),
+  z
+    .object({
+      type: z.literal('media_answer'),
+      tab: z.string().min(1).max(80),
+      epoch: z.string().min(1).max(80),
+      node: z.number().int().positive(),
+      stream: z.string().min(1).max(80),
+      sdp: z.string().min(1).max(48000),
+    })
+    .strict(),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
@@ -131,12 +163,13 @@ export const mediaStateSchema = z
   .object({
     id: z.number().int().positive(),
     kind: z.literal('state'),
+    stream: z.string().min(1).max(80),
     paused: z.boolean(),
     time: z.number().finite().min(0),
     duration: z.number().finite().min(0),
     muted: z.boolean(),
     volume: z.number().min(0).max(1),
-    status: z.enum(['waiting', 'streaming', 'unavailable']),
+    status: z.enum(['waiting', 'connecting', 'streaming', 'unavailable']),
     reason: z.string().max(180),
   })
   .strict();
@@ -144,16 +177,10 @@ export const mediaPacketSchema = z.discriminatedUnion('kind', [
   mediaStateSchema,
   z
     .object({
-      kind: z.literal('chunk'),
+      kind: z.literal('offer'),
       id: z.number().int().positive(),
       stream: z.string().min(1).max(80),
-      sequence: z.number().int().min(0),
-      mime: z.enum([
-        'video/webm;codecs=vp8,opus',
-        'video/webm;codecs=vp8',
-        'audio/webm;codecs=opus',
-      ]),
-      data: z.string().max(700000),
+      sdp: z.string().min(1).max(48000),
     })
     .strict(),
   z
@@ -166,7 +193,11 @@ export type ServerMessage =
   | { type: 'media'; epoch: string; packet: MediaPacket }
   | { type: 'tabs'; state: TabState }
   | { type: 'focus'; epoch: string; focus: FocusState }
-  | { type: 'hello'; version: typeof PROTOCOL_VERSION }
+  | {
+      type: 'hello';
+      version: typeof PROTOCOL_VERSION;
+      media: MediaConfiguration;
+    }
   | { type: 'state'; state: BrowserState }
   | {
       type: 'snapshot';

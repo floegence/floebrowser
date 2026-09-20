@@ -13,6 +13,7 @@ export {
   PROTOCOL_VERSION,
   type Action,
   type BrowserState,
+  type MediaConfiguration,
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,

@@ -61,16 +61,18 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
           ? source.mainFrame()
           : source.frames().find((frame) => frame.url().endsWith('/frame'))!;
       await mediaFrame.evaluate(() => {
-        (window as any).activeRecordings = 0;
-        const start = MediaRecorder.prototype.start;
-        MediaRecorder.prototype.start = function (...args) {
-          start.apply(this, args);
-          (window as any).activeRecordings++;
-          this.addEventListener(
-            'stop',
-            () => (window as any).activeRecordings--,
-            { once: true },
-          );
+        (window as any).activeMediaPeers = 0;
+        const Original = RTCPeerConnection;
+        (window as any).RTCPeerConnection = class extends Original {
+          constructor(configuration?: RTCConfiguration) {
+            super(configuration);
+            (window as any).activeMediaPeers++;
+          }
+          close() {
+            if (this.connectionState !== 'closed')
+              (window as any).activeMediaPeers--;
+            super.close();
+          }
         };
       });
       await mediaFrame.evaluate(async (mse) => {
@@ -133,6 +135,15 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
         );
       }, variant === 'cross-origin MSE');
       const viewer = await client.newPage();
+      await viewer.addInitScript(() => {
+        const Socket = WebSocket;
+        (window as any).WebSocket = class extends Socket {
+          constructor(...args: ConstructorParameters<typeof WebSocket>) {
+            super(...args);
+            (window as any).testSocket = this;
+          }
+        };
+      });
       const packets: any[] = [];
       viewer.on('websocket', (ws) =>
         ws.on('framereceived', (f) => {
@@ -147,16 +158,17 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       const projected =
         variant === 'blob' ? root : root.frameLocator('#remote');
       await projected.locator('#play').click();
-      const decoded = async () => {
+      const decoded = async (minimumFrames = 3) => {
         const deadline = Date.now() + 12000;
         while (Date.now() < deadline) {
           if (
             await projected
               .locator('#clip')
               .evaluate(
-                (v: HTMLVideoElement) =>
+                (v: HTMLVideoElement, minimum) =>
                   v.videoWidth === 320 &&
-                  v.getVideoPlaybackQuality().totalVideoFrames > 3,
+                  v.getVideoPlaybackQuality().totalVideoFrames > minimum,
+                minimumFrames,
               )
               .catch(() => false)
           )
@@ -167,25 +179,30 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       };
       await decoded();
       assert.ok(
-        packets.some((p) => p.kind === 'chunk' && p.mime.includes('opus')),
+        packets.some((p) => p.kind === 'offer' && p.sdp.includes('m=audio')),
         'Stream must contain the source audio track',
       );
       assert.equal(
         await projected
           .locator('#clip')
-          .evaluate((v: any) => v.captureStream().getAudioTracks().length),
+          .evaluate(
+            (v: HTMLVideoElement) =>
+              (v.srcObject as MediaStream).getAudioTracks().length,
+          ),
         1,
       );
       assert.equal(
         await projected
           .locator('#clip')
-          .evaluate((v: HTMLVideoElement) => v.src.startsWith('blob:')),
+          .evaluate((v: HTMLVideoElement) => !!v.srcObject && !v.currentSrc),
         true,
       );
       assert.deepEqual(external, []);
       const previousStream = await projected
         .locator('#clip')
-        .getAttribute('src');
+        .evaluate(
+          (v: HTMLVideoElement) => (v.srcObject as MediaStream | null)?.id,
+        );
       await mediaFrame.evaluate(async () => {
         const video = document.querySelector('video')!;
         video.src = URL.createObjectURL((window as any).fixtureBlob);
@@ -193,13 +210,20 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       });
       const changeDeadline = Date.now() + 8000;
       while (
-        (await projected.locator('#clip').getAttribute('src')) ===
-          previousStream &&
+        (await projected
+          .locator('#clip')
+          .evaluate(
+            (v: HTMLVideoElement) => (v.srcObject as MediaStream | null)?.id,
+          )) === previousStream &&
         Date.now() < changeDeadline
       )
         await new Promise((resolve) => setTimeout(resolve, 100));
       assert.notEqual(
-        await projected.locator('#clip').getAttribute('src'),
+        await projected
+          .locator('#clip')
+          .evaluate(
+            (v: HTMLVideoElement) => (v.srcObject as MediaStream | null)?.id,
+          ),
         previousStream,
         'Changing the source starts a fresh media stream',
       );
@@ -207,6 +231,24 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       await projected.locator('#pause').click();
       await mediaFrame.waitForFunction(
         () => document.querySelector('video')!.paused,
+      );
+      const frameBefore = await viewer
+        .locator('#viewport iframe')
+        .elementHandle();
+      const streamBefore = await projected
+        .locator('#clip')
+        .evaluate((v: HTMLVideoElement) => (v.srcObject as MediaStream).id);
+      await viewer.evaluate(() =>
+        (window as any).testSocket.send(JSON.stringify({ type: 'resync' })),
+      );
+      await viewer.waitForFunction((frame) => !frame!.isConnected, frameBefore);
+      await decoded(0);
+      assert.equal(
+        await projected
+          .locator('#clip')
+          .evaluate((v: HTMLVideoElement) => (v.srcObject as MediaStream).id),
+        streamBefore,
+        'Paused frame survives replacement of the replay document',
       );
       await viewer.locator('.floe-media-dock summary').click();
       const seek = viewer.getByRole('slider', { name: 'Seek source media' });
@@ -243,7 +285,7 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
         .getByRole('button', { name: 'New tab', exact: true })
         .click();
       await mediaFrame.waitForFunction(
-        () => (window as any).activeRecordings === 0,
+        () => (window as any).activeMediaPeers === 0,
       );
       assert.equal(await viewer.locator('.floe-media-dock').isVisible(), false);
       await viewer.getByRole('tab').first().click();
@@ -261,7 +303,7 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       await viewer.locator('.floe-media-dock').waitFor({ state: 'hidden' });
       await viewer.close();
       await mediaFrame.waitForFunction(
-        () => (window as any).activeRecordings === 0,
+        () => (window as any).activeMediaPeers === 0,
       );
       assert.deepEqual(external, []);
     },

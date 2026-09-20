@@ -5,6 +5,8 @@ import type { Page, CDPSession } from 'playwright';
 import {
   clientMessageSchema,
   mediaPacketSchema,
+  mediaConfigurationSchema,
+  type MediaConfiguration,
   focusSchema,
   MAX_MESSAGE_BYTES,
   MAX_PENDING_COMMANDS,
@@ -22,6 +24,8 @@ import { FrameBridge } from './frames.js';
 const attachedPages = new WeakSet<Page>();
 
 export interface AttachOptions {
+  /** Host-owned ICE/TURN settings. Media is authenticated through controller signaling. */
+  media?: MediaConfiguration;
   /** Called immediately before dispatch. The embedding host remains the authority. */
   authorize: (action: Action) => boolean | Promise<boolean>;
   /** Resolves an opaque resource ID through the host's authorized carrier. */
@@ -39,6 +43,7 @@ type Viewer = {
   lastID: number;
   pending: number;
   resyncPending: boolean;
+  mediaPending: Set<string>;
 };
 
 /** One page, one projection, one controller. Does not own the browser or profile. */
@@ -99,6 +104,10 @@ export class BrowserProjection {
   ): Promise<BrowserProjection> {
     if (attachedPages.has(page))
       throw new Error('This page already has a FloeBrowser projection.');
+    options = {
+      ...options,
+      media: mediaConfigurationSchema.parse(options.media ?? {}),
+    };
     attachedPages.add(page);
     let engine: BrowserProjection | undefined;
     try {
@@ -224,7 +233,7 @@ export class BrowserProjection {
       new URL('../assets/recorder.js', import.meta.url),
       'utf8',
     );
-    const script = `${code}\nFloeRecorder.installRecorder(${JSON.stringify(this.binding)},${JSON.stringify(this.recorderKey)});`;
+    const script = `${code}\nFloeRecorder.installRecorder(${JSON.stringify(this.binding)},${JSON.stringify(this.recorderKey)},${JSON.stringify(this.options.media)});`;
     this.scriptID = (
       await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
         source: script,
@@ -338,7 +347,9 @@ export class BrowserProjection {
     }
     const projected = this.projection.event(event, this.page.url());
     if (!projected) return;
-    for (const id of this.mediaNodes) {
+    for (const id of event.type === EventType.FullSnapshot
+      ? []
+      : this.mediaNodes) {
       if (!this.projection.isMedia(id)) {
         this.mediaNodes.delete(id);
         this.send({
@@ -374,7 +385,7 @@ export class BrowserProjection {
         events: [meta, projected],
       });
       this.updateState({ status: 'ready', url: this.page.url() });
-      if (!this.snapshotPending) void this.setMedia(true, true);
+      if (!this.snapshotPending) void this.setMedia(true);
       return;
     }
     if (
@@ -406,9 +417,14 @@ export class BrowserProjection {
       lastID: 0,
       pending: 0,
       resyncPending: false,
+      mediaPending: new Set(),
     };
     this.viewer = viewer;
-    send({ type: 'hello', version: PROTOCOL_VERSION });
+    send({
+      type: 'hello',
+      version: PROTOCOL_VERSION,
+      media: this.options.media ?? {},
+    });
     send({ type: 'state', state: this.currentState });
     await this.snapshot();
     return {
@@ -428,19 +444,14 @@ export class BrowserProjection {
     };
   }
 
-  private async setMedia(active: boolean, reset = false): Promise<void> {
+  private async setMedia(active: boolean): Promise<void> {
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
-          .evaluate(
-            ({ key, active, reset }) =>
-              (window as any)[key]?.media(active, reset),
-            {
-              key: this.recorderKey,
-              active: active && !!this.viewer?.active,
-              reset,
-            },
-          )
+          .evaluate(({ key, active }) => (window as any)[key]?.media(active), {
+            key: this.recorderKey,
+            active: active && !!this.viewer?.active,
+          })
           .catch(() => {}),
       ),
     );
@@ -454,7 +465,7 @@ export class BrowserProjection {
         `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
       );
       await this.frames.snapshot();
-      await this.setMedia(true, true);
+      await this.setMedia(true);
     } finally {
       this.snapshotPending = false;
     }
@@ -466,6 +477,38 @@ export class BrowserProjection {
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
+    if (message.type === 'media_answer') {
+      if (
+        message.tab !== this.id ||
+        message.epoch !== this.epoch ||
+        !this.mediaNodes.has(message.node) ||
+        viewer.mediaPending.has(message.stream) ||
+        viewer.mediaPending.size >= 8
+      )
+        return Promise.resolve();
+      viewer.mediaPending.add(message.stream);
+      return (async () => {
+        const element = await this.frames.resolve(message.node);
+        if (!element) return;
+        try {
+          if (
+            !viewer.active ||
+            this.viewer !== viewer ||
+            message.epoch !== this.epoch
+          )
+            return;
+          await element.evaluate(
+            (element, { key, stream, sdp }) =>
+              (element as any)[key]?.answer(stream, sdp),
+            { key: this.recorderKey, stream: message.stream, sdp: message.sdp },
+          );
+        } finally {
+          await element.dispose();
+        }
+      })()
+        .catch(() => {})
+        .finally(() => viewer.mediaPending.delete(message.stream));
+    }
     if (message.type === 'resync') {
       if (viewer.resyncPending) return this.queue;
       viewer.resyncPending = true;

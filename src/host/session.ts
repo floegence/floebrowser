@@ -182,6 +182,10 @@ export class BrowserSession {
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
+    if (message.type === 'media_answer') {
+      if (message.tab !== this.selected) return Promise.resolve();
+      return viewer.controller?.receive(message) ?? Promise.resolve();
+    }
     if (message.type === 'resync')
       return viewer.controller?.receive(message) ?? Promise.resolve();
     const ack = (

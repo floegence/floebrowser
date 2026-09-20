@@ -31,7 +31,7 @@ npm start -- --profile /absolute/path/to/floebrowser-profile --port 8787
 
 The default session uses a temporary browser context. Stop with Ctrl+C. Chromium's sandbox stays enabled; the CLI never uses `--no-sandbox`.
 
-The CLI listens only on `127.0.0.1`. Its random private URL grants control of the source tab: keep it secret. It is not a public hosting service. For an SSH demo, forward the same port and open the printed URL on the client:
+The CLI listens only on `127.0.0.1`. Its random private URL grants control of the source tab: keep it secret. It is not a public hosting service. For an SSH demo, forward the same port and open the printed URL on the client. This carries DOM, resources and control; audio/video also needs a reachable WebRTC path (see **Source media**):
 
 ```sh
 ssh -N -L 8787:127.0.0.1:8787 user@source-host
@@ -60,6 +60,7 @@ The application includes a standalone browser UI and reusable host, viewer and p
 ```mermaid
 flowchart LR
     Website <-->|Requests and business effects| Source[Source Chromium]
+    Source -->|Encrypted WebRTC media elements| Viewer
     Source -->|rrweb DOM events and captured resources| Engine[FloeBrowser engine]
     Engine -->|Authorized host transport| Viewer[Scriptless DOM viewer]
     Viewer -->|Input and navigation intent| Engine
@@ -68,19 +69,44 @@ flowchart LR
 
 rrweb records and reconstructs DOM state. FloeBrowser supplies the return input path, document generations, resource capture, projection sanitization and controller lifecycle.
 
-The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate media path captures individual source audio/video elements and forwards encoded media through the same authorized transport.
+The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A separate encrypted WebRTC path carries captured source audio/video elements. The authorized host transport carries only media state and SDP signaling alongside DOM and input, so encoded video cannot fill the control queue.
 
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
 ## Source media
 
-Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` and `MediaRecorder` encode the element's audio/video into VP8/Opus WebM chunks. The host forwards bounded, sequenced media packets scoped to the current view epoch. The trusted viewer supplies a local `blob:` MediaSource to the reconstructed media element; source URLs, child `<source>` tags and rrweb playback commands cannot start client website requests. The replay sandbox still disallows website scripts. Embedding hosts must permit `media-src blob:` in their CSP.
+Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` feeds individual audio/video tracks into `RTCPeerConnection`. The trusted viewer assigns the received `MediaStream` to the reconstructed element's `srcObject`. Source URLs, child `<source>` tags and rrweb playback commands cannot start client website requests. The replay sandbox still disallows website scripts.
 
-Use the website's projected controls, or open **Media** for source play/pause and seeking. Playback starts muted on the client; choose **Enable sound** in that panel. The source's mute/volume settings also apply. The client decodes a rolling live stream, while seeking changes the original media element at the source. The transport adds buffering and re-encoding cost; this is not a lossless or zero-latency media relay.
+Use the website's projected controls, or open **Media** for source play/pause and seeking. Playback starts muted on the client; choose **Enable sound** in that panel. The source's mute/volume settings also apply. Seeking changes the original element at the source. Capture and re-encoding add cost and latency; this is not a lossless relay.
 
-Capture runs only for the selected, controlled tab and is released on disconnect, handoff, tab switch, removed elements and changed source documents. Reconnection starts fresh encoder headers rather than replaying buffered media. At most eight media elements per source document are observed, and the host/viewer admit at most eight media nodes per tab. Each encoded chunk is limited to 512 KiB, source conversion queues to four chunks per stream, and viewer append queues to 2 MiB per stream. The viewer trims old decoded media and catches up when more than 1.5 seconds behind. A blocked or slow transport closes under the existing WebSocket buffer limit; no unbounded media recording is retained.
+Media travels over DTLS-SRTP independently of the DOM/control connection. Native WebRTC congestion control adapts to bandwidth and discards late frames instead of retaining an application queue of old video. Senders cap each video at 24 fps and 1.5 Mbit/s, scale source video wider than 1280 pixels down at capture start, and cap each audio track at 64 kbit/s. These are ceilings, not reserved bandwidth or guaranteed latency. A stalled video cannot fill the WebSocket ahead of clicks or DOM updates. Client CPU saturation and loss of the control connection can still affect interaction.
 
-DRM-protected media is refused explicitly. Origin-restricted streams, unsupported codecs, source autoplay restrictions, inaccessible media elements, and client browser limitations can prevent playback. This preview requires a client with WebM VP8/Opus MediaSource support; qualify the actual Desktop webview, especially on platforms using WebKit. Canvas, tab/display capture, camera and microphone capture are not used.
+Capture runs only for the selected, controlled tab and closes on disconnect, handoff, tab switch, removed elements and changed source documents. DOM checkpoints preserve the existing media connection and rebind the received stream, including a paused frame. A new controller starts fresh media; no old media or input is replayed. At most eight media elements per source document are observed, and the host/viewer admit at most eight media nodes per tab. SDP messages are bounded to 48,000 characters and answers are fenced by controller, tab, view epoch, node and stream identity. Signaling runs separately from serialized source input; it does not authorize website actions.
+
+The default ICE configuration uses direct connectivity with no public STUN or TURN dependency. Remote servers behind NAT or firewalls generally need a host-operated TURN relay. An SSH TCP tunnel alone does not carry the WebRTC stream. Supply the same host-owned configuration to the source and viewer through `AttachOptions.media`, `ProjectionServerOptions.media`, or the CLI:
+
+```sh
+npm start -- --media-config /private/path/media.json
+```
+
+Example `media.json` (replace with a reachable relay and short-lived credentials):
+
+```json
+{
+  "iceServers": [
+    {
+      "urls": "turns:relay.example.com:443?transport=tcp",
+      "username": "temporary-session-user",
+      "credential": "temporary-session-credential"
+    }
+  ],
+  "iceTransportPolicy": "relay"
+}
+```
+
+Relay configuration and credentials are delivered to the authorized viewer and injected into source documents. Use scoped, short-lived credentials rather than long-lived server secrets. The embedding host owns relay availability, authorization and network policy. Direct mode can expose ICE network addresses to the peer; use relay-only mode when that is inappropriate. The standalone viewer is served on a trustworthy loopback origin; remote product viewers should use HTTPS and support WebRTC.
+
+DRM-protected media is refused explicitly. Origin-restricted streams, unsupported codecs, source autoplay restrictions, inaccessible media elements, and client browser limitations can prevent playback. Qualify native WebRTC media in the actual Desktop webview, especially on platforms using WebKit. Canvas, tab/display capture, camera and microphone capture are not used.
 
 External qualification on the development Mac verified X's public homepage and YouTube's public “Me at the zoo” video using managed headless Chromium. The YouTube viewer decoded video and an audio track without requesting the website. These observations do not certify login flows, every video, other operating systems, or future site policies.
 
@@ -142,7 +168,7 @@ console.log(server.url);
 
 `BrowserSession.attach(initialPage, options)` adds tab management above `BrowserProjection`. It owns the initial page, descendant popups and pages explicitly created through `tab_new`; it does not adopt other pages in the same browser context. The embedding product must authorize that session scope. `connect`, `hasController` and `close` follow the same exclusive-controller lifecycle as the page engine. Detaching the session does not close host-owned pages or the browser context.
 
-The standalone server uses this session API. Source popups become the selected tab. The tab strip supports creation, switching, closing and arrow-key navigation. Closing the last source tab creates a blank one. Existing source DOM, history and credentials survive tab switches. `tab_new`, `tab_select` and `tab_close` go through `authorize` before their effects. `tabs` messages carry the tab list and active ID; the viewer exposes these through `onTabs`. Every protocol-v2 command must include the active tab's `BrowserState.id` as `tab`. Old-tab commands and duplicate command IDs are rejected; they are never redirected to another page.
+The standalone server uses this session API. Source popups become the selected tab. The tab strip supports creation, switching, closing and arrow-key navigation. Closing the last source tab creates a blank one. Existing source DOM, history and credentials survive tab switches. `tab_new`, `tab_select` and `tab_close` go through `authorize` before their effects. `tabs` messages carry the tab list and active ID; the viewer exposes these through `onTabs`. Every command must include the active tab's `BrowserState.id` as `tab`. Old-tab commands and duplicate command IDs are rejected; they are never redirected to another page.
 
 Cross-origin frame recording uses rrweb's published cross-origin mirror API, with a source recorder in each cross-origin frame root. Chromium frame sessions supply observed response bodies; source node IDs are resolved through the frame mirrors, and input is dispatched at the corresponding source coordinates after hit-testing each containing frame. Nested client frames have `sandbox="allow-same-origin"`, no source URL, no website scripts and no client-side form submission. Frame navigation updates its document without replacing the main projection. Reconnection requests new main and child snapshots.
 
@@ -169,7 +195,7 @@ view.setFit(true);
 
 Give `container` a constrained width and height. The viewer uses a sandboxed, scriptless iframe that the trusted parent can inspect for node mapping. An embedding host must preserve the same restrictions as the standalone carrier: no target-site network access, no form submission, no plugins, and no website access to a native bridge. Resource URLs must resolve through a protected host route permitted by the viewer's CSP. The loopback server's CSP is the reference policy in `src/host/server.ts`.
 
-Use the same FloeBrowser release on both sides. Protocol version 3 includes the pinned rrweb event format; it is not a promise of compatibility with independently upgraded rrweb packages.
+Use the same FloeBrowser release on both sides. Protocol version 4 includes the pinned rrweb event format; it is not a promise of compatibility with independently upgraded rrweb packages.
 
 ## State and failure boundaries
 
@@ -191,7 +217,7 @@ Projection data remains in process memory; there is no session recording databas
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser                                                      | Multiple source tabs and one active controlling viewer per session                                                                                      |
 | Canvas, embeds, file inputs                                  | Explicit unavailable placeholders; no pixel fallback                                                                                                    |
-| Video and audio                                              | Source element capture to WebM (VP8/Opus); client MediaSource decoding; no screen capture                                                               |
+| Video and audio                                              | Source element capture over encrypted WebRTC; adaptive real-time playback; no screen capture                                                            |
 | Frames                                                       | Same-origin, cross-origin and nested iframe DOM; no client website execution                                                                            |
 | New tabs                                                     | Initial page, its descendant popups, and explicitly created tabs; unrelated pages remain outside the session                                            |
 | CAPTCHA                                                      | DOM-based widgets can be shown and operated by the user; site acceptance, image challenges and anti-automation compatibility require site qualification |
@@ -215,7 +241,7 @@ npm run test:e2e
 npm run check:package
 ```
 
-Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery.
+Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, scrolling, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, source tabs, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media signaling fences, dropped RTP packets with responsive input, and paused-frame preservation across DOM checkpoints.
 
 `npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch.
 

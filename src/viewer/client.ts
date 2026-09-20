@@ -87,6 +87,17 @@ export class DOMBrowserView {
       container,
       (id) => this.replayer?.getMirror().getNode(id),
       (action) => this.dispatch(action),
+      (node, stream, sdp) => {
+        if (this.connected && this.epoch)
+          this.connection.send({
+            type: 'media_answer',
+            tab: this.tab,
+            epoch: this.epoch,
+            node,
+            stream,
+            sdp,
+          });
+      },
     );
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
@@ -241,6 +252,7 @@ export class DOMBrowserView {
         this.connection.close();
         return;
       }
+      this.media.configure(message.media);
       this.connected = true;
       return;
     }
@@ -277,7 +289,6 @@ export class DOMBrowserView {
       this.eventBytes = 0;
       this.sourceFocus = undefined;
       this.clearFrame();
-      this.media.reset();
       this.replayer?.destroy();
       const now = Date.now();
       this.replayer = new Replayer([], {

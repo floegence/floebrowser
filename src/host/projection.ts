@@ -35,7 +35,7 @@ export class DOMProjection {
         ) ||
           key.startsWith('rr_media'))
       ) {
-        // The trusted viewer alone supplies a local MediaSource, never a site URL.
+        // The trusted viewer alone attaches the received MediaStream, never a site URL.
         if (!key.startsWith('rr_')) result[key] = null;
         continue;
       }

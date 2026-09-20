@@ -20,6 +20,7 @@ import {
 export interface ProjectionServerOptions {
   port?: number;
   authorize: AttachOptions['authorize'];
+  media?: AttachOptions['media'];
 }
 
 /** Optional loopback demo carrier. Redeven can mount BrowserProjection on its own transport. */
@@ -30,6 +31,7 @@ export async function createProjectionServer(
   const base = `/session/${randomBytes(32).toString('base64url')}/`;
   const session = await BrowserSession.attach(page, {
     authorize: options.authorize,
+    media: options.media,
     resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
   });
   const sockets = new WebSocketServer({
