@@ -305,8 +305,8 @@ test(
     );
     assert.equal(
       await viewer
-        .locator('.floe-media-dock')
-        .getByText(/exceeded|Reconnect/)
+        .locator('.floe-media-controls')
+        .getByText(/Playback interrupted/)
         .count(),
       0,
     );

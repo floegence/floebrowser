@@ -209,6 +209,9 @@ button svg,
   display: flex;
   gap: 3px;
 }
+#media-controls:has(.floe-media-controls[hidden]) {
+  display: none;
+}
 .icon-button {
   width: 31px;
   height: 31px;

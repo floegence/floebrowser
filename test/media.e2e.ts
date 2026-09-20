@@ -250,7 +250,9 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
         streamBefore,
         'Paused frame survives replacement of the replay document',
       );
-      await viewer.locator('.floe-media-dock summary').click();
+      await viewer
+        .getByRole('button', { name: 'Media controls', exact: true })
+        .click();
       const seek = viewer.getByRole('slider', { name: 'Seek source media' });
       await seek.fill('0.7');
       await seek.dispatchEvent('change');
@@ -287,7 +289,10 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       await mediaFrame.waitForFunction(
         () => (window as any).activeMediaPeers === 0,
       );
-      assert.equal(await viewer.locator('.floe-media-dock').isVisible(), false);
+      assert.equal(
+        await viewer.locator('.floe-media-controls').isVisible(),
+        false,
+      );
       await viewer.getByRole('tab').first().click();
       await decoded();
       await mediaFrame.evaluate(async () => {
@@ -297,10 +302,13 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
         await video.play();
       });
       await viewer
-        .getByText('Protected media cannot be forwarded.', { exact: true })
+        .getByRole('button', { name: 'Media controls', exact: true })
+        .click();
+      await viewer
+        .getByText('This media cannot play in this browser.', { exact: true })
         .waitFor();
       await mediaFrame.locator('video').evaluate((v) => v.remove());
-      await viewer.locator('.floe-media-dock').waitFor({ state: 'hidden' });
+      await viewer.locator('.floe-media-controls').waitFor({ state: 'hidden' });
       await viewer.close();
       await mediaFrame.waitForFunction(
         () => (window as any).activeMediaPeers === 0,

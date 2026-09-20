@@ -37,42 +37,73 @@
   pointer-events: none;
 }
 
-.floe-media-dock {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 20;
-  max-width: 320px;
-  padding: 10px 14px;
-  border: 1px solid #dce2ec;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 8px 30px #15274718;
-  color: #24334b;
-  font: 12px/1.5 system-ui;
-}
-.floe-media-dock[hidden] {
+.floe-media-controls[hidden],
+.floe-media-row[hidden] {
   display: none;
 }
-.floe-media-dock summary {
+.floe-media-toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #667085;
   cursor: pointer;
-  font-weight: 600;
 }
-.floe-media-dock button {
+.floe-media-toggle:hover,
+.floe-media-toggle[aria-expanded='true'] {
+  background: #eef0f8;
+  color: #4f5ed7;
+}
+.floe-media-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+.floe-media-panel {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  max-height: min(440px, 70vh);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid #e0e4ee;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 36px #15274720;
+  color: #24334b;
+  font: 13px/1.5 system-ui;
+}
+.floe-media-panel button {
   cursor: pointer;
   border: 1px solid #dce2ec;
   border-radius: 6px;
   background: #f5f7fb;
   color: inherit;
   padding: 5px 9px;
-  margin-top: 8px;
+}
+.floe-media-panel button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.floe-media-toggle:focus-visible,
+.floe-media-panel :focus-visible {
+  outline: 2px solid #6472ee;
+  outline-offset: 3px;
 }
 .floe-media-row {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding-top: 8px;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f6;
 }
 .floe-media-row input {
   grid-column: 1 / -1;

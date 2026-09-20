@@ -27,6 +27,8 @@ import {
 export type ViewportMode = 'responsive' | 'fit' | 'actual';
 
 type ViewOptions = {
+  /** Mount optional media controls in host browser chrome, outside the page. */
+  mediaControls?: HTMLElement;
   onState?: (state: BrowserState) => void;
   onStatus?: (
     status: 'connecting' | 'refreshing' | 'live' | 'disconnected',
@@ -103,7 +105,7 @@ export class DOMBrowserView {
     this.sink.spellcheck = false;
     container.append(this.surface, this.sink);
     this.media = new MediaView(
-      container,
+      options.mediaControls,
       (id) => this.replayer?.getMirror().getNode(id),
       (action) => this.dispatch(action),
       (node, stream, sdp) => {
@@ -653,6 +655,7 @@ export class DOMBrowserView {
       frame,
       'mousedown',
       (raw) => {
+        this.media.interact(raw);
         const event = raw as PointerEvent;
         this.inputEngaged = true;
         this.sourceFocus = undefined;
@@ -802,6 +805,7 @@ export class DOMBrowserView {
   }
 
   private key(event: KeyboardEvent, phase: 'down' | 'up'): void {
+    if (phase === 'down') this.media.interact(event);
     if (this.composing || event.isComposing || event.key === 'Process') return;
     if (
       (event.ctrlKey || event.metaKey) &&

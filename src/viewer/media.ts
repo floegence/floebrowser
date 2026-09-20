@@ -13,7 +13,7 @@ type Playback = {
   offer?: string;
   answer?: string;
   negotiating: boolean;
-  failed?: string;
+  failed?: boolean;
   closed: boolean;
 };
 
@@ -31,33 +31,62 @@ export class MediaView {
       seek: HTMLInputElement;
     }
   >();
-  private dock = document.createElement('details');
-  private summary = document.createElement('summary');
+  private controls = document.createElement('div');
+  private toggle = document.createElement('button');
+  private panel = document.createElement('div');
   private sound = document.createElement('button');
   private list = document.createElement('div');
-  private audible = false;
+  private audible = true;
+  private soundBlocked = false;
   private configuration: MediaConfiguration = {};
   private timer: ReturnType<typeof setInterval>;
   constructor(
-    container: HTMLElement,
+    container: HTMLElement | undefined,
     private node: (id: number) => Node | null | undefined,
     private dispatch: (action: Action) => Promise<boolean>,
     private answer: (node: number, stream: string, sdp: string) => void,
   ) {
-    this.dock.className = 'floe-media-dock';
-    this.dock.hidden = true;
-    this.summary.textContent = 'Media';
+    this.controls.className = 'floe-media-controls';
+    this.controls.hidden = true;
+    this.toggle.type = 'button';
+    this.toggle.className = 'floe-media-toggle';
+    this.toggle.setAttribute('aria-label', 'Media controls');
+    this.toggle.setAttribute('aria-haspopup', 'dialog');
+    this.toggle.setAttribute('aria-expanded', 'false');
+    this.toggle.innerHTML =
+      '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5h9M3 9h6M3 13h5M12 7l5 3-5 3V7Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    this.panel.className = 'floe-media-panel';
+    this.panel.popover = 'auto';
+    this.panel.setAttribute('role', 'dialog');
+    this.panel.setAttribute('aria-label', 'Media controls');
+    this.toggle.popoverTargetElement = this.panel;
+    this.panel.addEventListener('toggle', () => {
+      const open = this.panel.matches(':popover-open');
+      this.toggle.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const rect = this.toggle.getBoundingClientRect();
+        this.panel.style.right = `${Math.max(8, innerWidth - rect.right)}px`;
+        this.panel.style.top = `${Math.max(8, Math.min(rect.bottom + 8, innerHeight - this.panel.offsetHeight - 8))}px`;
+        this.sound.focus();
+      }
+    });
+    this.panel.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.dismiss();
+      this.toggle.focus();
+    });
     this.sound.type = 'button';
-    this.sound.textContent = 'Enable sound';
-    this.sound.setAttribute('aria-pressed', 'false');
     this.sound.onclick = () => {
-      this.audible = !this.audible;
-      this.sound.textContent = this.audible ? 'Mute playback' : 'Enable sound';
-      this.sound.setAttribute('aria-pressed', String(this.audible));
+      this.audible = this.soundBlocked || !this.audible;
+      this.soundBlocked = false;
       for (const playback of this.playback.values()) this.volume(playback);
+      this.renderControls();
     };
-    this.dock.append(this.summary, this.sound, this.list);
-    container.append(this.dock);
+    this.panel.append(this.sound, this.list);
+    this.controls.append(this.toggle, this.panel);
+    container?.append(this.controls);
     this.timer = setInterval(() => this.update(), 100);
   }
   configure(configuration: MediaConfiguration) {
@@ -81,7 +110,7 @@ export class MediaView {
         playback.id = packet.id;
       }
       this.states.set(packet.id, packet);
-      this.render(packet);
+      this.renderControls();
       if (playback) this.volume(playback);
       return;
     }
@@ -113,12 +142,11 @@ export class MediaView {
         };
         peer.onconnectionstatechange = () => {
           if (current.closed) return;
-          if (peer.connectionState === 'failed')
-            current.failed = 'Media connection interrupted. Reconnecting…';
+          if (peer.connectionState === 'failed') current.failed = true;
           else if (peer.connectionState === 'connected')
             current.failed = undefined;
           const state = this.states.get(current.id);
-          if (state) this.render(state);
+          if (state) this.renderControls();
         };
       }
       const peer = playback.peer;
@@ -146,10 +174,9 @@ export class MediaView {
       this.answer(playback.id, packet.stream, playback.answer);
     } catch {
       if (!playback.closed) {
-        playback.failed =
-          'The client could not establish the media connection.';
+        playback.failed = true;
         const state = this.states.get(playback.id);
-        if (state) this.render(state);
+        if (state) this.renderControls();
       }
     } finally {
       playback.negotiating = false;
@@ -159,7 +186,8 @@ export class MediaView {
     const element = playback.element;
     if (!element) return;
     const state = this.states.get(playback.id);
-    element.muted = !this.audible || (state?.muted ?? true);
+    element.muted =
+      !this.audible || this.soundBlocked || (state?.muted ?? true);
     element.volume = state?.volume ?? 1;
     if (state?.paused && element.readyState >= 2) {
       element.pause();
@@ -179,11 +207,10 @@ export class MediaView {
       })
       .catch((error) => {
         if (error.name === 'NotAllowedError' && !element.muted) {
-          this.audible = false;
-          this.sound.textContent = 'Enable sound';
-          this.sound.setAttribute('aria-pressed', 'false');
-          for (const active of this.playback.values())
-            if (active.element) active.element.muted = true;
+          if (playback.closed || playback.element !== element) return;
+          this.soundBlocked = true;
+          for (const active of this.playback.values()) this.volume(active);
+          this.renderControls();
         }
       });
   }
@@ -205,6 +232,60 @@ export class MediaView {
       node.srcObject = playback.stream;
       this.volume(playback);
     }
+    this.renderControls();
+  }
+  /** A page gesture can unlock client audio; it never starts source playback. */
+  interact(event: Event) {
+    this.dismiss();
+    if (!event.isTrusted || !this.soundBlocked || !this.audible) return;
+    this.soundBlocked = false;
+    for (const playback of this.playback.values()) this.volume(playback);
+    this.renderControls();
+  }
+  private dismiss() {
+    if (this.panel.matches(':popover-open')) this.panel.hidePopover();
+  }
+  private relevant(state: MediaState) {
+    const node = this.node(state.id) as HTMLMediaElement | null;
+    if (!node?.isConnected) return false;
+    // Background audio remains controllable even without a rendered element.
+    if (!state.paused && !state.muted && state.volume > 0) return true;
+    for (
+      let element: Element | null = node;
+      element;
+      element = element.ownerDocument.defaultView?.frameElement ?? null
+    ) {
+      if (
+        !element.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        })
+      )
+        return false;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+    }
+    return true;
+  }
+  private renderControls() {
+    const relevant = new Set<number>();
+    for (const state of this.states.values()) {
+      if (!this.relevant(state)) continue;
+      relevant.add(state.id);
+      this.render(state);
+    }
+    for (const [id, row] of this.rows) row.root.hidden = !relevant.has(id);
+    this.controls.hidden = !relevant.size;
+    if (!relevant.size) this.dismiss();
+    this.toggle.title = this.soundBlocked
+      ? 'Sound is muted — media controls'
+      : 'Media controls';
+    this.sound.textContent =
+      this.audible && !this.soundBlocked ? 'Mute audio' : 'Unmute audio';
+    this.sound.setAttribute(
+      'aria-pressed',
+      String(!this.audible || this.soundBlocked),
+    );
   }
   private render(state: MediaState) {
     let row = this.rows.get(state.id);
@@ -242,32 +323,30 @@ export class MediaView {
       row = { root, label, play, seek };
       this.rows.set(state.id, row);
     }
-    if (
-      state.status === 'unavailable' ||
-      this.playback.get(state.stream)?.failed
-    )
-      this.dock.open = true;
+    row.root.hidden = false;
+    const failure = this.playback.get(state.stream)?.failed;
     row.label.textContent =
-      state.reason ||
-      this.playback.get(state.stream)?.failed ||
-      (state.paused
-        ? 'Paused at source'
-        : state.status === 'streaming'
-          ? 'Playing from source'
-          : state.status === 'connecting'
-            ? 'Connecting media…'
-            : 'Waiting for source media');
+      state.status === 'unavailable'
+        ? 'This media cannot play in this browser.'
+        : failure
+          ? 'Playback interrupted. Check your connection.'
+          : state.reason
+            ? 'Playback could not start. Try the page’s play button.'
+            : state.paused
+              ? 'Paused'
+              : state.status === 'streaming'
+                ? 'Playing'
+                : 'Loading…';
+    row.play.disabled = state.status === 'unavailable';
     row.play.textContent = state.paused ? 'Play' : 'Pause';
     row.play.setAttribute(
       'aria-label',
       state.paused ? 'Play source media' : 'Pause source media',
     );
-    row.seek.hidden = state.duration <= 0;
+    row.seek.hidden = state.duration <= 0 || state.status === 'unavailable';
     row.seek.max = String(state.duration);
     if (document.activeElement !== row.seek)
       row.seek.value = String(state.time);
-    this.dock.hidden = false;
-    this.summary.textContent = `Media · ${this.states.size}`;
   }
   private release(token: string) {
     const playback = this.playback.get(token);
@@ -287,19 +366,19 @@ export class MediaView {
     this.states.delete(id);
     this.rows.get(id)?.root.remove();
     this.rows.delete(id);
-    this.dock.hidden = !this.states.size;
-    this.summary.textContent = `Media · ${this.states.size}`;
+    this.renderControls();
   }
   reset() {
     for (const token of this.playback.keys()) this.release(token);
     this.states.clear();
     this.rows.clear();
     this.list.replaceChildren();
-    this.dock.hidden = true;
+    this.dismiss();
+    this.controls.hidden = true;
   }
   destroy() {
     this.reset();
     clearInterval(this.timer);
-    this.dock.remove();
+    this.controls.remove();
   }
 }

@@ -101,6 +101,7 @@ function connect(takeover = false): void {
     element('viewport'),
     webSocketConnection(endpoint.href),
     {
+      mediaControls: element('media-controls'),
       onTabs: renderTabs,
       onState: (state) => {
         const changedTab = sourceID !== state.id;

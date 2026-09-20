@@ -176,14 +176,15 @@ test(
         ).length === 1,
     );
     assert.equal(
-      await viewer.locator('.floe-media-dock summary').textContent(),
-      'Media · 1',
+      await viewer.locator('.floe-media-row').count(),
+      0,
+      'The remaining hidden, muted preview keeps its stream without surfacing playback controls',
     );
     await source.evaluate(() => {
       document.querySelector('#preview')!.remove();
       (window as any).scanMedia();
     });
-    await viewer.locator('.floe-media-dock').waitFor({ state: 'hidden' });
+    await viewer.locator('.floe-media-controls').waitFor({ state: 'hidden' });
     assert.equal(
       await viewer.evaluate(
         () =>
@@ -280,7 +281,7 @@ test(
     }
     await source.locator('iframe').evaluate((frame) => frame.remove());
     await viewer
-      .locator('.floe-media-dock')
+      .locator('.floe-media-controls')
       .waitFor({ state: 'hidden', timeout: 3000 });
     assert.equal(
       await viewer.evaluate(

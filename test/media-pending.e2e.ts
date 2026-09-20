@@ -43,7 +43,9 @@ test(
     const viewer = await browser.newPage();
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
-    await viewer.locator('.floe-media-dock summary').click();
+    await viewer
+      .getByRole('button', { name: 'Media controls', exact: true })
+      .click();
     await viewer
       .getByRole('button', { name: 'Play source media', exact: true })
       .click();
@@ -54,6 +56,9 @@ test(
     await source.waitForFunction(() => (window as any).clicks === 1, null, {
       timeout: 1500,
     });
+    await viewer
+      .getByRole('button', { name: 'Media controls', exact: true })
+      .click();
     await viewer
       .getByRole('button', { name: 'Pause source media', exact: true })
       .click();
@@ -72,10 +77,9 @@ test(
       .getByRole('button', { name: 'Play source media', exact: true })
       .click();
     await viewer
-      .getByText(
-        'The source browser could not start playback. Use the page’s play control or reload the source.',
-        { exact: true },
-      )
+      .getByText('Playback could not start. Try the page’s play button.', {
+        exact: true,
+      })
       .waitFor({ timeout: 2000 });
     await viewer.frameLocator('#viewport iframe').locator('#count').click();
     await source.waitForFunction(() => (window as any).clicks === 2, null, {
@@ -84,6 +88,9 @@ test(
     await source
       .locator('video')
       .evaluate((v: HTMLVideoElement) => delete (v as any).play);
+    await viewer
+      .getByRole('button', { name: 'Media controls', exact: true })
+      .click();
     await viewer
       .getByRole('button', { name: 'Play source media', exact: true })
       .click();
