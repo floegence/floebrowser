@@ -8,178 +8,122 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="app">
-      <header class="app-header">
-        <a class="brand" aria-label="FloeBrowser home" href="./"
-          ><svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-            <path d="M5 5h18v6H11v5h10v6H5V5Z" fill="currentColor" />
-            <path d="m17 5 6 6V5h-6Z" fill="#b7c6ff" /></svg
-          ><span>FloeBrowser</span><span class="preview-label">PREVIEW</span></a
+    <main class="browser-window">
+      <div class="tab-strip">
+        <div id="tabs" role="tablist" aria-label="Source browser tabs"></div>
+        <button
+          id="new-tab"
+          class="icon-button"
+          aria-label="New tab"
+          title="New tab"
         >
-        <div class="header-right">
-          <span class="source-chip"
-            ><span class="source-dot"></span>Source Chromium</span
-          ><span class="status" id="status" role="status"
-            ><span></span>Connecting</span
-          >
-        </div>
-      </header>
-      <main class="browser-window">
-        <div class="tab-strip">
-          <div id="tabs" role="tablist" aria-label="Source browser tabs"></div>
+          +
+        </button>
+      </div>
+      <nav class="toolbar" aria-label="Browser navigation">
+        <div class="navigation-buttons">
+          <button class="icon-button" id="back" title="Back" aria-label="Back">
+            <svg viewBox="0 0 20 20"><path d="m11 5-5 5 5 5M6 10h10" /></svg>
+          </button>
           <button
-            id="new-tab"
             class="icon-button"
-            aria-label="New tab"
-            title="New tab"
+            id="forward"
+            title="Forward"
+            aria-label="Forward"
           >
-            +
+            <svg viewBox="0 0 20 20"><path d="m9 5 5 5-5 5M14 10H4" /></svg>
           </button>
-          <span class="mode-label">DOM projection</span>
-        </div>
-        <nav class="toolbar" aria-label="Browser navigation">
-          <div class="navigation-buttons">
-            <button
-              class="icon-button"
-              id="back"
-              title="Back"
-              aria-label="Back"
-            >
-              <svg viewBox="0 0 20 20">
-                <path d="m11 5-5 5 5 5M6 10h10" />
-              </svg></button
-            ><button
-              class="icon-button"
-              id="forward"
-              title="Forward"
-              aria-label="Forward"
-            >
-              <svg viewBox="0 0 20 20">
-                <path d="m9 5 5 5-5 5M14 10H4" />
-              </svg></button
-            ><button
-              class="icon-button"
-              id="reload"
-              title="Reload source page"
-              aria-label="Reload source page"
-            >
-              <svg viewBox="0 0 20 20">
-                <path d="M16 9a6 6 0 1 0-1 4M16 4v5h-5" />
-              </svg>
-            </button>
-          </div>
-          <form class="address-bar" id="address-form">
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <circle cx="10" cy="10" r="7" />
-              <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" /></svg
-            ><input
-              id="address"
-              aria-label="Website address"
-              placeholder="Enter a website address"
-              autocomplete="off"
-              spellcheck="false"
-            /><button
-              type="submit"
-              id="address-go"
-              class="address-go"
-              aria-label="Open website"
-              title="Open website"
-            >
-              <svg viewBox="0 0 20 20"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
-            </button>
-          </form>
-          <select
-            class="viewport-mode"
-            id="viewport-mode"
-            title="Auto size adapts the source browser to this window"
-            aria-label="Page size"
+          <button
+            class="icon-button"
+            id="reload"
+            title="Reload"
+            aria-label="Reload source page"
           >
-            <option value="responsive">Auto size</option>
-            <option value="fit">Fit page</option>
-            <option value="actual">Actual size</option>
-          </select>
-          <div id="media-controls"></div>
-        </nav>
-        <div class="stage">
-          <div id="viewport"></div>
-          <div class="welcome" id="welcome" hidden>
-            <div class="welcome-symbol">
-              <svg viewBox="0 0 32 32" fill="none">
-                <rect x="3" y="5" width="26" height="20" rx="4" />
-                <path d="M3 11h26M12 29h8M16 25v4m-5-11-3 3 3 3m10-6 3 3-3 3" />
-              </svg>
-            </div>
-            <span class="eyebrow">YOUR BROWSER. AT THE SOURCE.</span>
-            <h1>A familiar view.<br />A different place.</h1>
-            <p>
-              Browse with the source machine’s network and login.<br />Your page
-              stays there. Its live DOM appears here.
-            </p>
-            <button id="start-browsing" class="primary-button">
-              Enter a website <span>↗</span>
-            </button>
-            <div class="welcome-features">
-              <span>Selectable text</span><span>Source-side execution</span
-              ><span>No screen streaming</span>
-            </div>
-          </div>
-          <div class="connection-overlay" id="connection-overlay">
-            <div class="connection-card">
-              <span class="connection-symbol" id="connection-symbol"></span>
-              <h2 id="connection-title">Connecting to your browser</h2>
-              <p id="connection-description">
-                Preparing a live view from the source machine.
-              </p>
-              <button class="primary-button" id="reconnect" hidden>
-                Reconnect
-              </button>
-            </div>
-          </div>
-        </div>
-        <footer class="browser-footer">
-          <div>
-            <span class="footer-dot"></span
-            ><span id="page-status">Preparing the source browser</span>
-          </div>
-          <div class="footer-metrics">
-            <span id="action-time"></span
-            ><span id="viewport-size">1280 × 800</span
-            ><span class="footer-divider"></span><span>DOM mode</span>
-          </div>
-        </footer>
-      </main>
-      <div class="app-footer">
-        <span>Websites run on the source machine.</span
-        ><button id="limitations">About DOM mode <span>ⓘ</span></button>
-      </div>
-      <div class="toast" id="toast" role="status" hidden>
-        <span id="toast-message"></span
-        ><button id="dismiss-toast" aria-label="Dismiss message">×</button>
-      </div>
-      <dialog id="about-dialog">
-        <div class="dialog-header">
-          <h2>About DOM mode</h2>
-          <button id="close-about" class="icon-button" aria-label="Close">
-            ×
+            <svg viewBox="0 0 20 20">
+              <path d="M16 9a6 6 0 1 0-1 4M16 4v5h-5" />
+            </svg>
           </button>
         </div>
-        <p>
-          FloeBrowser rebuilds the source page’s DOM here. Website scripts,
-          requests and actions stay in the source browser.
-        </p>
-        <p>
-          Source tabs and embedded frames run on the source machine. Video and
-          audio are forwarded from source media elements. Protected or
-          origin-restricted media, canvas, file transfer and native browser
-          dialogs are not supported. Media controls show playback availability;
-          other unsupported content is marked in the page.
-        </p>
-        <p>
-          Reconnecting loads a fresh view. Unconfirmed actions are never
-          automatically repeated.
-        </p>
-        <button id="about-done" class="primary-button">Got it</button>
-      </dialog>
+        <form class="address-bar" id="address-form">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="7" />
+            <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" />
+          </svg>
+          <input
+            id="address"
+            aria-label="Website address"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="address-suggestions"
+            aria-expanded="false"
+            placeholder="Search or enter an address"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button
+            type="submit"
+            id="address-go"
+            class="icon-button"
+            aria-label="Open website"
+            title="Go"
+          >
+            <svg viewBox="0 0 20 20"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
+          </button>
+          <div
+            id="address-suggestions"
+            role="listbox"
+            aria-label="Address suggestions"
+            hidden
+          ></div>
+        </form>
+        <div id="media-controls"></div>
+        <span
+          class="status connecting"
+          id="status"
+          role="status"
+          title="Connecting"
+          >Connecting</span
+        >
+      </nav>
+      <div class="stage">
+        <div id="viewport"></div>
+        <div class="welcome" id="welcome" hidden>
+          <div class="new-tab-content">
+            <svg
+              class="new-tab-mark"
+              viewBox="0 0 28 28"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path d="M5 5h18v6H11v5h10v6H5V5Z" fill="currentColor" />
+              <path d="m17 5 6 6V5h-6Z" fill="#a8b9d6" />
+            </svg>
+            <h1>FloeBrowser</h1>
+            <button id="start-browsing">
+              <svg viewBox="0 0 20 20">
+                <circle cx="8.5" cy="8.5" r="5.5" />
+                <path d="m13 13 4 4" /></svg
+              ><span>Search or enter an address</span
+              ><kbd id="address-shortcut">Ctrl L</kbd>
+            </button>
+          </div>
+        </div>
+        <div class="connection-overlay" id="connection-overlay">
+          <div class="connection-card">
+            <span class="connection-symbol" id="connection-symbol"></span>
+            <h2 id="connection-title">Connecting to your browser</h2>
+            <p id="connection-description">Your page will appear shortly.</p>
+            <button class="primary-button" id="reconnect" hidden>
+              Reconnect
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+    <div class="toast" id="toast" role="status" hidden>
+      <span id="toast-message"></span
+      ><button id="dismiss-toast" aria-label="Dismiss message">×</button>
     </div>
     <script type="module" src="./app.js"></script>
   </body>

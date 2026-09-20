@@ -63,6 +63,7 @@ export class DOMBrowserView {
   private sequence = 0;
   private nextID = 0;
   private connected = false;
+  private tabCommands = 0;
   private disconnectReason?: DisconnectReason;
   private ready = false;
   private destroyed = false;
@@ -261,7 +262,7 @@ export class DOMBrowserView {
         this.replayer = undefined;
         this.tab = message.state.active;
         this.epoch = '';
-        this.options.onStatus?.('connecting');
+        this.options.onStatus?.(this.connected ? 'refreshing' : 'connecting');
       }
       this.options.onTabs?.(message.state);
       return;
@@ -433,13 +434,21 @@ export class DOMBrowserView {
   }
 
   dispatch(action: Action): Promise<boolean> {
+    if (action.kind.startsWith('tab_')) {
+      this.queuedWheel = undefined;
+      this.tabCommands++;
+      return this.sendAction(action).finally(() => {
+        this.tabCommands--;
+        this.scheduleViewport();
+      });
+    }
     // A click, key, navigation or other action is an ordering barrier.
     this.flushWheel();
     return this.sendAction(action);
   }
 
   private queueWheel(action: Wheel): void {
-    if (!this.connected || !this.ready) return;
+    if (!this.connected || !this.ready || this.tabCommands) return;
     const prior = this.queuedWheel;
     if (
       prior &&
@@ -480,6 +489,7 @@ export class DOMBrowserView {
   private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
+      (this.tabCommands > 0 && !action.kind.startsWith('tab_')) ||
       (!this.ready &&
         ![
           'navigate',
@@ -553,12 +563,19 @@ export class DOMBrowserView {
       this.destroyed ||
       !this.connected ||
       !this.ready ||
+      this.tabCommands > 0 ||
       this.viewportMode !== 'responsive'
     )
       return;
     // Keep one in-flight resize and coalesce a drag to its latest dimensions.
     this.viewportTimer = setTimeout(() => {
-      if (this.viewportPending || !this.connected || !this.ready) return;
+      if (
+        this.viewportPending ||
+        !this.connected ||
+        !this.ready ||
+        this.tabCommands
+      )
+        return;
       const width = Math.min(
         MAX_VIEWPORT_DIMENSION,
         this.container.clientWidth,

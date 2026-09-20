@@ -39,10 +39,6 @@ async function adapted(source: Page, viewer: Page) {
     size,
     { timeout: 4000 },
   );
-  assert.equal(
-    await viewer.locator('#viewport-size').textContent(),
-    `${size.width} × ${size.height}`,
-  );
 }
 
 test(
@@ -157,7 +153,7 @@ test(
 );
 
 test(
-  'auto size follows selected tabs and the controlling window while fixed view modes keep the source size',
+  'automatic sizing follows selected tabs and the controlling window',
   { timeout: 20000 },
   async (t) => {
     const site = await fixture();
@@ -183,27 +179,11 @@ test(
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
     await adapted(source, viewer);
-    const frozen = source.viewportSize();
-    await viewer.getByLabel('Page size', { exact: true }).selectOption('fit');
-    await viewer.setViewportSize({ width: 850, height: 700 });
-    await viewer.waitForFunction(
-      () =>
-        document.querySelector('.floe-projection')!.getBoundingClientRect()
-          .width < 850,
-    );
-    assert.deepEqual(source.viewportSize(), frozen);
-    await viewer
-      .getByLabel('Page size', { exact: true })
-      .selectOption('actual');
     assert.equal(
-      await viewer
-        .locator('.floe-projection')
-        .evaluate((e) => e.getBoundingClientRect().width),
-      frozen!.width,
+      await viewer.getByLabel('Page size', { exact: true }).count(),
+      0,
     );
-    await viewer
-      .getByLabel('Page size', { exact: true })
-      .selectOption('responsive');
+    await viewer.setViewportSize({ width: 850, height: 700 });
     await adapted(source, viewer);
     await viewer.getByRole('button', { name: 'New tab', exact: true }).click();
     await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
