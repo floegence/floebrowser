@@ -337,7 +337,11 @@ export class BrowserProjection {
       event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:image'
     ) {
-      const { id, src } = event.data.payload as { id: number; src: string };
+      const { id, src, rawSrc } = event.data.payload as {
+        id: number;
+        src: string;
+        rawSrc?: string | null;
+      };
       if (Number.isInteger(id) && typeof src === 'string')
         this.recorded({
           type: 3,
@@ -347,9 +351,43 @@ export class BrowserProjection {
             adds: [],
             removes: [],
             texts: [],
-            attributes: [{ id, attributes: { src } }],
+            attributes: [
+              {
+                id,
+                attributes: { src },
+                ...(rawSrc === null || typeof rawSrc === 'string'
+                  ? { floeAttributes: { src: rawSrc } }
+                  : {}),
+              },
+            ],
           },
         });
+      return;
+    }
+    if (
+      event.type === EventType.Custom &&
+      event.data.tag === 'floebrowser:stylesheet'
+    ) {
+      const { id, stylesheet } = event.data.payload as any;
+      if (
+        Number.isInteger(id) &&
+        stylesheet &&
+        typeof stylesheet.href === 'string' &&
+        typeof stylesheet.enabled === 'boolean' &&
+        typeof stylesheet.media === 'string' &&
+        (stylesheet.text === null || typeof stylesheet.text === 'string')
+      )
+        this.recorded({
+          type: 3,
+          timestamp: event.timestamp,
+          data: {
+            source: 0,
+            adds: [],
+            removes: [],
+            texts: [],
+            attributes: [{ id, attributes: {}, floeStylesheet: stylesheet }],
+          },
+        } as unknown as eventWithTime);
       return;
     }
     if (

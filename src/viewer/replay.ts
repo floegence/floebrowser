@@ -1,4 +1,5 @@
 import type { playerConfig } from '@rrweb/replay';
+import { MATHML_ATTRIBUTE } from '../shared/style.js';
 import {
   EventType,
   IncrementalSource,
@@ -37,5 +38,54 @@ export const liveScroll: NonNullable<playerConfig['plugins']>[number] = {
     // Source CSS can request smooth scrolling too. These are already-observed
     // positions, so even that animation must only run at the source.
     target?.scrollTo({ left: x, top: y, behavior: 'instant' });
+  },
+};
+
+/** rrweb's whole-sheet mutation path only recognizes uppercase HTML STYLE. */
+export const svgStyles: NonNullable<playerConfig['plugins']>[number] = {
+  handler(event, _isSync, { replayer }) {
+    if (
+      event.type !== EventType.IncrementalSnapshot ||
+      event.data.source !== IncrementalSource.Mutation
+    )
+      return;
+    for (const mutation of event.data.attributes) {
+      const css = mutation.attributes._cssText;
+      if (typeof css !== 'string') continue;
+      const node = replayer.getMirror().getNode(mutation.id) as Element | null;
+      if (
+        node?.localName === 'style' &&
+        node.namespaceURI === 'http://www.w3.org/2000/svg'
+      ) {
+        node.textContent = css;
+        node.removeAttribute('_cssText');
+      }
+    }
+  },
+};
+
+/** rrweb serializes only the SVG namespace; restore native mathematical layout. */
+export const mathElements: NonNullable<playerConfig['plugins']>[number] = {
+  onBuild(node, { id, replayer }) {
+    const element = node as Element;
+    if (node.nodeType !== 1 || !element.hasAttribute(MATHML_ATTRIBUTE)) return;
+    const namespace = 'http://www.w3.org/1998/Math/MathML';
+    if (element.namespaceURI === namespace) return;
+    const replacement = element.ownerDocument.createElementNS(
+      namespace,
+      element.localName,
+    );
+    for (const attribute of element.attributes) {
+      if (attribute.namespaceURI)
+        replacement.setAttributeNS(
+          attribute.namespaceURI,
+          attribute.name,
+          attribute.value,
+        );
+      else replacement.setAttribute(attribute.name, attribute.value);
+    }
+    while (element.firstChild) replacement.appendChild(element.firstChild);
+    element.replaceWith(replacement);
+    replayer.getMirror().replace(id, replacement);
   },
 };

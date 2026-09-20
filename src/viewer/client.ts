@@ -1,5 +1,5 @@
 import { MediaView } from './media.js';
-import { liveEvent, liveScroll } from './replay.js';
+import { liveEvent, liveScroll, svgStyles, mathElements } from './replay.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import { Replayer } from '@rrweb/replay';
 import {
@@ -326,6 +326,8 @@ export class DOMBrowserView {
         triggerFocus: false,
         plugins: [
           liveScroll,
+          svgStyles,
+          mathElements,
           {
             onBuild: (node) => {
               if (node.nodeName === 'HTML')
@@ -337,7 +339,6 @@ export class DOMBrowserView {
           '[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
           '[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
           'a,button,select,input[type=checkbox],input[type=radio]{cursor:pointer}',
-          '*::-webkit-scrollbar{width:0!important;height:0!important}',
         ],
       });
       this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {

@@ -3,9 +3,39 @@ import type { CDPSession } from 'playwright';
 import parseCSS from 'postcss-safe-parser';
 import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
+import { STYLESHEET_LINK_ATTRIBUTE, styleAttributes } from '../shared/style.js';
 
 export const SOURCE_LINK_ATTRIBUTE = 'data-floebrowser-link';
-const linkSelectors = selectorParser((selectors) => {
+const projectedSelectors = selectorParser((selectors) => {
+  const tags: selectorParser.Tag[] = [];
+  selectors.walkTags((tag) => {
+    tags.push(tag);
+  });
+  for (const tag of tags) {
+    if (tag.namespace) continue;
+    const name = tag.value.toLowerCase();
+    const selector =
+      name === 'link'
+        ? `:is(link,style:where([${STYLESHEET_LINK_ATTRIBUTE}]))`
+        : name === 'style'
+          ? `style:not(:where([${STYLESHEET_LINK_ATTRIBUTE}]))`
+          : undefined;
+    if (selector)
+      tag.replaceWith(...selectorParser().astSync(selector).nodes[0]!.nodes);
+  }
+  selectors.walkAttributes((attribute) => {
+    const name =
+      attribute.namespace && attribute.namespace !== '*'
+        ? `${attribute.namespace}:${attribute.attribute}`
+        : attribute.attribute;
+    const projected = Object.hasOwn(styleAttributes, name.toLowerCase())
+      ? styleAttributes[name.toLowerCase()]
+      : undefined;
+    if (projected) {
+      attribute.attribute = projected;
+      attribute.namespace = '';
+    }
+  });
   selectors.walkPseudos((pseudo) => {
     if (
       [':link', ':any-link', ':-webkit-any-link'].includes(
@@ -32,6 +62,35 @@ type Resource = {
 type ResponseMetadata = { url: string; kind: string; type: string };
 const MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+
+function resourceKind(kind: string, mimeType: string): string | undefined {
+  if (['Stylesheet', 'Image', 'Font'].includes(kind)) return kind;
+  // Chromium classifies external SVG symbol documents used by <use> as Other.
+  if (kind === 'Other' && mimeType.toLowerCase() === 'image/svg+xml')
+    return 'Image';
+  return undefined;
+}
+
+function unescapeCSS(value: string): string {
+  return value.replace(
+    /\\(?:([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\n\r\f])|(.))/gi,
+    (_match, hex, newline, character) => {
+      if (hex) {
+        const code = Number.parseInt(hex, 16);
+        return !code || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+          ? '\ufffd'
+          : String.fromCodePoint(code);
+      }
+      return newline ? '' : character;
+    },
+  );
+}
+function quoteCSS(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\a ');
+}
 
 /** Only serves responses observed in the source browser. Never fetches a URL. */
 export class ResourceStore {
@@ -79,9 +138,10 @@ export class ResourceStore {
       generation++;
     };
     const received = (event: any) => {
+      const kind = resourceKind(event.type, event.response.mimeType);
       if (
         this.closed ||
-        !['Stylesheet', 'Image', 'Font'].includes(event.type) ||
+        !kind ||
         event.response.status < 200 ||
         event.response.status >= 300 ||
         this.requests.size >= 2048
@@ -90,7 +150,7 @@ export class ResourceStore {
       this.reference(event.response.url, event.response.url);
       this.requests.set(prefix + event.requestId, {
         url: event.response.url,
-        kind: event.type,
+        kind,
         type: event.response.mimeType.toLowerCase(),
       });
     };
@@ -160,8 +220,9 @@ export class ResourceStore {
       frames.push(...(tree.childFrames ?? []));
       for (const entry of tree.resources) {
         if (this.closed || obsolete()) return;
+        const kind = resourceKind(entry.type, entry.mimeType);
         if (
-          !['Stylesheet', 'Image', 'Font'].includes(entry.type) ||
+          !kind ||
           entry.failed ||
           entry.canceled ||
           (entry.contentSize ?? 0) > MAX_RESOURCE_BYTES
@@ -185,7 +246,7 @@ export class ResourceStore {
               resource,
               {
                 url: entry.url,
-                kind: entry.type,
+                kind,
                 type: entry.mimeType.toLowerCase(),
               },
               Buffer.from(body.content, body.base64Encoded ? 'base64' : 'utf8'),
@@ -242,6 +303,18 @@ export class ResourceStore {
   value(css: string, base: string): string {
     const parsed = valueParser(css);
     parsed.walk((node) => {
+      if (
+        node.type === 'function' &&
+        ['image-set', '-webkit-image-set'].includes(node.value.toLowerCase())
+      ) {
+        for (const candidate of node.nodes)
+          if (candidate.type === 'string') {
+            candidate.quote = '"';
+            candidate.value = quoteCSS(
+              this.reference(unescapeCSS(candidate.value), base),
+            );
+          }
+      }
       if (node.type === 'function' && node.value.toLowerCase() === 'url') {
         const raw = valueParser
           .stringify(node.nodes)
@@ -251,7 +324,7 @@ export class ResourceStore {
           {
             type: 'string',
             quote: '"',
-            value: this.reference(raw, base),
+            value: quoteCSS(this.reference(unescapeCSS(raw), base)),
             sourceIndex: 0,
             sourceEndIndex: 0,
           },
@@ -270,7 +343,7 @@ export class ResourceStore {
       try {
         // A data attribute has the same specificity as the original pseudo-class
         // and preserves link styling without a client-side navigation target.
-        rule.selector = linkSelectors.processSync(rule.selector);
+        rule.selector = projectedSelectors.processSync(rule.selector);
       } catch {
         // An invalid selector must not discard unrelated rules in the sheet.
       }
@@ -285,8 +358,12 @@ export class ResourceStore {
         const first = parsed.nodes.find(
           (node) => node.type !== 'space' && node.type !== 'comment',
         );
-        if (first?.type === 'string')
-          first.value = this.reference(first.value, base);
+        if (first?.type === 'string') {
+          first.quote = '"';
+          first.value = quoteCSS(
+            this.reference(unescapeCSS(first.value), base),
+          );
+        }
         rule.params = parsed.toString();
       }
     });

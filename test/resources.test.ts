@@ -41,6 +41,18 @@ test('recovers only eligible resources observed in the inspected frame tree', as
           resources: [
             sheet,
             { ...sheet, url: 'https://source.test/script', type: 'Script' },
+            {
+              ...sheet,
+              url: 'https://source.test/other',
+              type: 'Other',
+              mimeType: 'text/html',
+            },
+            {
+              ...sheet,
+              url: 'https://source.test/svg-script',
+              type: 'Script',
+              mimeType: 'image/svg+xml',
+            },
             { ...sheet, url: 'https://source.test/failed', failed: true },
             { ...sheet, url: 'https://source.test/canceled', canceled: true },
             {

@@ -73,7 +73,13 @@ The client runs trusted viewer code, but never the website's JavaScript. Website
 
 When attaching to an existing page or a fast-loading popup, resource capture also inspects the source frame tree and reads retained stylesheets, images and fonts. Document load completion revisits resources that were still loading during attachment. These reads run outside the input queue, use the same bounded per-tab cache as network capture, and cannot overwrite a newer captured response or survive navigation or detachment. Only URLs observed in that source page and its frames are eligible; resource caches are not shared between tabs. Chromium may already have discarded a body, particularly a decoded font, in which case it remains unavailable.
 
-Stylesheet rewriting uses a tolerant CSS parser so malformed declarations do not discard the surrounding rules. Imports and resource URLs still resolve only through captured source responses. HTML links retain an inert link marker instead of a navigation target; `:link` and `:any-link` selectors are rewritten with the same specificity, including nested selectors. Adding or removing a source link updates that marker. This preserves link styling without enabling viewer-side navigation or exposing browser visit history.
+Stylesheet rewriting uses a tolerant CSS parser so malformed declarations do not discard the surrounding rules. CSS escapes, imports, `url()` and string candidates in `image-set()` resolve through captured source resources. CSSOM insertion, declaration edits and whole-sheet replacement use the source stylesheet or frame base URL. Constructed sheets retain this behavior inside open shadow roots and cross-origin frames.
+
+Source stylesheet links use a stable projected style node so preloading, activation, URL replacement, link media attributes and disabled state do not leave stale rules behind. Style text changes replace the sheet content; CSSOM rule edits retain their ordered incremental path. Disabling a constructed sheet suppresses its projected rules while source edits continue, and enabling it restores the current source rules. The recorder observes the native disabled setter without changing its result and restores that observer on detach.
+
+Selectors keep their source meaning when replay must make an attribute inert. Original `href`, `src`, `srcset`, `sizes`, `poster`, `background`, `xlink:href` and `contenteditable` values are retained in reserved data attributes for selector matching. The active URL or editing attribute is still sanitized separately. Link pseudo-classes, URL attribute selectors and the `link`/`style` tag distinction are rewritten with the original specificity, including nested selectors. Source-provided reserved markers are discarded; this does not enable viewer-side navigation or expose browser visit history.
+
+SVG style text updates retain their SVG namespace. MathML elements are rebuilt in the native MathML namespace, preserving fractions, exponents and live node identities. Site-defined scrollbar gutters and scrollbar widths are retained instead of being forced to zero.
 
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
@@ -232,6 +238,39 @@ Each Chromium page or out-of-process frame session uses an 8 MiB per-resource re
 
 Projection data remains in process memory; there is no session recording database or replay log. DOM and typed text can contain sensitive information. The library must not be connected to model history or general application logging as a substitute for a private viewer channel. Password inputs retain rrweb's masking behavior; this is not a general sensitive-content detection system.
 
+## Style fidelity qualification
+
+Style changes are checked against source-browser computed styles and geometry, with actual decoding of projected image resources. The viewer is blocked from requesting the fixture website. Source execution, native setter cleanup and reconstruction after reconnect are part of these checks.
+
+| Failure class                      | Covered behavior                                                                                                                      | Evidence                                                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Resources missed before attachment | Loaded pages, cached popups, in-flight stylesheets, imports, source-only images/fonts, navigation and detachment fences               | `test/resource-capture.e2e.ts`, `test/resources.test.ts`                   |
+| CSS parsing and URL rewriting      | Malformed declarations, escaped URLs, image-set strings, imports, nested selectors and reserved marker isolation                      | `test/stylesheets.e2e.ts`, `test/style-projection.test.ts`                 |
+| Live stylesheet lifecycle          | Preload activation, href replacement, link media attributes, disabled sheets, edits while disabled and reconstruction after reconnect | `test/style-fidelity.e2e.ts`                                               |
+| CSSOM and frame ownership          | Rule insertion, declaration edits, replace/replaceSync, constructed sheets, open shadow roots and cross-origin frame base URLs        | `test/style-fidelity.e2e.ts`, `test/frames.e2e.ts`                         |
+| Selector and layout fidelity       | Raw URL/editable attribute matching, link/style tag identity, cascade layers, generated content, flex/grid and container queries      | `test/style-fidelity.e2e.ts`, `test/stylesheets.e2e.ts`                    |
+| SVG and mathematical content       | External SVG symbols, inline SVG styles, MathML layout, live edits and reconstruction                                                 | `test/style-fidelity.e2e.ts`, `test/resource-capture.e2e.ts`               |
+| Interactive reflow                 | Automatic viewport sizing, scrollbar gutters, selected tabs, window handoff, scrolling and media preservation during resizing         | `test/viewport.e2e.ts`, `test/scroll-latency.e2e.ts`, `test/chrome.e2e.ts` |
+
+The test suite also retains an explicit TODO reproducer for CSSOM serialization of a variable shorthand followed by a longhand override, such as `border: var(--line) solid; border-color: red`. Chromium serializes some pending shorthand values as empty longhands, so rrweb cannot reconstruct the original border from that text. This is unresolved and can cause missing borders and small geometry differences; it must not be reported as a passing fidelity check.
+
+This matrix qualifies the listed Chromium fixtures, not every CSS or browser feature. Resources whose bytes Chromium has discarded, local fonts absent from the client, differences in CSS support or device/display preferences, and browser-native state such as visited-link history can still differ. Closed shadow roots, canvas and DRM remain outside DOM replay. New compatibility failures should first become source/viewer comparison fixtures in this matrix; do not add site-name exceptions, client website requests, periodic full-page refreshes or a screenshot fallback.
+
+Public-site qualification on 2026-09-20 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
+
+| Website category | Sample and observed outcome                                                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| News             | Baidu News and Tencent News `/ch/fx`, including opening the Tencent section in a source popup: inspected layouts and images matched           |
+| Documentation    | MDN CSS Grid and Wikipedia CSS: inspected heading/content layout matched after preserving scrollbar gutters                                   |
+| Code hosting     | GitHub rrweb repository: content and icons rendered, with the unresolved CSSOM border/geometry discrepancy described above                    |
+| Rich editing     | Quill home-page editor: text insertion reached the source, and projected content and MathML matched after the namespace fix                   |
+| DOM game         | `ovolve.github.io/2048-AI/`: board geometry matched and arrow-key moves/merges changed the source board and projected tiles consistently      |
+| Interactive map  | Leaflet quick-start example: layout, zoom action and newly loaded map tiles matched                                                           |
+| Canvas game      | `play2048.co`: the source rendered a canvas game; the viewer showed an unavailable placeholder. Not supported                                 |
+| WebGL / Three.js | Official `webgl_animation_keyframes` example: the source rendered the animated 3D scene; the viewer showed canvas placeholders. Not supported |
+
+Canvas and WebGL are graphics surfaces rather than DOM content. Supporting their actual pictures and input requires a separately designed source-owned graphics transport; enabling unsafe rrweb canvas replay or treating an opened page as a passing game test is not acceptable.
+
 ## Current limits
 
 | Surface                                                      | Preview behavior                                                                                                                                        |
@@ -249,7 +288,7 @@ Projection data remains in process memory; there is no session recording databas
 | Closed shadow roots, DRM, WebAuthn, browser chrome, DevTools | Not supported or qualified                                                                                                                              |
 | Arbitrary rich editors, custom drag-and-drop, CSS edge cases | Require site-specific compatibility qualification                                                                                                       |
 
-The included real-browser tests verify the declared fixture flows. They do not certify every website or every operating system. Native scrollbar interaction in the projected document is suppressed; scrolling is forwarded through wheel and keyboard input to preserve source ownership.
+The included real-browser tests verify the declared fixture flows. They do not certify every website or every operating system. Wheel and keyboard scrolling are forwarded to the source. Root-frame native scrollbar interaction remains disabled; dragging native scrollbars inside nested containers and differences in operating-system scrollbar metrics are not qualified.
 
 ## Development and verification
 

@@ -1,11 +1,18 @@
 import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import { SOURCE_LINK_ATTRIBUTE, type ResourceStore } from './resources.js';
+import {
+  MATHML_ATTRIBUTE,
+  STYLESHEET_LINK_ATTRIBUTE,
+  styleAttributes,
+  type SourceStylesheet,
+} from '../shared/style.js';
 
 type Serialized = Record<string, any>;
 const blocked = new Set(['canvas', 'object', 'embed']);
 const inert = new Set(['script', 'base', 'meta', 'source', 'track']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
+const reservedStyleAttributes = new Set(Object.values(styleAttributes));
 
 /** Projects untrusted rrweb data into an inert, source-resource-only document. */
 export class DOMProjection {
@@ -25,10 +32,28 @@ export class DOMProjection {
     attributes: Serialized,
     tag: string,
     base: string,
+    raw: Serialized = {},
+    sheet?: SourceStylesheet,
   ): Serialized {
     const result: Serialized = {};
+    for (const [name, marker] of Object.entries(styleAttributes)) {
+      if (Object.hasOwn(raw, name)) result[marker] = raw[name];
+      else if (Object.hasOwn(attributes, name))
+        result[marker] = attributes[name];
+    }
     for (const [key, value] of Object.entries(attributes)) {
-      if (key === SOURCE_LINK_ATTRIBUTE) continue;
+      if (
+        key === SOURCE_LINK_ATTRIBUTE ||
+        key === MATHML_ATTRIBUTE ||
+        key === STYLESHEET_LINK_ATTRIBUTE ||
+        reservedStyleAttributes.has(key)
+      )
+        continue;
+      if (
+        tag === 'link' &&
+        ['href', 'rel', 'as', 'disabled', '_cssText'].includes(key)
+      )
+        continue;
       if (key === 'href' && ['a', 'area'].includes(tag)) {
         result[SOURCE_LINK_ATTRIBUTE] = value === null ? null : '';
         result[key] = null;
@@ -98,6 +123,30 @@ export class DOMProjection {
     }
     if (tag === 'iframe' || tag === 'frame')
       result.sandbox = 'allow-same-origin';
+    if (tag === 'link' || (tag === 'style' && sheet)) {
+      // A stable style node handles activation, URL changes and CSSOM text;
+      // rrweb must never turn a preloaded link into a permanent inert node.
+      sheet ??= {
+        href: attributes.href ?? base,
+        text: attributes._cssText ?? null,
+        enabled:
+          !!attributes._cssText ||
+          (String(attributes.rel)
+            .toLowerCase()
+            .split(/\s+/)
+            .includes('stylesheet') &&
+            !Object.hasOwn(attributes, 'disabled')),
+        media: attributes.media ?? '',
+      };
+      result.media = sheet.enabled ? sheet.media : 'not all';
+      result._cssText = !sheet.enabled
+        ? ''
+        : this.resources.css(
+            sheet.text ?? `@import url(${JSON.stringify(sheet.href)});`,
+            sheet.href || base,
+          );
+      if (tag === 'link') result[STYLESHEET_LINK_ATTRIBUTE] = '';
+    }
     return result;
   }
 
@@ -149,18 +198,27 @@ export class DOMProjection {
         node.isSVG = false;
         return;
       }
-      if (
-        inert.has(original) ||
-        (original === 'link' &&
-          node.attributes?.rel !== 'stylesheet' &&
-          !node.attributes?._cssText)
-      ) {
+      if (inert.has(original)) {
         node.tagName = 'noscript';
         node.attributes = {};
         node.childNodes = [];
         return;
       }
-      node.attributes = this.attributes(node.attributes ?? {}, original, base);
+      node.attributes = this.attributes(
+        node.attributes ?? {},
+        original,
+        base,
+        node.floeAttributes,
+        node.floeStylesheet,
+      );
+      if (node.floeNamespace === 'http://www.w3.org/1998/Math/MathML')
+        node.attributes[MATHML_ATTRIBUTE] = '';
+      delete node.floeNamespace;
+      if (['link', 'style'].includes(original) && node.floeStylesheet)
+        node.childNodes = [];
+      delete node.floeAttributes;
+      delete node.floeStylesheet;
+      if (original === 'link') node.tagName = 'style';
       parentTag = original;
     } else if (node.type === 3 && (parentTag === 'style' || node.isStyle)) {
       this.tags.set(node.id, 'style');
@@ -243,12 +301,18 @@ export class DOMProjection {
             !blocked.has(this.tags.get(entry.id) ?? '') &&
             !inert.has(this.tags.get(entry.id) ?? ''),
         );
-        for (const entry of data.attributes)
+        for (const entry of data.attributes) {
           entry.attributes = this.attributes(
             entry.attributes,
             this.tags.get(entry.id) ?? '',
-            this.bases.get(entry.id) ?? base,
+            entry.floeBase ?? this.bases.get(entry.id) ?? base,
+            entry.floeAttributes,
+            entry.floeStylesheet,
           );
+          delete entry.floeBase;
+          delete entry.floeAttributes;
+          delete entry.floeStylesheet;
+        }
         for (const text of data.texts)
           if (this.tags.get(text.id) === 'style')
             text.value = this.resources.css(
@@ -259,13 +323,19 @@ export class DOMProjection {
         data.source === IncrementalSource.StyleSheetRule ||
         data.source === IncrementalSource.AdoptedStyleSheet
       ) {
-        base = this.bases.get(data.id) ?? base;
+        base = data.floeBase ?? this.bases.get(data.id) ?? base;
+        delete data.floeBase;
         for (const addition of data.adds ?? [])
           addition.rule = this.resources.css(addition.rule, base);
         for (const sheet of data.styles ?? [])
           for (const rule of sheet.rules ?? [])
             rule.rule = this.resources.css(rule.rule, base);
+        for (const method of ['replace', 'replaceSync'])
+          if (typeof data[method] === 'string')
+            data[method] = this.resources.css(data[method], base);
       } else if (data.source === IncrementalSource.StyleDeclaration) {
+        base = data.floeBase ?? this.bases.get(data.id) ?? base;
+        delete data.floeBase;
         if (data.set)
           data.set.value = this.resources.value(data.set.value, base);
       } else if (data.source === IncrementalSource.Font && !data.buffer)

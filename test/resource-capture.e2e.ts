@@ -49,13 +49,21 @@ async function fixture(t: test.TestContext, delayed = false) {
   assetPort = (assets.address() as AddressInfo).port;
   const site = createServer((request, response) => {
     requests.push(request.url!);
+    if (request.url === '/symbols.svg') {
+      response.setHeader('Content-Type', 'image/svg+xml');
+      response.setHeader('Cache-Control', 'public, max-age=3600');
+      response.end(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect id="icon" width="24" height="24" fill="green"/></svg>',
+      );
+      return;
+    }
     response.setHeader('Content-Type', 'text/html');
     response.setHeader(
       'Set-Cookie',
       'source-session=fixture; HttpOnly; SameSite=Lax; Path=/',
     );
     response.end(
-      `<!doctype html><title>Resource fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="http://127.0.0.1:${assetPort}/style.css"><div id="panel"><div id="picture"></div><span>Already loaded source content</span></div><img id="image" src="http://127.0.0.1:${assetPort}/image.svg"><script>window.sourceRuns=(window.sourceRuns||0)+1</script>`,
+      `<!doctype html><title>Resource fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="http://127.0.0.1:${assetPort}/style.css"><div id="panel"><div id="picture"></div><span>Already loaded source content</span></div><img id="image" src="http://127.0.0.1:${assetPort}/image.svg"><svg width="24" height="24"><use id="symbol" href="/symbols.svg#icon"/></svg><script>window.sourceRuns=(window.sourceRuns||0)+1</script>`,
     );
   });
   await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
@@ -95,6 +103,16 @@ async function verify(
     { timeout: 3000 },
   );
   const projected = viewer.frameLocator('#viewport iframe');
+  await viewer.waitForFunction(
+    () => {
+      const symbol = document
+        .querySelector<HTMLIFrameElement>('#viewport iframe')
+        ?.contentDocument?.querySelector<SVGGraphicsElement>('#symbol');
+      return symbol?.getBBox().width === 24;
+    },
+    undefined,
+    { timeout: 3000 },
+  );
   await projected
     .locator('#image')
     .evaluate((image: HTMLImageElement) => image.decode());
