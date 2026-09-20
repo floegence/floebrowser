@@ -14,6 +14,7 @@ type Capture = {
   retired: boolean;
   status: MediaState['status'];
   reason: string;
+  playbackError?: string;
   previous: string;
   src: string;
   offer?: string;
@@ -132,17 +133,6 @@ export function observeMedia(
       };
       stream.addEventListener('addtrack', changed);
       stream.addEventListener('removetrack', changed);
-      (element as any)[key] = {
-        answer: async (token: string, sdp: string) => {
-          if (
-            capture.retired ||
-            token !== capture.token ||
-            peer.signalingState !== 'have-local-offer'
-          )
-            return;
-          await peer.setRemoteDescription({ type: 'answer', sdp });
-        },
-      };
       peer.onconnectionstatechange = () => {
         if (capture.retired) return;
         if (peer.connectionState === 'connected') {
@@ -209,9 +199,28 @@ export function observeMedia(
           retries: 0,
         };
         captures.set(element, capture);
+        const current = capture;
+        (element as any)[key] = {
+          answer: async (token: string, sdp: string) => {
+            if (
+              current.retired ||
+              token !== current.token ||
+              current.peer?.signalingState !== 'have-local-offer'
+            )
+              return;
+            await current.peer.setRemoteDescription({ type: 'answer', sdp });
+          },
+          playbackFailed: () => {
+            if (!current.retired)
+              current.playbackError =
+                'The source browser could not start playback. Use the page’s play control or reload the source.';
+          },
+        };
       }
       capture.id = id;
       start(capture);
+      if (!element.paused && element.readyState >= 3)
+        capture.playbackError = '';
       const state: MediaState = {
         kind: 'state',
         id,
@@ -222,7 +231,7 @@ export function observeMedia(
         muted: element.muted,
         volume: element.volume,
         status: capture.status,
-        reason: capture.reason,
+        reason: capture.reason || capture.playbackError || '',
       };
       const serialized = JSON.stringify(state);
       if (force || serialized !== capture.previous) {

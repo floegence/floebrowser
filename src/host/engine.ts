@@ -606,17 +606,31 @@ export class BrowserProjection {
       if (!element) throw new CommandError('target_unavailable');
       try {
         assertCurrent();
-        const result = await element.evaluate(async (node, action) => {
-          if (!['VIDEO', 'AUDIO'].includes(node.tagName) || !node.isConnected)
-            return false;
-          const media = node as HTMLMediaElement;
-          if (action.operation === 'play') await media.play();
-          else if (action.operation === 'pause') media.pause();
-          else if (action.time !== undefined && Number.isFinite(media.duration))
-            media.currentTime = Math.min(action.time, media.duration);
-          else return false;
-          return true;
-        }, action);
+        const result = await element.evaluate(
+          (node, { action, key }) => {
+            if (!['VIDEO', 'AUDIO'].includes(node.tagName) || !node.isConnected)
+              return false;
+            const media = node as HTMLMediaElement;
+            if (action.operation === 'play') {
+              // Acknowledge issuing the request. Waiting for buffering here would
+              // hold the serialized input queue, including pause and disconnect.
+              if (media.paused) {
+                const capture = (media as any)[key];
+                void media.play().catch((error) => {
+                  if (error.name !== 'AbortError') capture?.playbackFailed();
+                });
+              }
+            } else if (action.operation === 'pause') media.pause();
+            else if (
+              action.time !== undefined &&
+              Number.isFinite(media.duration)
+            )
+              media.currentTime = Math.min(action.time, media.duration);
+            else return false;
+            return true;
+          },
+          { action, key: this.recorderKey },
+        );
         if (!result) throw new CommandError('unsupported');
       } finally {
         await element.dispose();
