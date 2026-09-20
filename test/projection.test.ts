@@ -49,11 +49,10 @@ test('reconstructed HTML cannot navigate, submit, execute scripts, or directly l
   assert.equal(nodes[0].attributes.srcset, null);
   assert.equal(nodes[0].attributes.onload, null);
   assert.equal(nodes[1].attributes.href, null);
-  assert.equal(nodes[2].tagName, 'div');
-  assert.match(
-    nodes[2].attributes['data-floebrowser-unsupported'],
-    /Embedded frame/,
-  );
+  assert.equal(nodes[2].tagName, 'iframe');
+  assert.equal(nodes[2].attributes.src, null);
+  assert.equal(nodes[2].attributes.srcdoc, null);
+  assert.equal(nodes[2].attributes.sandbox, 'allow-same-origin');
   assert.equal(nodes[3].tagName, 'noscript');
   assert.equal(nodes[4].tagName, 'noscript');
   assert.equal(nodes[5].attributes.action, null);
@@ -83,7 +82,7 @@ test('rewrites stylesheet imports and URLs without issuing network requests', as
   resources.close();
 });
 
-test('blocked iframe attachment cannot replace the main replay document', () => {
+test('frame attachment cannot replace a non-frame or the main replay document', () => {
   const resources = new ResourceStore(
     new EventEmitter() as unknown as CDPSession,
   );
@@ -100,7 +99,7 @@ test('blocked iframe attachment cannot replace the main replay document', () => 
             {
               type: 2,
               id: 2,
-              tagName: 'iframe',
+              tagName: 'div',
               attributes: {},
               childNodes: [],
             },

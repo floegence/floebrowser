@@ -7,6 +7,7 @@ import type {
   ProjectionConnection,
   ServerMessage,
   DisconnectReason,
+  TabState,
 } from '../shared/protocol.js';
 import {
   DISCONNECT_CODES,
@@ -23,6 +24,7 @@ type ViewOptions = {
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
   onAddressFocus?: () => void;
+  onTabs?: (state: TabState) => void;
 };
 type Pending = {
   resolve: (ok: boolean) => void;
@@ -39,6 +41,7 @@ const modifiers = (event: MouseEvent | KeyboardEvent) =>
 export class DOMBrowserView {
   private replayer?: Replayer;
   private epoch = '';
+  private tab = '';
   private sequence = 0;
   private nextID = 0;
   private connected = false;
@@ -53,6 +56,7 @@ export class DOMBrowserView {
   private resize: ResizeObserver;
   private disposers: Array<() => void> = [];
   private frameDisposers: Array<() => void> = [];
+  private inputDocuments = new WeakMap<Document, Element | null>();
   private viewport = { width: 1280, height: 800 };
   private fit = true;
   private composing = false;
@@ -203,6 +207,19 @@ export class DOMBrowserView {
 
   private receive(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'tabs') {
+      if (message.state.active !== this.tab) {
+        this.ready = false;
+        this.clearFrame();
+        this.replayer?.destroy();
+        this.replayer = undefined;
+        this.tab = message.state.active;
+        this.epoch = '';
+        this.options.onStatus?.('connecting');
+      }
+      this.options.onTabs?.(message.state);
+      return;
+    }
     if (message.type === 'hello') {
       if (message.version !== PROTOCOL_VERSION) {
         this.options.onNotice?.(
@@ -222,6 +239,7 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'state') {
+      this.tab = message.state.id;
       this.viewport = {
         width: message.state.width,
         height: message.state.height,
@@ -252,6 +270,14 @@ export class DOMBrowserView {
         showDebug: false,
         mouseTail: false,
         triggerFocus: false,
+        plugins: [
+          {
+            onBuild: (node) => {
+              if (node.nodeName === 'HTML')
+                this.bindFrameDocuments(node.ownerDocument as Document);
+            },
+          },
+        ],
         insertStyleRules: [
           '[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
           '[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
@@ -260,12 +286,16 @@ export class DOMBrowserView {
         ],
       });
       this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {
+        if (!this.connected || this.destroyed) return;
         this.installInput();
         this.layout();
         this.ready = true;
         this.options.onStatus?.('live');
       });
-      this.replayer.on(ReplayerEvents.EventCast, () => this.applyFocus());
+      this.replayer.on(ReplayerEvents.EventCast, () => {
+        this.bindFrameDocuments();
+        this.applyFocus();
+      });
       this.replayer.startLive(now);
       for (const event of message.events)
         this.replayer.addEvent({ ...event, timestamp: now });
@@ -327,7 +357,15 @@ export class DOMBrowserView {
     if (
       !this.connected ||
       (!this.ready &&
-        !['navigate', 'back', 'forward', 'reload'].includes(action.kind))
+        ![
+          'navigate',
+          'back',
+          'forward',
+          'reload',
+          'tab_new',
+          'tab_select',
+          'tab_close',
+        ].includes(action.kind))
     )
       return Promise.resolve(false);
     if (action.kind === 'text' && action.text.length > 16000) {
@@ -356,6 +394,7 @@ export class DOMBrowserView {
         this.connection.send({
           type: 'command',
           id,
+          tab: this.tab,
           epoch: this.epoch,
           action,
         });
@@ -408,8 +447,26 @@ export class DOMBrowserView {
     const player = this.replayer!;
     player.enableInteract();
     player.iframe.setAttribute('scrolling', 'no');
-    const frame = player.iframe.contentDocument;
+    this.bindFrameDocuments();
+  }
+
+  private bindFrameDocuments(
+    frame = this.replayer?.iframe.contentDocument,
+  ): void {
     if (!frame) return;
+    if (
+      !this.inputDocuments.has(frame) ||
+      this.inputDocuments.get(frame) !== frame.documentElement
+    ) {
+      this.inputDocuments.set(frame, frame.documentElement);
+      this.bindDocumentInput(frame);
+    }
+    for (const child of frame.querySelectorAll('iframe,frame'))
+      this.bindFrameDocuments((child as HTMLIFrameElement).contentDocument);
+  }
+
+  private bindDocumentInput(frame: Document): void {
+    const player = this.replayer!;
     this.bindTextInput(frame, true);
     this.listen(
       frame,
@@ -618,6 +675,7 @@ export class DOMBrowserView {
     this.pending.clear();
   }
   private clearFrame(): void {
+    this.inputDocuments = new WeakMap();
     for (const dispose of this.frameDisposers.splice(0)) dispose();
   }
   destroy(): void {

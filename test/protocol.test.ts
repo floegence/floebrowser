@@ -5,6 +5,7 @@ import { clientMessageSchema } from '../src/shared/protocol.js';
 test('rejects remote commands with active URLs, oversized text, or extra authority', () => {
   const command = (action: unknown) => ({
     type: 'command',
+    tab: 'source-tab',
     id: 1,
     epoch: 'current',
     action,

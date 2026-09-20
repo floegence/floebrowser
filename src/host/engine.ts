@@ -16,6 +16,7 @@ import {
 } from '../shared/protocol.js';
 import { DOMProjection } from './projection.js';
 import { ResourceStore } from './resources.js';
+import { FrameBridge } from './frames.js';
 
 const attachedPages = new WeakSet<Page>();
 
@@ -23,7 +24,9 @@ export interface AttachOptions {
   /** Called immediately before dispatch. The embedding host remains the authority. */
   authorize: (action: Action) => boolean | Promise<boolean>;
   /** Resolves an opaque resource ID through the host's authorized carrier. */
-  resourceURL?: (id: string) => string;
+  resourceURL?: (id: string, tab: string) => string;
+  onState?: (state: BrowserState) => void;
+  onPopup?: (page: Page) => void;
 }
 export interface Controller {
   receive(message: ClientMessage): Promise<void>;
@@ -39,8 +42,10 @@ type Viewer = {
 
 /** One page, one projection, one controller. Does not own the browser or profile. */
 export class BrowserProjection {
+  readonly id = randomBytes(18).toString('base64url');
   readonly resources: ResourceStore;
   private projection: DOMProjection;
+  private frames!: FrameBridge;
   private binding = `floe_emit_${randomBytes(12).toString('hex')}`;
   private recorderKey = `__floe_${randomBytes(12).toString('hex')}`;
   private scriptID = '';
@@ -69,11 +74,14 @@ export class BrowserProjection {
     this.resources = new ResourceStore(
       cdp,
       (message) => this.send({ type: 'notice', message }),
-      options.resourceURL,
+      options.resourceURL
+        ? (id) => options.resourceURL!(id, this.id)
+        : undefined,
     );
     this.projection = new DOMProjection(this.resources);
     const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
     this.state = {
+      id: this.id,
       url: page.url(),
       title: '',
       status: 'loading',
@@ -182,12 +190,14 @@ export class BrowserProjection {
       this.updateState({ status: 'closed' });
       void this.close();
     });
-    this.listen(this.page, 'popup', () =>
-      this.send({
-        type: 'notice',
-        message:
-          'The website opened another source tab. Additional tabs are not projected in this version.',
-      }),
+    this.listen(this.page, 'popup', (page: Page) =>
+      this.options.onPopup
+        ? this.options.onPopup(page)
+        : this.send({
+            type: 'notice',
+            message:
+              'The website opened another source tab. Additional tabs are not projected in this version.',
+          }),
     );
     this.listen(this.page, 'dialog', (dialog) => {
       this.send({
@@ -204,7 +214,7 @@ export class BrowserProjection {
           'The download was started in the source browser. File transfer is not available in this version.',
       }),
     );
-    await this.resources.start(this.mainFrameID);
+    await this.resources.start();
     await this.cdp.send('Page.enable');
     await this.cdp.send('Runtime.enable');
     await this.cdp.send('Runtime.addBinding', { name: this.binding });
@@ -222,6 +232,13 @@ export class BrowserProjection {
       expression: script,
       contextId: this.contextID,
     });
+    this.frames = new FrameBridge(
+      this.page,
+      script,
+      this.recorderKey,
+      this.resources,
+    );
+    await this.frames.start();
     await this.refreshState();
   }
 
@@ -244,6 +261,7 @@ export class BrowserProjection {
   private updateState(state: Partial<BrowserState>): void {
     this.state = { ...this.state, ...state };
     this.send({ type: 'state', state: this.currentState });
+    this.options.onState?.(this.currentState);
   }
   private send(message: ServerMessage): void {
     if (this.viewer?.active) this.viewer.send(message);
@@ -254,12 +272,43 @@ export class BrowserProjection {
       this.metadata = event;
       return;
     }
+    if (
+      event.type === EventType.Custom &&
+      event.data.tag === 'floebrowser:title'
+    ) {
+      const title = (event.data.payload as { title?: unknown }).title;
+      if (typeof title === 'string') this.updateState({ title });
+      return;
+    }
     if (!this.viewer?.active) return;
+    if (
+      event.type === EventType.Custom &&
+      event.data.tag === 'floebrowser:image'
+    ) {
+      const { id, src } = event.data.payload as { id: number; src: string };
+      if (Number.isInteger(id) && typeof src === 'string')
+        this.recorded({
+          type: 3,
+          timestamp: event.timestamp,
+          data: {
+            source: 0,
+            adds: [],
+            removes: [],
+            texts: [],
+            attributes: [{ id, attributes: { src } }],
+          },
+        });
+      return;
+    }
     if (
       event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:focus'
     ) {
-      const focus = focusSchema.safeParse(event.data.payload);
+      const { id, ...selection } = event.data.payload as Record<
+        string,
+        unknown
+      >;
+      const focus = focusSchema.safeParse({ node: id, ...selection });
       if (focus.success && this.epoch)
         this.send({ type: 'focus', epoch: this.epoch, focus: focus.data });
       return;
@@ -345,6 +394,7 @@ export class BrowserProjection {
       await this.evaluate(
         `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
       );
+      await this.frames.snapshot();
     } finally {
       this.snapshotPending = false;
     }
@@ -390,7 +440,8 @@ export class BrowserProjection {
         );
         if (
           (!navigation && (!this.epoch || message.epoch !== this.epoch)) ||
-          this.closed
+          this.closed ||
+          message.tab !== this.id
         )
           throw new CommandError('stale_view');
         await this.execute(message, viewer);
@@ -430,25 +481,23 @@ export class BrowserProjection {
 
   private async execute(command: Command, viewer: Viewer): Promise<void> {
     const action = command.action;
-    let point: { x: number; y: number } | undefined;
-    if (action.kind === 'pointer' || action.kind === 'wheel') {
-      point = await this.evaluate(
-        `globalThis[${JSON.stringify(this.recorderKey)}]?.point(${action.point.node},${action.point.x},${action.point.y})`,
-      );
-      if (!point) throw new CommandError('stale_view');
-    }
     if (!(await this.options.authorize(action)))
       throw new CommandError('not_allowed');
     const navigation = ['navigate', 'back', 'forward', 'reload'].includes(
       action.kind,
     );
-    if (
-      !viewer.active ||
-      this.viewer !== viewer ||
-      this.closed ||
-      (!navigation && command.epoch !== this.epoch)
-    )
-      throw new CommandError('stale_view');
+    const assertCurrent = () => {
+      if (
+        !viewer.active ||
+        this.viewer !== viewer ||
+        this.closed ||
+        command.tab !== this.id ||
+        (!navigation && command.epoch !== this.epoch)
+      )
+        throw new CommandError('stale_view');
+    };
+    assertCurrent();
+    if (action.kind.startsWith('tab_')) throw new CommandError('unsupported');
     if (action.kind === 'navigate') {
       await this.page.goto(action.url, {
         waitUntil: 'domcontentloaded',
@@ -472,6 +521,8 @@ export class BrowserProjection {
       return;
     }
     if (action.kind === 'pointer' || action.kind === 'wheel') {
+      const point = await this.resolvePoint(action.point);
+      assertCurrent();
       if (!point) throw new CommandError('stale_view');
       if (action.kind === 'wheel') {
         await this.cdp.send('Input.dispatchMouseEvent', {
@@ -529,12 +580,113 @@ export class BrowserProjection {
       return;
     }
     if (action.kind === 'select') {
-      if (
-        !(await this.evaluate(
-          `globalThis[${JSON.stringify(this.recorderKey)}]?.select(${action.node},${JSON.stringify(action.values)})`,
-        ))
-      )
-        throw new CommandError('unsupported');
+      const element = await this.frames.resolve(action.node);
+      if (!element) throw new CommandError('stale_view');
+      try {
+        assertCurrent();
+        const selected = await element.evaluate((node, values) => {
+          const select = node as HTMLSelectElement;
+          if (
+            select.tagName !== 'SELECT' ||
+            !select.isConnected ||
+            select.disabled ||
+            (!select.multiple && values.length !== 1)
+          )
+            return false;
+          if (
+            values.some(
+              (value) =>
+                !Array.from(select.options).some(
+                  (option) => option.value === value && !option.disabled,
+                ),
+            )
+          )
+            return false;
+          select.focus();
+          for (const option of select.options)
+            option.selected = values.includes(option.value);
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }, action.values);
+        if (!selected) throw new CommandError('unsupported');
+      } finally {
+        await element.dispose();
+      }
+    }
+  }
+
+  private async resolvePoint(point: {
+    node: number;
+    x: number;
+    y: number;
+  }): Promise<{ x: number; y: number } | undefined> {
+    const element = await this.frames.resolve(point.node);
+    if (!element) return;
+    try {
+      const local = await element.evaluate((node, point) => {
+        if (
+          !node.isConnected ||
+          node.closest('canvas,video,audio,object,embed,input[type="file"]')
+        )
+          return;
+        const rect = node.getBoundingClientRect();
+        const win = node.ownerDocument.defaultView!;
+        if (!rect.width || !rect.height) return;
+        const x = Math.max(
+          0,
+          Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
+        );
+        const y = Math.max(
+          0,
+          Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
+        );
+        const hit = (
+          node.getRootNode() as Document | ShadowRoot
+        ).elementFromPoint(x, y);
+        if (!hit || !(hit === node || node.contains(hit))) return;
+        return { x: (x - rect.x) / rect.width, y: (y - rect.y) / rect.height };
+      }, point);
+      const box = await element.boundingBox();
+      if (!local || !box) return;
+      const position = {
+        x: box.x + box.width * local.x,
+        y: box.y + box.height * local.y,
+      };
+      // Hit-test each containing frame so an overlay cannot redirect remote input.
+      for (
+        let frame = await element.ownerFrame();
+        frame?.parentFrame();
+        frame = frame.parentFrame()
+      ) {
+        const owner = await frame.frameElement();
+        try {
+          const bounds = await owner.boundingBox();
+          if (!bounds) return;
+          const visible = await owner.evaluate(
+            (node, fraction) => {
+              const rect = (node as Element).getBoundingClientRect();
+              const hit = (
+                node.getRootNode() as Document | ShadowRoot
+              ).elementFromPoint(
+                rect.x + rect.width * fraction.x,
+                rect.y + rect.height * fraction.y,
+              );
+              return hit === node;
+            },
+            {
+              x: (position.x - bounds.x) / bounds.width,
+              y: (position.y - bounds.y) / bounds.height,
+            },
+          );
+          if (!visible) return;
+        } finally {
+          await owner.dispose();
+        }
+      }
+      return position;
+    } finally {
+      await element.dispose();
     }
   }
 
@@ -574,6 +726,7 @@ export class BrowserProjection {
     await this.releaseInput().catch(() => {
       this.controlFault = true;
     });
+    await this.frames?.close();
     await this.evaluate(
       `globalThis[${JSON.stringify(this.recorderKey)}]?.stop()`,
     ).catch(() => {});

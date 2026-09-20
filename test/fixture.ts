@@ -14,6 +14,11 @@ export async function fixture() {
         method: request.method ?? 'GET',
       });
       response.setHeader('Cache-Control', 'no-store');
+      if (path === '/redirect') {
+        response.writeHead(302, { Location: '/second' });
+        response.end();
+        return;
+      }
       if (path === '/submit') {
         if (!request.headers.cookie?.includes('session=source-only')) {
           response.writeHead(401);

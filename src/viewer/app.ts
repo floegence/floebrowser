@@ -1,5 +1,6 @@
 import './viewer.css';
 import { DOMBrowserView, webSocketConnection } from './client.js';
+import type { TabState } from '../shared/protocol.js';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -8,6 +9,8 @@ const overlay = element('connection-overlay');
 const welcome = element('welcome');
 let view: DOMBrowserView | undefined;
 let sourceURL = 'about:blank';
+let sourceID = '';
+let tabState: TabState = { active: '', tabs: [] };
 let live = false;
 let canGoBack = false;
 let canGoForward = false;
@@ -23,6 +26,68 @@ function notice(message: string): void {
     element('toast').hidden = true;
   }, 9000);
 }
+function renderTabs(state: TabState): void {
+  tabState = state;
+  const list = element('tabs');
+  const focused = document.activeElement?.getAttribute('data-tab');
+  list.replaceChildren(
+    ...state.tabs.map((tab) => {
+      const row = document.createElement('div');
+      row.className = `tab ${tab.id === state.active ? 'active' : ''}`;
+      const select = document.createElement('button');
+      const title =
+        tab.title || (tab.url === 'about:blank' ? 'New tab' : tab.url);
+      select.className = 'tab-select';
+      select.setAttribute('role', 'tab');
+      select.setAttribute('aria-selected', String(tab.id === state.active));
+      select.setAttribute('data-tab', tab.id);
+      select.tabIndex = tab.id === state.active ? 0 : -1;
+      select.title =
+        tab.url === 'about:blank' ? title : `${title} — ${tab.url}`;
+      select.textContent = title;
+      select.addEventListener('click', () => {
+        if (tab.id !== tabState.active)
+          void view?.dispatch({ kind: 'tab_select', tab: tab.id });
+      });
+      select.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+          return;
+        event.preventDefault();
+        const index = tabState.tabs.findIndex((item) => item.id === tab.id);
+        const next =
+          event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? tabState.tabs.length - 1
+              : (index +
+                  (event.key === 'ArrowRight' ? 1 : -1) +
+                  tabState.tabs.length) %
+                tabState.tabs.length;
+        void view?.dispatch({
+          kind: 'tab_select',
+          tab: tabState.tabs[next]!.id,
+        });
+      });
+      const close = document.createElement('button');
+      close.className = 'tab-close';
+      close.setAttribute('aria-label', `Close ${title}`);
+      close.title = 'Close tab';
+      close.textContent = '×';
+      close.addEventListener('click', () => {
+        void view?.dispatch({ kind: 'tab_close', tab: tab.id });
+      });
+      row.append(select, close);
+      return row;
+    }),
+  );
+  if (focused)
+    list
+      .querySelector<HTMLButtonElement>(`[data-tab="${state.active}"]`)
+      ?.focus();
+  list
+    .querySelector('[aria-selected="true"]')
+    ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 function connect(takeover = false): void {
   view?.destroy();
   const endpoint = new URL('stream', location.href);
@@ -32,17 +97,17 @@ function connect(takeover = false): void {
     element('viewport'),
     webSocketConnection(endpoint.href),
     {
+      onTabs: renderTabs,
       onState: (state) => {
+        const changedTab = sourceID !== state.id;
+        sourceID = state.id;
         sourceURL = state.url;
         canGoBack = state.canGoBack;
         canGoForward = state.canGoForward;
         element<HTMLButtonElement>('back').disabled = !live || !canGoBack;
         element<HTMLButtonElement>('forward').disabled = !live || !canGoForward;
-        if (document.activeElement !== address)
+        if (changedTab || document.activeElement !== address)
           address.value = state.url === 'about:blank' ? '' : state.url;
-        element('page-title').textContent =
-          state.title ||
-          (state.url === 'about:blank' ? 'Source browser' : state.url);
         document.title = state.title
           ? `${state.title} · FloeBrowser`
           : 'FloeBrowser';
@@ -58,6 +123,10 @@ function connect(takeover = false): void {
       },
       onStatus: (status, reason) => {
         live = status === 'live';
+        element<HTMLButtonElement>('new-tab').disabled =
+          status === 'disconnected';
+        for (const button of element('tabs').querySelectorAll('button'))
+          button.disabled = status === 'disconnected';
         offerTakeover =
           status === 'disconnected' &&
           (reason === 'viewer_in_use' || reason === 'viewer_replaced');
@@ -122,6 +191,9 @@ function connect(takeover = false): void {
   );
   view.setFit(fit);
 }
+element('new-tab').addEventListener('click', async () => {
+  if (await view?.dispatch({ kind: 'tab_new' })) address.focus();
+});
 element('address-form').addEventListener('submit', (event) => {
   event.preventDefault();
   let url = address.value.trim();

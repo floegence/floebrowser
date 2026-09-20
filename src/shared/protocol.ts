@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
@@ -13,7 +13,7 @@ export const DISCONNECT_CODES = {
 } as const;
 export type DisconnectReason = keyof typeof DISCONNECT_CODES;
 export const UNSUPPORTED_SELECTOR =
-  'iframe,frame,canvas,video,audio,object,embed,input[type="file"]';
+  'canvas,video,audio,object,embed,input[type="file"]';
 
 const point = z
   .object({
@@ -74,12 +74,20 @@ export const actionSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   z.object({ kind: z.enum(['back', 'forward', 'reload']) }).strict(),
+  z.object({ kind: z.literal('tab_new') }).strict(),
+  z
+    .object({
+      kind: z.enum(['tab_select', 'tab_close']),
+      tab: z.string().min(1).max(80),
+    })
+    .strict(),
 ]);
 export const clientMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('command'),
       id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      tab: z.string().min(1).max(80),
       epoch: z.string().max(80),
       action: actionSchema,
     })
@@ -99,6 +107,7 @@ export const focusSchema = z
   .strict();
 export type FocusState = z.infer<typeof focusSchema>;
 export type BrowserState = {
+  id: string;
   url: string;
   title: string;
   status: 'loading' | 'ready' | 'closed';
@@ -107,7 +116,12 @@ export type BrowserState = {
   canGoBack: boolean;
   canGoForward: boolean;
 };
+export type TabState = {
+  active: string;
+  tabs: Array<{ id: string; title: string; url: string }>;
+};
 export type ServerMessage =
+  | { type: 'tabs'; state: TabState }
   | { type: 'focus'; epoch: string; focus: FocusState }
   | { type: 'hello'; version: typeof PROTOCOL_VERSION }
   | { type: 'state'; state: BrowserState }

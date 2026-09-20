@@ -71,24 +71,28 @@ test('fences duplicate IDs, stale documents, and a revoked controller', async (t
   });
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 1,
     epoch: initial.epoch,
     action: pointer('down'),
   });
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 2,
     epoch: initial.epoch,
     action: pointer('up'),
   });
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 1,
     epoch: initial.epoch,
     action: pointer('down'),
   });
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 2,
     epoch: initial.epoch,
     action: pointer('up'),
@@ -101,6 +105,7 @@ test('fences duplicate IDs, stale documents, and a revoked controller', async (t
   );
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 3,
     epoch: initial.epoch,
     action: { kind: 'navigate', url: `${site.url}/second` },
@@ -108,6 +113,7 @@ test('fences duplicate IDs, stale documents, and a revoked controller', async (t
   await eventually(() => snapshot(messages).epoch !== initial.epoch);
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 4,
     epoch: initial.epoch,
     action: pointer('down'),
@@ -123,6 +129,7 @@ test('fences duplicate IDs, stale documents, and a revoked controller', async (t
   await controller.close();
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 5,
     epoch: initial.epoch,
     action: { kind: 'navigate', url: site.url },
@@ -152,6 +159,7 @@ test('checks host authorization before dispatch and prevents simultaneous contro
   await page.locator('#name').focus();
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 1,
     epoch: initial.epoch,
     action: { kind: 'text', text: 'unauthorized' },
@@ -194,6 +202,7 @@ test('revocation while authorization is pending prevents input dispatch', async 
   await page.locator('#name').focus();
   const pending = controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 1,
     epoch: snapshot(messages).epoch,
     action: { kind: 'text', text: 'must not arrive' },
@@ -296,6 +305,7 @@ test(
     first.send(
       JSON.stringify({
         type: 'command',
+        tab: service.engine.id,
         id: 1,
         epoch: snapshot(firstMessages).epoch,
         action: { kind: 'text', text: 'revoked' },
@@ -305,6 +315,7 @@ test(
     first.send(
       JSON.stringify({
         type: 'command',
+        tab: service.engine.id,
         id: 2,
         epoch: snapshot(firstMessages).epoch,
         action: { kind: 'text', text: 'queued' },
@@ -340,6 +351,7 @@ test(
     second.send(
       JSON.stringify({
         type: 'command',
+        tab: service.engine.id,
         id: 1,
         epoch: snapshot(secondMessages).epoch,
         action: { kind: 'text', text: 'new viewer' },
@@ -368,6 +380,7 @@ test('disconnect balances held input without completing a pending button click',
   const id = nodeID((initial.events[1] as any).data.node, 'count')!;
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 1,
     epoch: initial.epoch,
     action: {
@@ -380,6 +393,7 @@ test('disconnect balances held input without completing a pending button click',
   });
   await controller.receive({
     type: 'command',
+    tab: service.engine.id,
     id: 2,
     epoch: initial.epoch,
     action: {

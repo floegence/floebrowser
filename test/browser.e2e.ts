@@ -113,7 +113,7 @@ test('projects authenticated DOM, images, CSS and fonts without client website r
   );
   assert.equal(
     await projected.locator('[data-floebrowser-unsupported]').count(),
-    2,
+    1,
   );
   assert.deepEqual(externalRequests, []);
   assert.deepEqual(errors, []);
@@ -308,6 +308,91 @@ test('handles scaled input, double clicks, text selection, and multiline editing
       (await page.locator('#multiline').inputValue()) === 'line one\nline two',
     'Enter edits the source textarea',
   );
+});
+
+test('follows source redirects and manages new tabs, popups, switching and closing', async (t) => {
+  const { page, viewer, projected, site, service } = await setup(t);
+  await page.evaluate(() => {
+    const link = document.createElement('a');
+    link.id = 'popup-link';
+    link.href = '/second';
+    link.target = '_blank';
+    link.textContent = 'Open a source tab';
+    link.style.cssText = 'position:fixed;top:10px;left:500px;z-index:100';
+    document.body.append(link);
+  });
+  await projected.locator('#popup-link').click();
+  await projected.locator('#second').waitFor();
+  await viewer.getByRole('tab', { name: 'Second page', exact: true }).waitFor();
+  assert.equal(page.context().pages().length, 2);
+  assert.equal(
+    await viewer.locator('#address').inputValue(),
+    `${site.url}/second`,
+  );
+  await viewer
+    .getByRole('tab', { name: 'Workspace · Juniper', exact: true })
+    .click();
+  await projected.locator('#count').click();
+  await eventually(
+    async () => (await page.locator('#count-value').textContent()) === '1',
+    'Switching returns control to the original page',
+  );
+  await viewer.getByRole('button', { name: 'New tab', exact: true }).click();
+  await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
+  assert.equal(await viewer.locator('#address').inputValue(), '');
+  await viewer.locator('#address').fill(`${site.url}/redirect`);
+  await viewer.locator('#address').press('Enter');
+  await projected.locator('#second').waitFor();
+  assert.equal(page.context().pages().length, 3);
+  assert.match(viewer.url(), /\/session\//);
+  await viewer
+    .getByRole('tab', { name: 'Second page', exact: true })
+    .last()
+    .press('ArrowLeft');
+  await eventually(
+    async () =>
+      service.session.currentState.active !==
+      service.session.currentState.tabs.at(-1)!.id,
+    'Keyboard navigation switches source tabs',
+  );
+  await viewer
+    .getByRole('button', { name: 'Close Second page', exact: true })
+    .last()
+    .click();
+  await eventually(
+    async () => page.context().pages().length === 2,
+    'Closing a background tab closes only that source tab',
+  );
+  await eventually(
+    async () =>
+      (await viewer
+        .getByRole('button', { name: 'Close Second page', exact: true })
+        .count()) === 1,
+    'Closed source tabs leave the tab strip',
+  );
+  await viewer
+    .getByRole('button', { name: 'Close Second page', exact: true })
+    .click();
+  await projected.locator('#count').waitFor();
+  await page.evaluate(() => {
+    const button = document.createElement('button');
+    button.id = 'script-popup';
+    button.textContent = 'Script popup';
+    button.style.cssText = 'position:fixed;top:10px;left:500px;z-index:101';
+    button.onclick = () => window.open('/second', '_blank');
+    document.body.append(button);
+  });
+  await projected.locator('#script-popup').click();
+  await projected.locator('#second').waitFor();
+  await viewer
+    .getByRole('button', { name: 'Close Second page', exact: true })
+    .click();
+  await projected.locator('#count').waitFor();
+  await viewer
+    .getByRole('button', { name: 'Close Workspace · Juniper', exact: true })
+    .click();
+  await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
+  assert.equal(page.context().pages().length, 1);
 });
 
 test('projects the source-selected responsive image after an image load', async (t) => {

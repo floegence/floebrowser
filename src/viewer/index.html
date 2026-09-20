@@ -26,13 +26,15 @@
       </header>
       <main class="browser-window">
         <div class="tab-strip">
-          <div class="tab">
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <circle cx="10" cy="10" r="7" />
-              <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" /></svg
-            ><span id="page-title">Source browser</span
-            ><span class="tab-live"></span>
-          </div>
+          <div id="tabs" role="tablist" aria-label="Source browser tabs"></div>
+          <button
+            id="new-tab"
+            class="icon-button"
+            aria-label="New tab"
+            title="New tab"
+          >
+            +
+          </button>
           <span class="mode-label">DOM projection</span>
         </div>
         <nav class="toolbar" aria-label="Browser navigation">
@@ -166,7 +168,7 @@
           requests and actions stay in the source browser.
         </p>
         <p>
-          This preview supports a single Chromium tab. Embedded frames, canvas,
+          Source tabs and embedded frames run on the source machine. Canvas,
           media, file transfer and native browser dialogs are not supported.
           Unavailable content is marked in the page.
         </p>

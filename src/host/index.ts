@@ -7,6 +7,7 @@ export {
   createProjectionServer,
   type ProjectionServerOptions,
 } from './server.js';
+export { BrowserSession } from './session.js';
 export {
   PROTOCOL_VERSION,
   type Action,
@@ -15,4 +16,5 @@ export {
   type ServerMessage,
   type ProjectionConnection,
   type DisconnectReason,
+  type TabState,
 } from '../shared/protocol.js';

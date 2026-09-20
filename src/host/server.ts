@@ -8,11 +8,8 @@ import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
 import { WebSocketServer, WebSocket } from 'ws';
-import {
-  BrowserProjection,
-  type AttachOptions,
-  type Controller,
-} from './engine.js';
+import { type AttachOptions, type Controller } from './engine.js';
+import { BrowserSession } from './session.js';
 import {
   MAX_COMMAND_BYTES,
   MAX_MESSAGE_BYTES,
@@ -31,9 +28,9 @@ export async function createProjectionServer(
   options: ProjectionServerOptions,
 ) {
   const base = `/session/${randomBytes(32).toString('base64url')}/`;
-  const engine = await BrowserProjection.attach(page, {
+  const session = await BrowserSession.attach(page, {
     authorize: options.authorize,
-    resourceURL: (id) => `${base}assets/${id}`,
+    resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
   });
   const sockets = new WebSocketServer({
     noServer: true,
@@ -83,7 +80,9 @@ export async function createProjectionServer(
       }
       const path = url.pathname.slice(base.length);
       if (path.startsWith('assets/')) {
-        const resource = await engine.resources.read(path.slice(7));
+        const [tab, id] = path.slice(7).split('/');
+        const resource =
+          tab && id ? await session.readResource(tab, id) : undefined;
         if (!resource) {
           respond(response, 404, 'Source resource unavailable');
           return;
@@ -189,7 +188,7 @@ export async function createProjectionServer(
           await active.release();
         }
         if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
-        controller = await engine.connect((message) => {
+        controller = await session.connect((message) => {
           if (ws.readyState !== WebSocket.OPEN) return;
           const payload = JSON.stringify(message);
           if (
@@ -212,7 +211,7 @@ export async function createProjectionServer(
       })
       .catch(() => {
         ws.close(
-          engine.hasController
+          session.hasController
             ? DISCONNECT_CODES.viewer_in_use
             : DISCONNECT_CODES.source_unavailable,
           'Source unavailable',
@@ -228,13 +227,16 @@ export async function createProjectionServer(
       });
     });
   } catch (error) {
-    await engine.close();
+    await session.close();
     sockets.close();
     throw error;
   }
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    engine,
+    session,
+    get engine() {
+      return session.activeProjection;
+    },
     url: `${origin}${base}`,
     async close(): Promise<void> {
       if (closing) return;
@@ -243,7 +245,7 @@ export async function createProjectionServer(
       sockets.close();
       await admission;
       await active?.release();
-      await engine.close();
+      await session.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },

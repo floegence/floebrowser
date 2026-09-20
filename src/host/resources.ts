@@ -24,7 +24,8 @@ export class ResourceStore {
     { url: string; kind: string; type: string }
   >();
   private inFlight = 0;
-  private disposers: Array<() => void> = [];
+  private nextSession = 0;
+  private disposers = new Set<() => void>();
 
   constructor(
     private cdp: CDPSession,
@@ -32,11 +33,11 @@ export class ResourceStore {
     private resourceURL: (id: string) => string = (id) => `/_floe/assets/${id}`,
   ) {}
 
-  async start(frameID: string): Promise<void> {
+  async start(cdp = this.cdp): Promise<void> {
+    const prefix = `${++this.nextSession}:`;
     const received = (event: any) => {
       if (
         this.closed ||
-        event.frameId !== frameID ||
         !['Stylesheet', 'Image', 'Font'].includes(event.type) ||
         event.response.status < 200 ||
         event.response.status >= 300 ||
@@ -44,15 +45,15 @@ export class ResourceStore {
       )
         return;
       this.reference(event.response.url, event.response.url);
-      this.requests.set(event.requestId, {
+      this.requests.set(prefix + event.requestId, {
         url: event.response.url,
         kind: event.type,
         type: event.response.mimeType.toLowerCase(),
       });
     };
     const finished = (event: any) => {
-      const response = this.requests.get(event.requestId);
-      this.requests.delete(event.requestId);
+      const response = this.requests.get(prefix + event.requestId);
+      this.requests.delete(prefix + event.requestId);
       if (
         !response ||
         this.closed ||
@@ -61,27 +62,38 @@ export class ResourceStore {
       )
         return;
       this.inFlight++;
-      void this.capture(event.requestId, response)
+      void this.capture(event.requestId, response, cdp)
         .catch(() => {})
         .finally(() => {
           this.inFlight--;
         });
     };
     const failed = (event: any) => {
-      this.requests.delete(event.requestId);
+      this.requests.delete(prefix + event.requestId);
     };
-    this.cdp.on('Network.responseReceived', received);
-    this.cdp.on('Network.loadingFinished', finished);
-    this.cdp.on('Network.loadingFailed', failed);
-    this.disposers.push(
-      () => this.cdp.off('Network.responseReceived', received),
-      () => this.cdp.off('Network.loadingFinished', finished),
-      () => this.cdp.off('Network.loadingFailed', failed),
-    );
-    await this.cdp.send('Network.enable', {
-      maxTotalBufferSize: MAX_TOTAL_BYTES,
-      maxResourceBufferSize: MAX_RESOURCE_BYTES,
-    });
+    cdp.on('Network.responseReceived', received);
+    cdp.on('Network.loadingFinished', finished);
+    cdp.on('Network.loadingFailed', failed);
+    const dispose = () => {
+      cdp.off('Network.responseReceived', received);
+      cdp.off('Network.loadingFinished', finished);
+      cdp.off('Network.loadingFailed', failed);
+      cdp.off('close', dispose);
+      for (const id of this.requests.keys())
+        if (id.startsWith(prefix)) this.requests.delete(id);
+      this.disposers.delete(dispose);
+    };
+    this.disposers.add(dispose);
+    cdp.once('close', dispose);
+    try {
+      await cdp.send('Network.enable', {
+        maxTotalBufferSize: MAX_TOTAL_BYTES,
+        maxResourceBufferSize: MAX_RESOURCE_BYTES,
+      });
+    } catch (error) {
+      dispose();
+      throw error;
+    }
   }
 
   reference(value: string, base: string): string {
@@ -175,13 +187,14 @@ export class ResourceStore {
   private async capture(
     requestID: string,
     response: { url: string; kind: string; type: string },
+    cdp: CDPSession,
   ): Promise<void> {
     const url = new URL(response.url);
     url.hash = '';
     const resource = this.byURL.get(url.href);
     if (!resource) return;
     // Chromium owns a bounded response buffer; a missing body is never refetched.
-    const body = await this.cdp.send('Network.getResponseBody', {
+    const body = await cdp.send('Network.getResponseBody', {
       requestId: requestID,
     });
     const data = Buffer.from(body.body, body.base64Encoded ? 'base64' : 'utf8');
@@ -260,7 +273,7 @@ export class ResourceStore {
 
   close(): void {
     this.closed = true;
-    for (const dispose of this.disposers.splice(0)) dispose();
+    for (const dispose of this.disposers) dispose();
     this.requests.clear();
     for (const resource of this.byURL.values())
       for (const resolve of resource.waiters) resolve();

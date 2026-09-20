@@ -2,15 +2,7 @@ import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { ResourceStore } from './resources.js';
 
 type Serialized = Record<string, any>;
-const blocked = new Set([
-  'iframe',
-  'frame',
-  'canvas',
-  'video',
-  'audio',
-  'object',
-  'embed',
-]);
+const blocked = new Set(['canvas', 'video', 'audio', 'object', 'embed']);
 const inert = new Set(['script', 'base', 'meta']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
@@ -19,6 +11,7 @@ const dropped =
 export class DOMProjection {
   private tags = new Map<number, string>();
   private excluded = new Set<number>();
+  private bases = new Map<number, string>();
   constructor(
     private resources: Pick<ResourceStore, 'reference' | 'css' | 'value'>,
   ) {}
@@ -30,6 +23,15 @@ export class DOMProjection {
   ): Serialized {
     const result: Serialized = {};
     for (const [key, value] of Object.entries(attributes)) {
+      if (
+        (tag === 'iframe' || tag === 'frame') &&
+        ['src', 'rr_src', 'sandbox', 'allow', 'allowfullscreen'].includes(
+          key.toLowerCase(),
+        )
+      ) {
+        result[key] = null;
+        continue;
+      }
       if (dropped.test(key)) {
         result[key] = null;
         continue;
@@ -68,6 +70,8 @@ export class DOMProjection {
         result[key] = this.resources.reference(String(value), base);
       else result[key] = value;
     }
+    if (tag === 'iframe' || tag === 'frame')
+      result.sandbox = 'allow-same-origin';
     return result;
   }
 
@@ -77,6 +81,9 @@ export class DOMProjection {
   }
 
   private node(node: Serialized, base: string, parentTag = ''): void {
+    base = node.floeBase ?? this.bases.get(node.rootId) ?? base;
+    this.bases.set(node.id, base);
+    delete node.floeBase;
     if (node.type === 2) {
       const original = String(node.tagName).toLowerCase();
       this.tags.set(node.id, original);
@@ -132,13 +139,24 @@ export class DOMProjection {
     if (event.type === EventType.FullSnapshot) {
       this.tags.clear();
       this.excluded.clear();
+      this.bases.clear();
       this.node(event.data.node, base);
     } else if (event.type === EventType.IncrementalSnapshot) {
       const data = event.data;
       if (data.source === IncrementalSource.Mutation) {
         if (data.isAttachIframe) {
-          for (const addition of data.adds) this.exclude(addition.node);
-          return;
+          data.adds = data.adds.filter((addition: Serialized) => {
+            if (
+              ['iframe', 'frame'].includes(
+                this.tags.get(addition.parentId) ?? '',
+              ) &&
+              !this.excluded.has(addition.parentId)
+            )
+              return true;
+            this.exclude(addition.node);
+            return false;
+          });
+          if (!data.adds.length) return;
         }
         data.adds = data.adds.filter((addition: Serialized) => {
           if (
@@ -157,7 +175,11 @@ export class DOMProjection {
           (entry: Serialized) => !this.excluded.has(entry.parentId),
         );
         for (const addition of data.adds)
-          this.node(addition.node, base, this.tags.get(addition.parentId));
+          this.node(
+            addition.node,
+            this.bases.get(addition.parentId) ?? base,
+            this.tags.get(addition.parentId),
+          );
         data.attributes = data.attributes.filter(
           (entry: Serialized) =>
             !this.excluded.has(entry.id) &&
@@ -168,15 +190,19 @@ export class DOMProjection {
           entry.attributes = this.attributes(
             entry.attributes,
             this.tags.get(entry.id) ?? '',
-            base,
+            this.bases.get(entry.id) ?? base,
           );
         for (const text of data.texts)
           if (this.tags.get(text.id) === 'style')
-            text.value = this.resources.css(text.value, base);
+            text.value = this.resources.css(
+              text.value,
+              this.bases.get(text.id) ?? base,
+            );
       } else if (
         data.source === IncrementalSource.StyleSheetRule ||
         data.source === IncrementalSource.AdoptedStyleSheet
       ) {
+        base = this.bases.get(data.id) ?? base;
         for (const addition of data.adds ?? [])
           addition.rule = this.resources.css(addition.rule, base);
         for (const sheet of data.styles ?? [])

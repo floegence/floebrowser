@@ -52,7 +52,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { createProjectionServer, PROTOCOL_VERSION } from '@floegence/floebrowser';
 import { clientMessageSchema } from '@floegence/floebrowser/protocol';
-assert.equal(PROTOCOL_VERSION, 1);
+assert.equal(PROTOCOL_VERSION, 2);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 const browser = await chromium.launch({ chromiumSandbox: true });
 let server;
