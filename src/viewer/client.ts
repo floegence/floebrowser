@@ -1169,13 +1169,24 @@ export class DOMBrowserView {
       }
       return;
     }
-    if (
-      (event.ctrlKey || event.metaKey) &&
-      event.key.toLowerCase() === 'c' &&
-      this.replayer?.iframe.contentDocument?.getSelection()?.isCollapsed ===
-        false
-    )
-      return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+      const target = event
+        .composedPath()
+        .find((item) => (item as Node)?.nodeType === 1) as Element | undefined;
+      const document = target?.ownerDocument;
+      // Form selections are not exposed by Document.getSelection, and a child
+      // frame owns its own selection. Let the client's native copy operation
+      // use the visible selection without touching the source OS clipboard.
+      if (
+        document?.getSelection()?.isCollapsed === false ||
+        target?.tagName === 'TEXTAREA' ||
+        (target?.tagName === 'INPUT' &&
+          ['text', 'search', 'url', 'tel', 'email', 'number'].includes(
+            (target as HTMLInputElement).type,
+          ))
+      )
+        return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v')
       return;
     event.preventDefault();
