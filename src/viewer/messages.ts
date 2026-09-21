@@ -29,6 +29,19 @@ export const englishMessages = {
   'control.pending': 'Taking control…',
   'control.failed':
     'Control could not be transferred. Try again on the current page.',
+  'dialog.label': 'Website dialog',
+  'dialog.alert': 'Message from this website',
+  'dialog.confirm': 'Confirm your choice',
+  'dialog.prompt': 'Respond to this website',
+  'dialog.beforeunload': 'Leave this page?',
+  'dialog.unsaved': 'Changes you made may not be saved.',
+  'dialog.response': 'Response',
+  'dialog.accept': 'OK',
+  'dialog.cancel': 'Cancel',
+  'dialog.leave': 'Leave page',
+  'dialog.stay': 'Stay on page',
+  'dialog.source': 'Source page',
+  'dialog.truncated': 'This website’s message is too long to display in full.',
   'status.loading': 'Loading',
   'status.live': 'Live',
   'status.connecting': 'Connecting',
@@ -56,8 +69,6 @@ export const englishMessages = {
     'A page update could not be projected. Reconnect to refresh the view.',
   'notice.popup_unavailable':
     'The website opened another source tab. Additional tabs are not projected in this version.',
-  'notice.dialog_dismissed':
-    'A browser dialog was dismissed. Native dialogs are not supported in DOM mode.',
   'notice.download_source_only':
     'The download was started in the source browser. File transfer is not available in this version.',
   'notice.resource_limit':

@@ -593,8 +593,11 @@ export class BrowserSession {
         !viewer.active ||
         message.tab !== viewer.selected ||
         viewer.authorize !== authorize
-      )
+      ) {
+        if (viewer.active)
+          ack(viewer.authorize !== authorize ? 'not_allowed' : 'stale_view');
         return;
+      }
       operation = (async () => {
         if (action.kind === 'tab_new' || action.kind === 'tab_restore') {
           const page =

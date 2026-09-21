@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { Page } from 'playwright';
-import type { SourcePage, SourceTransport } from './source.js';
+import type { SourceDialog, SourcePage, SourceTransport } from './source.js';
 import { PlaywrightSourceBrowser } from './playwright-source.js';
 import {
   clientMessageSchema,
@@ -17,6 +17,7 @@ import {
   type BrowserState,
   type ClientMessage,
   type Command,
+  type DialogState,
   type ServerMessage,
 } from '../shared/protocol.js';
 import { DOMProjection } from './projection.js';
@@ -44,6 +45,9 @@ export interface AttachOptions {
   resourceURL?: (id: string, tab: string) => string;
   onState?: (state: BrowserState) => void;
   onPopup?: (page: SourcePage) => void;
+  /** The host's existing AI/local-browser dialog owner, used only without a
+   * projection controller. Omission cancels unattended dialogs. */
+  onUncontrolledDialog?: (dialog: SourceDialog, page: SourcePage) => void;
 }
 export interface Controller {
   receive(message: ClientMessage): Promise<void>;
@@ -111,6 +115,7 @@ export class BrowserProjection {
   private sequence = 0;
   private metadata?: eventWithTime;
   private viewer?: Viewer;
+  private dialog?: { source: SourceDialog; state: DialogState; viewer: Viewer };
   private watchers = new Set<Watcher>();
   private observations = new WeakMap<Observation, Watcher>();
   private snapshotTask?: Promise<void>;
@@ -299,13 +304,31 @@ export class BrowserProjection {
             code: 'popup_unavailable',
           }),
     );
-    this.listen(this.page, 'dialog', (dialog) => {
-      this.send({
-        type: 'notice',
-        code: 'dialog_dismissed',
-      });
-      void dialog.dismiss().catch(() => {});
+    this.listen(this.page, 'dialog', (source: SourceDialog) => {
+      const viewer = this.viewer;
+      if (!viewer?.active || (viewer.isCurrent && !viewer.isCurrent())) {
+        if (this.options.onUncontrolledDialog) {
+          this.options.onUncontrolledDialog(source, this.page);
+          return;
+        }
+        // Unattended dialogs cannot stall the source or silently accept effects.
+        void source.respond(false).catch(() => {});
+        return;
+      }
+      const state: DialogState = {
+        id: randomBytes(18).toString('base64url'),
+        type: source.type,
+        url: source.url.slice(0, 8192),
+        message: source.message.slice(0, 16000),
+        defaultPrompt: (source.defaultPrompt ?? '').slice(0, 16000),
+        truncated:
+          source.message.length > 16000 ||
+          (source.defaultPrompt?.length ?? 0) > 16000,
+      };
+      this.dialog = { source, state, viewer };
+      viewer.send({ type: 'dialog', target: this.id, dialog: state });
     });
+    this.listen(this.page, 'dialogclosed', () => this.clearDialog());
     this.listen(this.page, 'download', () =>
       this.send({
         type: 'notice',
@@ -766,13 +789,14 @@ export class BrowserProjection {
       close: () => {
         if (retiring) return retiring;
         viewer.active = false;
+        const dialogDrain = this.dismissDialog(viewer);
         try {
           watcher.send({ type: 'control', target: this.id, active: false });
         } catch {
           /* Disconnected carrier. */
         }
         if (watcher.control === controller) watcher.control = undefined;
-        retiring = this.queue = this.queue
+        retiring = this.queue = Promise.all([this.queue, dialogDrain])
           .then(async () => {
             await this.releaseInput();
             if (this.viewer === viewer) this.viewer = undefined;
@@ -1096,12 +1120,25 @@ export class BrowserProjection {
                   ? 'navigation_failed'
                   : 'action_failed',
           });
+        if (
+          viewer.active &&
+          error instanceof CommandError &&
+          error.code === 'not_allowed' &&
+          message.action.kind === 'dialog_reply' &&
+          this.dialog?.viewer === viewer &&
+          this.dialog.state.id === message.action.dialog
+        )
+          viewer.send({
+            type: 'dialog',
+            target: this.id,
+            dialog: this.dialog.state,
+          });
       } finally {
         viewer.pending--;
       }
     };
-    if (message.action.kind === 'stop') {
-      // A cancellation interrupts the awaited navigation, not the input order.
+    if (['stop', 'dialog_reply'].includes(message.action.kind)) {
+      // Cancellation and dialog replies can release the operation being awaited.
       // Later effects still wait for both the old work and this cancellation.
       const cancellation = work();
       this.queue = Promise.all([this.queue, cancellation]).then(() => {});
@@ -1142,6 +1179,18 @@ export class BrowserProjection {
     };
     assertCurrent();
     if (this.controlFault) throw new CommandError('target_unavailable');
+    if (action.kind === 'dialog_reply') {
+      const dialog = this.dialog;
+      if (
+        !dialog ||
+        dialog.viewer !== viewer ||
+        dialog.state.id !== action.dialog
+      )
+        throw new CommandError('stale_view');
+      this.clearDialog();
+      await dialog.source.respond(action.accept, action.text);
+      return;
+    }
     if (action.kind === 'viewport') {
       const size = { width: action.width, height: action.height };
       const current = this.page.viewportSize();
@@ -1452,6 +1501,25 @@ export class BrowserProjection {
     this.heldButtons.clear();
   }
 
+  private clearDialog(): void {
+    const dialog = this.dialog;
+    this.dialog = undefined;
+    if (dialog) {
+      try {
+        dialog.viewer.send({ type: 'dialog', target: this.id, dialog: null });
+      } catch {
+        /* The old carrier may already be gone. */
+      }
+    }
+  }
+  private dismissDialog(viewer?: Viewer): Promise<void> {
+    const dialog = this.dialog;
+    if (!dialog || (viewer && dialog.viewer !== viewer))
+      return Promise.resolve();
+    this.clearDialog();
+    return dialog.source.respond(false).catch(() => {});
+  }
+
   close(): Promise<void> {
     return (this.closing ??= this.dispose());
   }
@@ -1473,6 +1541,7 @@ export class BrowserProjection {
     this.clearMedia();
     for (const watcher of this.watchers) watcher.active = false;
     this.watchers.clear();
+    await this.dismissDialog();
     await this.queue;
     await this.releaseInput().catch(() => {
       this.controlFault = true;
@@ -1507,9 +1576,15 @@ class CommandError extends Error {
   }
 }
 function documentIndependent(action: Action): boolean {
-  return ['navigate', 'back', 'forward', 'reload', 'stop', 'viewport'].includes(
-    action.kind,
-  );
+  return [
+    'navigate',
+    'back',
+    'forward',
+    'reload',
+    'stop',
+    'viewport',
+    'dialog_reply',
+  ].includes(action.kind);
 }
 function keyCode(key: string, code: string): number {
   const codes: Record<string, number> = {

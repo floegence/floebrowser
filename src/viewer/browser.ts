@@ -2,6 +2,7 @@ import { TabOrder } from './tabs.js';
 import { setIcon } from './icons.js';
 import { DOMBrowserView, type ViewOptions } from './client.js';
 import { browserText } from './messages.js';
+import { WebsiteDialog } from './dialog.js';
 import { browserTemplate } from './template.js';
 import {
   AddressSuggestions,
@@ -81,10 +82,20 @@ export function mountBrowser(
   let ready = false;
   let changingTab = false;
   let loading = false;
+  let dialogOpen = false;
   let canGoBack = false;
   let canGoForward = false;
   let offerTakeover = false;
   let toastTimer: ReturnType<typeof setTimeout>;
+  const dialog = new WebsiteDialog(
+    stage,
+    text,
+    (action) => view?.dispatch(action) ?? Promise.resolve(false),
+    (visible) => {
+      dialogOpen = visible;
+      updateChrome();
+    },
+  );
   // Only unsent tab selections are replaceable. Submitted effects are never replayed.
   type ChromeCommand = { action: Action; resolve: (ok: boolean) => void };
   const commands: ChromeCommand[] = [];
@@ -148,7 +159,7 @@ export function mountBrowser(
       text(loading ? 'navigation.stop' : 'navigation.reloadPage'),
     );
     setIcon(element('reload'), loading ? 'close' : 'reload');
-    viewport.inert = !connected || !ready || pending;
+    viewport.inert = !connected || !ready || pending || dialogOpen;
     for (const [id, item] of rows) {
       item.row.classList.toggle('active', id === selected);
       item.select.setAttribute('aria-selected', String(id === selected));
@@ -226,7 +237,7 @@ export function mountBrowser(
     if (!connected || !editTabs) return;
     void command({ kind: 'tab_new' });
     address.value = '';
-    addressEditing = true;
+    addressEditing = false;
     // Focus belongs to the user's new-tab intent. A later admission reply
     // must not steal it back after they have submitted an address or clicked.
     focusAddress();
@@ -375,11 +386,16 @@ export function mountBrowser(
     current?.resolve(false);
     current = undefined;
     view?.destroy();
+    dialog.show(null);
     connected = ready = changingTab = false;
     view = new DOMBrowserView(viewport, options.connect({ takeover }), {
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
+      onDialog: (state) => {
+        dialog.show(state);
+        options.onDialog?.(state);
+      },
       onControl: (active) => {
         controlling = active;
         options.onControl?.(active);
@@ -420,6 +436,7 @@ export function mountBrowser(
         ready = status === 'live';
         if (ready || status === 'disconnected') changingTab = false;
         if (status === 'disconnected') {
+          dialog.show(null);
           for (const pending of commands.splice(0)) pending.resolve(false);
           hideSuggestions();
         }
@@ -803,6 +820,7 @@ export function mountBrowser(
     current?.resolve(false);
     current = undefined;
     tabOrder.destroy();
+    dialog.destroy();
     view?.destroy();
     root.remove();
   }

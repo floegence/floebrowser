@@ -34,7 +34,7 @@ export class PlaywrightSourceBrowser {
         viewport: page.viewportSize() ?? undefined,
         setViewport: (size) => page.setViewportSize(size),
         activate: () => page.bringToFront(),
-        close: () => page.close(),
+        close: () => closePage(page, root),
         createPage: async () => this.adopt(await page.context().newPage()),
       });
     } catch (error) {
@@ -98,6 +98,9 @@ export class PlaywrightSourceBrowser {
         .catch(() => {});
     };
     const crash = () => source.emit('crash');
+    // Playwright otherwise auto-dismisses website dialogs before the shared
+    // debugger owner can present them to the authorized controller.
+    const dialog = () => {};
     const closed = () => {
       source.markClosed();
       void dispose();
@@ -107,6 +110,7 @@ export class PlaywrightSourceBrowser {
     page.on('framedetached', detached);
     page.on('popup', popup);
     page.on('crash', crash);
+    page.on('dialog', dialog);
     page.on('close', closed);
     const dispose = async () => {
       if (disposed) return;
@@ -119,6 +123,7 @@ export class PlaywrightSourceBrowser {
       page.off('framedetached', detached);
       page.off('popup', popup);
       page.off('crash', crash);
+      page.off('dialog', dialog);
       page.off('close', closed);
       await Promise.allSettled(pending.values());
       source.dispose();
@@ -142,4 +147,35 @@ export class PlaywrightSourceBrowser {
     await Promise.allSettled([...this.disposers].map((dispose) => dispose()));
     this.pages.clear();
   }
+}
+
+/** Chromium owns the beforeunload decision. Keep directory membership until
+ * either the target actually closes or the user cancels that close. */
+function closePage(page: Page, transport: CDPSession): Promise<void> {
+  if (page.isClosed()) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      page.off('close', closed);
+      transport.off('Page.javascriptDialogClosed', answered);
+    };
+    const closed = () => {
+      cleanup();
+      resolve();
+    };
+    const answered = ({ result }: { result: boolean }) => {
+      if (!result) {
+        cleanup();
+        resolve();
+      }
+    };
+    page.on('close', closed);
+    transport.on('Page.javascriptDialogClosed', answered);
+    // Page.close runs the native beforeunload lifecycle without also closing a
+    // Playwright-owned context (browser.newPage creates such a context).
+    void transport.send('Page.close').catch((error) => {
+      cleanup();
+      if (page.isClosed()) resolve();
+      else reject(error);
+    });
+  });
 }

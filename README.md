@@ -197,6 +197,19 @@ Chromium network-error documents are not replayed as website DOM. Selecting or
 reconnecting a failed tab keeps the original failed address and error state;
 only explicit navigation or reload requests the site again.
 
+Website alerts, confirmations, prompts and beforeunload decisions use page-local
+browser chrome. Only the current controller receives the dialog, with a fresh
+opaque identity; observers receive neither its text nor reply authority. Replies
+remain host-authorized and can release a blocked input/navigation command. The
+viewer pauses action deadlines while Chromium waits for the user's decision.
+Switching tabs, disconnecting or revoking control cancels the old dialog without
+accepting it; old identities and responses are never reused. Cancelling
+beforeunload preserves the source page and directory entry. Confirming closes only
+that page. Hosts with an existing AI/native-dialog owner supply
+`onUncontrolledDialog` for dialogs without a projection controller; otherwise
+unattended dialogs are dismissed. The low-level view exposes `onDialog`, and
+`mountBrowser` supplies the localized, keyboard-accessible dialog surface.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:
@@ -441,7 +454,7 @@ The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exerci
 | Frames                                                       | Same-origin, cross-origin and nested iframe DOM; no client website execution                                                                            |
 | New tabs                                                     | Initial page, its descendant popups, and explicitly created tabs; unrelated pages remain outside the session                                            |
 | CAPTCHA                                                      | DOM-based widgets can be shown and operated by the user; site acceptance, image challenges and anti-automation compatibility require site qualification |
-| Native dialogs                                               | Dismissed at the source with a notice; no automatic acceptance                                                                                          |
+| Native dialogs                                               | Alerts, confirmations, prompts and beforeunload are shown to the current controller; unattended dialogs are cancelled unless handled by the host        |
 | Downloads                                                    | Started at the source with a notice; no file-transfer UI                                                                                                |
 | Clipboard                                                    | Text paste and copying projected text; no source OS clipboard synchronization                                                                           |
 | Existing loaded pages                                        | Recover retained source resources on attachment; bodies already discarded by Chromium remain unavailable                                                |

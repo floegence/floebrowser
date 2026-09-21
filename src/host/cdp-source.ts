@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type {
   SourceElement,
+  SourceDialog,
   SourceFrame,
   SourceFunction,
   SourcePage,
@@ -131,22 +132,37 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       listen('Page.domContentEventFired', () => this.emit('domcontentloaded'));
       listen('Page.loadEventFired', () => this.emit('load'));
       listen('Inspector.targetCrashed', () => this.emit('crash'));
-      listen('Page.javascriptDialogOpening', (dialog) =>
-        this.emit('dialog', {
-          ...dialog,
-          dismiss: () =>
-            transport.send('Page.handleJavaScriptDialog', { accept: false }),
-          accept: (promptText?: string) =>
-            transport.send('Page.handleJavaScriptDialog', {
-              accept: true,
-              promptText,
-            }),
-        }),
-      );
       listen('Page.downloadWillBegin', (download) =>
         this.emit('download', download),
       );
     }
+    let activeDialog: SourceDialog | undefined;
+    listen('Page.javascriptDialogOpening', (event) => {
+      let responded = false;
+      const dialog: SourceDialog = {
+        type: event.type,
+        url: event.url,
+        message: event.message,
+        defaultPrompt: event.defaultPrompt,
+        respond: async (accept, promptText) => {
+          if (activeDialog !== dialog || responded)
+            throw new Error('Source dialog expired');
+          responded = true;
+          await transport.send('Page.handleJavaScriptDialog', {
+            accept,
+            promptText,
+          });
+        },
+      };
+      activeDialog = dialog;
+      this.emit('dialog', dialog);
+    });
+    listen('Page.javascriptDialogClosed', (event) => {
+      if (activeDialog?.type === 'beforeunload' && !event.result)
+        for (const cancel of this.navigations) cancel();
+      activeDialog = undefined;
+      this.emit('dialogclosed', event);
+    });
     const entry = {
       dispose: () => {
         for (const dispose of disposers) dispose();
@@ -371,6 +387,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const cancel of this.navigations) cancel();
     if (!this.closed) {
       this.closed = true;
       this.emit('close');

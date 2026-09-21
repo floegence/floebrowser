@@ -35,6 +35,71 @@
 .floe-browser button {
   -webkit-tap-highlight-color: transparent;
 }
+.floe-browser .website-dialog {
+  position: absolute;
+  z-index: 40;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--floe-background);
+  box-shadow:
+    0 12px 36px #17263e24,
+    0 2px 6px #17263e0a;
+}
+.floe-browser .website-dialog h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 6px 0 12px;
+}
+.floe-browser .dialog-origin {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.floe-browser .dialog-message {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 18px;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.floe-browser .website-dialog input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  background: var(--floe-field);
+}
+.floe-browser .website-dialog input:focus {
+  border-color: var(--accent);
+}
+.floe-browser .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+.floe-browser .dialog-actions button {
+  min-width: 72px;
+  margin: 0;
+}
+.floe-browser .secondary-button {
+  padding: 9px 16px;
+  background: var(--floe-field);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
 .floe-browser button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

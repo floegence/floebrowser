@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
@@ -84,6 +84,14 @@ export const actionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['back', 'forward', 'reload', 'stop']) }).strict(),
   z
     .object({
+      kind: z.literal('dialog_reply'),
+      dialog: z.string().min(1).max(80),
+      accept: z.boolean(),
+      text: z.string().max(16000).optional(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('media'),
       node: z.number().int().positive(),
       operation: z.enum(['play', 'pause', 'seek', 'reveal']),
@@ -155,6 +163,14 @@ export type BrowserState = {
   canGoBack: boolean;
   canGoForward: boolean;
 };
+export type DialogState = {
+  id: string;
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
+  url: string;
+  message: string;
+  defaultPrompt: string;
+  truncated: boolean;
+};
 export type TabState = {
   active: string;
   tabs: Array<{
@@ -206,11 +222,11 @@ export type NoticeCode =
   | 'dom_limit'
   | 'dom_update_failed'
   | 'popup_unavailable'
-  | 'dialog_dismissed'
   | 'download_source_only'
   | 'resource_limit'
   | 'tab_unavailable';
 export type ServerMessage =
+  | { type: 'dialog'; target: string; dialog: DialogState | null }
   | { type: 'control'; target: string; active: boolean }
   | { type: 'session_access'; editTabs: boolean }
   | { type: 'media_end'; target: string; view: string }

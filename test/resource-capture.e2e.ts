@@ -254,7 +254,19 @@ for (const mode of [
             'Adopting the cached popup must not refetch its resources',
           ),
         );
+        assert.equal(
+          await viewer.getByRole('tab').count(),
+          2,
+          'The popup supersedes an authorization-pending request from the old tab',
+        );
+        await viewer
+          .getByRole('button', { name: 'New tab', exact: true })
+          .click();
+        await viewer
+          .getByRole('tab', { name: 'New tab', exact: true })
+          .waitFor();
         assert.equal(await viewer.getByRole('tab').count(), 3);
+        assert.equal(await viewer.locator('#toast').isVisible(), false);
       }
     },
   );

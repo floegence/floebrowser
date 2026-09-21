@@ -19,6 +19,7 @@ export {
   PROTOCOL_VERSION,
   type Action,
   type BrowserState,
+  type DialogState,
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,
@@ -42,6 +43,7 @@ export {
 export { PlaywrightSourceBrowser } from './playwright-source.js';
 export type {
   SourcePage,
+  SourceDialog,
   SourceFrame,
   SourceElement,
   SourceTransport,

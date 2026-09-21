@@ -23,6 +23,7 @@ import type {
   ServerMessage,
   DisconnectReason,
   TabState,
+  DialogState,
 } from '../shared/protocol.js';
 import {
   DISCONNECT_CODES,
@@ -51,10 +52,13 @@ export type ViewOptions = {
   /** Return true for a browser-chrome shortcut consumed by the embedding host. */
   onShortcut?: (event: KeyboardEvent, phase: 'down' | 'up') => boolean;
   onTabs?: (state: TabState) => void;
+  /** Website-native dialogs are delivered only to the active source controller. */
+  onDialog?: (dialog: DialogState | null) => void;
 };
 type Pending = {
   resolve: (ok: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+  expire: () => void;
   started: number;
   epoch: string;
   tab: string;
@@ -111,6 +115,7 @@ export class DOMBrowserView {
   private dragging = false;
   private inputEngaged = false;
   private sourceFocus?: FocusState;
+  private dialogOpen = false;
 
   constructor(
     private container: HTMLElement,
@@ -329,6 +334,18 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'dialog') {
+      if (message.target === this.tab && (!message.dialog || this.controlled)) {
+        this.dialogOpen = !!message.dialog;
+        for (const pending of this.pending.values()) {
+          clearTimeout(pending.timer);
+          if (!this.dialogOpen)
+            pending.timer = setTimeout(pending.expire, 25000);
+        }
+        this.options.onDialog?.(message.dialog);
+      }
+      return;
+    }
     if (message.type === 'session_access') {
       this.editTabs = message.editTabs;
       this.options.onSessionAccess?.(message.editTabs);
@@ -338,6 +355,8 @@ export class DOMBrowserView {
       if (message.target === this.tab) {
         this.controlled = message.active;
         if (!message.active) {
+          this.dialogOpen = false;
+          this.options.onDialog?.(null);
           this.queuedWheel = undefined;
           this.inputEngaged = false;
         }
@@ -363,6 +382,8 @@ export class DOMBrowserView {
         message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
       );
       if (message.state.active !== this.tab) {
+        this.dialogOpen = false;
+        this.options.onDialog?.(null);
         this.controlled = false;
         this.options.onControl?.(false);
         for (const [id, pending] of this.pending) {
@@ -665,7 +686,9 @@ export class DOMBrowserView {
       (!this.editTabs &&
         action.kind.startsWith('tab_') &&
         action.kind !== 'tab_select') ||
-      (this.tabCommands > 0 && !action.kind.startsWith('tab_')) ||
+      (this.tabCommands > 0 &&
+        !action.kind.startsWith('tab_') &&
+        action.kind !== 'dialog_reply') ||
       (!this.ready &&
         ![
           'navigate',
@@ -673,6 +696,7 @@ export class DOMBrowserView {
           'forward',
           'reload',
           'stop',
+          'dialog_reply',
           'viewport',
           'tab_new',
           'tab_restore',
@@ -711,7 +735,7 @@ export class DOMBrowserView {
       'media',
     ].includes(action.kind);
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const expire = () => {
         this.pending.delete(id);
         resolve(false);
         if (
@@ -720,10 +744,14 @@ export class DOMBrowserView {
           (chrome || this.tab === tab)
         )
           this.options.onNotice?.(this.text('action.timeout'));
-      }, 25000);
+      };
+      const timer = setTimeout(expire, 25000);
+      if (this.dialogOpen && action.kind !== 'dialog_reply')
+        clearTimeout(timer);
       this.pending.set(id, {
         resolve,
         timer,
+        expire,
         started: performance.now(),
         epoch: this.epoch,
         tab: this.tab,
@@ -1088,6 +1116,8 @@ export class DOMBrowserView {
   }
 
   private disconnected(reason?: DisconnectReason): void {
+    this.dialogOpen = false;
+    this.options.onDialog?.(null);
     clearTimeout(this.viewportTimer);
     this.queuedWheel = undefined;
     this.media.reset();

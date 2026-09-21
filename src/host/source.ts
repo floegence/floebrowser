@@ -7,6 +7,14 @@ export interface SourceTransport {
 }
 export type SourceViewport = { width: number; height: number };
 export type SourceFunction<A, R> = (argument: A) => R | Promise<R>;
+export interface SourceDialog {
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
+  url: string;
+  message: string;
+  defaultPrompt?: string;
+  /** One response only; failure is an unknown outcome, never a retry grant. */
+  respond(accept: boolean, promptText?: string): Promise<void>;
+}
 export interface SourceElement {
   evaluate<A, R>(
     fn: (node: Element, argument: A) => R | Promise<R>,
