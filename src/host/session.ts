@@ -243,7 +243,10 @@ export class BrowserSession {
       ack('stale_view');
       return Promise.resolve();
     }
-    const revision = ++this.selectionRevision;
+    const revision =
+      message.action.kind === 'tab_move'
+        ? this.selectionRevision
+        : ++this.selectionRevision;
     viewer.pending++;
     let operation: Promise<void> | undefined;
     const admission = this.enqueue(async () => {
@@ -263,6 +266,24 @@ export class BrowserSession {
           const tab = await this.add(await this.initial.context().newPage());
           if (viewer.active && revision === this.selectionRevision)
             await this.select(tab.engine.id);
+        } else if (action.kind === 'tab_move') {
+          if (
+            !this.tabs.has(action.tab) ||
+            (action.before !== null && !this.tabs.has(action.before))
+          ) {
+            ack('stale_view');
+            return;
+          }
+          if (action.tab !== action.before) {
+            const entries = [...this.tabs].filter(([id]) => id !== action.tab);
+            const index =
+              action.before === null
+                ? entries.length
+                : entries.findIndex(([id]) => id === action.before);
+            entries.splice(index, 0, [action.tab, this.tabs.get(action.tab)!]);
+            this.tabs = new Map(entries);
+            this.publish();
+          }
         } else if (action.kind === 'tab_select') await this.select(action.tab);
         else if (action.kind === 'tab_close') {
           const tab = this.tabs.get(action.tab);

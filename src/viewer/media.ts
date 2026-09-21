@@ -1,5 +1,6 @@
 import { CANVAS_ATTRIBUTE } from '../shared/style.js';
 import { CANVAS_CHANNEL, CanvasFrames } from '../shared/canvas.js';
+import { setIcon } from './icons.js';
 import type {
   Action,
   MediaConfiguration,
@@ -36,8 +37,12 @@ export class MediaView {
     {
       root: HTMLElement;
       label: HTMLElement;
+      title: HTMLElement;
       play: HTMLButtonElement;
       seek: HTMLInputElement;
+      timeline: HTMLElement;
+      elapsed: HTMLElement;
+      duration: HTMLElement;
     }
   >();
   private controls = document.createElement('div');
@@ -87,13 +92,30 @@ export class MediaView {
       this.toggle.focus();
     });
     this.sound.type = 'button';
+    this.sound.className = 'floe-media-sound';
     this.sound.onclick = () => {
       this.audible = this.soundBlocked || !this.audible;
       this.soundBlocked = false;
       for (const playback of this.playback.values()) this.volume(playback);
       this.renderControls();
     };
-    this.panel.append(this.sound, this.list);
+    const header = document.createElement('header');
+    header.className = 'floe-media-header';
+    const heading = document.createElement('h2');
+    heading.textContent = 'Media';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'floe-media-dismiss';
+    close.title = 'Close media controls';
+    close.setAttribute('aria-label', close.title);
+    setIcon(close, 'close');
+    close.onclick = () => {
+      this.dismiss();
+      this.toggle.focus();
+    };
+    header.append(heading, this.sound, close);
+    this.list.className = 'floe-media-list';
+    this.panel.append(header, this.list);
     this.controls.append(this.toggle, this.panel);
     container?.append(this.controls);
     this.timer = setInterval(() => this.update(), 100);
@@ -380,8 +402,11 @@ export class MediaView {
     this.toggle.title = this.soundBlocked
       ? 'Sound is muted — media controls'
       : 'Media controls';
-    this.sound.textContent =
+    const soundLabel =
       this.audible && !this.soundBlocked ? 'Mute audio' : 'Unmute audio';
+    this.sound.title = soundLabel;
+    this.sound.setAttribute('aria-label', soundLabel);
+    setIcon(this.sound, this.audible && !this.soundBlocked ? 'sound' : 'muted');
     this.sound.setAttribute(
       'aria-pressed',
       String(!this.audible || this.soundBlocked),
@@ -392,10 +417,23 @@ export class MediaView {
     if (!row) {
       const root = document.createElement('div');
       root.className = 'floe-media-row';
+      const badge = document.createElement('span');
+      badge.className = 'floe-media-art';
+      setIcon(
+        badge,
+        this.node(state.id)?.nodeName === 'AUDIO' ? 'audio' : 'video',
+      );
+      const info = document.createElement('div');
+      info.className = 'floe-media-info';
+      const title = document.createElement('div');
+      title.className = 'floe-media-title';
       const label = document.createElement('span');
+      label.className = 'floe-media-status';
       label.setAttribute('role', 'status');
+      info.append(title, label);
       const play = document.createElement('button');
       play.type = 'button';
+      play.className = 'floe-media-play';
       play.onclick = () => {
         const current = this.states.get(state.id);
         if (current)
@@ -410,6 +448,15 @@ export class MediaView {
       seek.min = '0';
       seek.step = '0.1';
       seek.setAttribute('aria-label', 'Seek source media');
+      const timeline = document.createElement('div');
+      timeline.className = 'floe-media-timeline';
+      const times = document.createElement('div');
+      times.className = 'floe-media-times';
+      const elapsed = document.createElement('span');
+      const duration = document.createElement('span');
+      times.append(elapsed, duration);
+      timeline.append(seek, times);
+      seek.oninput = () => this.progress(seek, elapsed, Number(seek.value));
       seek.onchange = () => {
         void this.dispatch({
           kind: 'media',
@@ -418,12 +465,20 @@ export class MediaView {
           time: Number(seek.value),
         });
       };
-      root.append(label, play, seek);
+      root.append(badge, info, play, timeline);
       this.list.append(root);
-      row = { root, label, play, seek };
+      row = { root, label, title, play, seek, timeline, elapsed, duration };
       this.rows.set(state.id, row);
     }
     row.root.hidden = false;
+    const node = this.node(state.id) as HTMLElement | null;
+    const title =
+      node?.getAttribute('aria-label') ||
+      node?.title ||
+      node?.ownerDocument.title ||
+      (node?.tagName === 'AUDIO' ? 'Audio' : 'Video');
+    if (row.title.textContent !== title) row.title.textContent = title;
+    row.title.title = title;
     const failure = this.playback.get(state.stream)?.failed;
     row.label.textContent =
       state.status === 'unavailable'
@@ -438,15 +493,41 @@ export class MediaView {
                 ? 'Playing'
                 : 'Loading…';
     row.play.disabled = state.status === 'unavailable';
-    row.play.textContent = state.paused ? 'Play' : 'Pause';
+    setIcon(row.play, state.paused ? 'play' : 'pause');
+    row.play.title = state.paused ? 'Play' : 'Pause';
     row.play.setAttribute(
       'aria-label',
       state.paused ? 'Play source media' : 'Pause source media',
     );
-    row.seek.hidden = state.duration <= 0 || state.status === 'unavailable';
+    row.timeline.hidden = state.duration <= 0 || state.status === 'unavailable';
     row.seek.max = String(state.duration);
     if (document.activeElement !== row.seek)
       row.seek.value = String(state.time);
+    this.progress(row.seek, row.elapsed, Number(row.seek.value));
+    row.duration.textContent = this.time(state.duration);
+  }
+  private time(seconds: number) {
+    const value = Math.max(0, Math.floor(seconds));
+    const minutes = Math.floor(value / 60);
+    return minutes >= 60
+      ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
+      : `${minutes}:${String(value % 60).padStart(2, '0')}`;
+  }
+  private progress(
+    seek: HTMLInputElement,
+    elapsed: HTMLElement,
+    value: number,
+  ) {
+    const duration = Number(seek.max);
+    seek.style.setProperty(
+      '--floe-progress',
+      `${duration > 0 ? Math.min(100, (value / duration) * 100) : 0}%`,
+    );
+    elapsed.textContent = this.time(value);
+    seek.setAttribute(
+      'aria-valuetext',
+      `${this.time(value)} of ${this.time(duration)}`,
+    );
   }
   private release(token: string) {
     const playback = this.playback.get(token);

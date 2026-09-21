@@ -17,9 +17,17 @@
           aria-label="New tab"
           title="New tab"
         >
-          +
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 4v12M4 10h12" />
+          </svg>
         </button>
       </div>
+      <span
+        id="tab-announcement"
+        class="sr-only"
+        role="status"
+        aria-live="polite"
+      ></span>
       <nav class="toolbar" aria-label="Browser navigation">
         <div class="navigation-buttons">
           <button class="icon-button" id="back" title="Back" aria-label="Back">
@@ -123,7 +131,11 @@
     </main>
     <div class="toast" id="toast" role="status" hidden>
       <span id="toast-message"></span
-      ><button id="dismiss-toast" aria-label="Dismiss message">×</button>
+      ><button id="dismiss-toast" aria-label="Dismiss message">
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m6 6 8 8M14 6l-8 8" />
+        </svg>
+      </button>
     </div>
     <script type="module" src="./app.js"></script>
   </body>

@@ -1,4 +1,6 @@
 import './viewer.css';
+import { TabOrder } from './tabs.js';
+import { setIcon } from './icons.js';
 import { DOMBrowserView, webSocketConnection } from './client.js';
 import {
   AddressSuggestions,
@@ -39,6 +41,14 @@ const rows = new Map<
   string,
   { row: HTMLElement; select: HTMLButtonElement; close: HTMLButtonElement }
 >();
+const tabOrder = new TabOrder(
+  element('tabs'),
+  () => connected && !switching(),
+  (tab, before) => command({ kind: 'tab_move', tab, before }),
+  (message) => {
+    element('tab-announcement').textContent = message;
+  },
+);
 
 function notice(message: string): void {
   element('toast-message').textContent = message;
@@ -70,6 +80,7 @@ function switching(): boolean {
   );
 }
 function updateChrome(): void {
+  if (!connected) tabOrder.cancel();
   const selected = desiredTab();
   const pending = switching();
   stage.classList.toggle('switching', connected && pending);
@@ -183,15 +194,20 @@ function renderTabs(state: TabState): void {
       rows.delete(id);
     }
   }
-  state.tabs.forEach((tab, index) => {
+  state.tabs.forEach((tab) => {
     let item = rows.get(tab.id);
     if (!item) {
       const row = document.createElement('div');
       row.className = 'tab';
+      row.dataset.tabId = tab.id;
       const select = document.createElement('button');
       select.className = 'tab-select';
       select.setAttribute('role', 'tab');
       select.dataset.tab = tab.id;
+      select.setAttribute(
+        'aria-keyshortcuts',
+        'Alt+Shift+ArrowLeft Alt+Shift+ArrowRight Alt+Shift+Home Alt+Shift+End',
+      );
       select.addEventListener('click', () => selectTab(tab.id));
       select.addEventListener('keydown', (event) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
@@ -222,13 +238,14 @@ function renderTabs(state: TabState): void {
       const close = document.createElement('button');
       close.className = 'tab-close';
       close.title = 'Close tab';
-      close.textContent = '×';
+      setIcon(close, 'close');
       close.addEventListener('click', () => {
         void closeTab(tab.id);
       });
       row.append(select, close);
       item = { row, select, close };
       rows.set(tab.id, item);
+      list.append(row);
     }
     const title =
       tab.title || (tab.url === 'about:blank' ? 'New tab' : tab.url);
@@ -236,10 +253,9 @@ function renderTabs(state: TabState): void {
     item.select.title =
       tab.url === 'about:blank' ? title : `${title} — ${tab.url}`;
     item.close.setAttribute('aria-label', `Close ${title}`);
-    if (list.children[index] !== item.row)
-      list.insertBefore(item.row, list.children[index] ?? null);
     suggestions.remember(tab.url, title);
   });
+  tabOrder.sync(state.tabs.map((tab) => tab.id));
   updateChrome();
   if (previous !== state.active && !current) {
     setAddress();

@@ -529,6 +529,7 @@ export class DOMBrowserView {
   }
 
   dispatch(action: Action): Promise<boolean> {
+    if (action.kind === 'tab_move') return this.sendAction(action);
     if (action.kind.startsWith('tab_')) {
       this.queuedWheel = undefined;
       this.tabCommands++;
@@ -595,6 +596,7 @@ export class DOMBrowserView {
           'tab_new',
           'tab_select',
           'tab_close',
+          'tab_move',
         ].includes(action.kind))
     )
       return Promise.resolve(false);

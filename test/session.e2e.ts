@@ -97,3 +97,70 @@ test('fences stale tab commands, authorizes tab creation and leaves unrelated pa
     await browser.close();
   }
 });
+
+test('tab order is authorized session state and moving a tab preserves its controller and document', async (t) => {
+  const browser = await chromium.launch({ chromiumSandbox: true });
+  const context = await browser.newContext();
+  const source = await context.newPage();
+  let allowed = true;
+  const session = await BrowserSession.attach(source, {
+    authorize: () => allowed,
+  });
+  const messages: ServerMessage[] = [];
+  let controller = await session.connect((m) => messages.push(m));
+  t.after(async () => {
+    await browser.close();
+    await session.close();
+  });
+  let id = 0;
+  const send = (action: any, tab = session.currentState.active) =>
+    controller.receive({ type: 'command', id: ++id, tab, epoch: '', action });
+  await send({ kind: 'tab_new' });
+  await send({ kind: 'tab_new' });
+  const [a, b, c] = session.currentState.tabs.map((tab) => tab.id);
+  const active = session.activeProjection;
+  messages.length = 0;
+  await send({ kind: 'tab_move', tab: c, before: a });
+  assert.deepEqual(
+    session.currentState.tabs.map((tab) => tab.id),
+    [c, a, b],
+  );
+  assert.equal(session.currentState.active, c);
+  assert.equal(session.activeProjection, active);
+  assert.equal(
+    messages.some((m) => m.type === 'hello'),
+    false,
+    'Reordering must not re-admit the controller',
+  );
+  assert.equal(messages.findLast((m) => m.type === 'ack')?.ok, true);
+  await controller.close();
+  messages.length = 0;
+  controller = await session.connect((m) => messages.push(m));
+  assert.deepEqual(
+    messages.find((m) => m.type === 'tabs')?.state.tabs.map((tab) => tab.id),
+    [c, a, b],
+  );
+  allowed = false;
+  await send({ kind: 'tab_move', tab: c, before: null });
+  assert.equal(messages.findLast((m) => m.type === 'ack')?.code, 'not_allowed');
+  allowed = true;
+  await send({ kind: 'tab_move', tab: c, before: 'missing' });
+  assert.equal(messages.findLast((m) => m.type === 'ack')?.code, 'stale_view');
+  await send({ kind: 'tab_move', tab: c, before: null }, a);
+  assert.equal(messages.findLast((m) => m.type === 'ack')?.code, 'stale_view');
+  assert.deepEqual(
+    session.currentState.tabs.map((tab) => tab.id),
+    [c, a, b],
+  );
+  await send({ kind: 'tab_move', tab: a, before: null });
+  assert.deepEqual(
+    session.currentState.tabs.map((tab) => tab.id),
+    [c, b, a],
+  );
+  await send({ kind: 'tab_close', tab: c });
+  assert.equal(
+    session.currentState.active,
+    b,
+    'Closing follows the visible tab order',
+  );
+});
