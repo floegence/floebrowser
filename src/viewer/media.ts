@@ -304,10 +304,9 @@ export class MediaView {
           canvas.height = frame.displayHeight;
         canvas.getContext('2d')!.drawImage(frame, 0, 0);
         frame.close();
-        playback.stream ??= canvas.captureStream(0);
-        (
-          playback.stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack
-        ).requestFrame();
+        // Automatic capture of changed pictures works across viewer engines;
+        // requestFrame() is absent in Firefox and some WebKit releases.
+        playback.stream ??= canvas.captureStream(24);
         playback.decoder?.painted();
         this.update();
       };

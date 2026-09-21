@@ -526,6 +526,17 @@ The test suite also retains an explicit TODO reproducer for CSSOM serialization 
 
 This matrix qualifies the listed Chromium fixtures, not every CSS or browser feature. Resources whose bytes Chromium has discarded, local fonts absent from the client, differences in CSS support or device/display preferences, and browser-native state such as visited-link history can still differ. Closed shadow roots and DRM remain outside DOM replay; Canvas graphics use their own source image channel. New compatibility failures should first become source/viewer comparison fixtures in this matrix; do not add site-name exceptions, client website requests, periodic full-page refreshes or a screenshot fallback.
 
+`test/viewer-engines.e2e.ts` additionally exercises the Playwright Chromium 153,
+Firefox 155 and WebKit 26.6 development engines. All three receive inert DOM,
+responsive layout, Canvas images and actual VP8/Opus decoding without client
+website requests or client WebRTC. Decoded pictures use automatic Canvas stream
+capture; Firefox does not expose `CanvasCaptureMediaStreamTrack.requestFrame()`.
+Chromium and Firefox also forward source clicks and text. WebKit suppresses even
+host-installed event listeners inside scriptless sandbox frames, so its input
+case is an explicit failing TODO. The scriptless sandbox must not be weakened to
+make this case pass. Interactive WebKit/Safari support remains blocked, and these
+development-engine tests do not qualify current stable Safari, Firefox or Edge.
+
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
 | Website category | Sample and observed outcome                                                                                                              |
