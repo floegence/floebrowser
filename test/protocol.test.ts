@@ -161,3 +161,23 @@ test('page zoom rejects unbounded or nonnumeric source density', () => {
       valid,
     );
 });
+
+test('file replies contain bounded opaque identities and cannot nominate source paths', () => {
+  for (const [files, valid] of [
+    [null, true],
+    [['a'.repeat(32)], true],
+    [['/etc/passwd'], false],
+    [['../private'], false],
+    [Array(129).fill('a'.repeat(32)), false],
+  ] as const)
+    assert.equal(
+      clientMessageSchema.safeParse({
+        type: 'command',
+        id: 1,
+        tab: 'tab',
+        epoch: '',
+        action: { kind: 'file_reply', chooser: 'request', files },
+      }).success,
+      valid,
+    );
+});

@@ -220,16 +220,11 @@ export class DOMProjection {
         node.childNodes = [];
         return;
       }
-      if (
-        blocked.has(original) ||
-        (original === 'input' && node.attributes?.type === 'file')
-      ) {
+      if (blocked.has(original)) {
         const label =
-          original === 'input'
-            ? 'File upload'
-            : original === 'iframe' || original === 'frame'
-              ? 'Embedded frame'
-              : original[0]!.toUpperCase() + original.slice(1);
+          original === 'iframe' || original === 'frame'
+            ? 'Embedded frame'
+            : original[0]!.toUpperCase() + original.slice(1);
         const width = /^[\d.]+px$/.test(node.attributes?.rr_width)
           ? node.attributes.rr_width
           : '100%';

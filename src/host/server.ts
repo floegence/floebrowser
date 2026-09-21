@@ -22,6 +22,7 @@ import {
 } from '../shared/protocol.js';
 
 export interface ProjectionServerOptions {
+  uploadLimits?: AttachOptions['uploadLimits'];
   port?: number;
   authorize: AttachOptions['authorize'];
   mediaBridge?: SourceMediaBridge;
@@ -37,6 +38,7 @@ export async function createProjectionServer(
   const mediaBridge =
     options.mediaBridge ?? new NativeMediaBridge(mediaExecutable());
   const session = await BrowserSession.attach(page, {
+    uploadLimits: options.uploadLimits,
     authorize: options.authorize,
     onState: options.onState,
     mediaBridge,
@@ -57,6 +59,7 @@ export async function createProjectionServer(
     | {
         ws: WebSocket;
         mediaToken: string;
+        uploadToken: string;
         sender?: MediaSender;
         mediaSocket?: WebSocket;
         connection?: SessionConnection;
@@ -85,7 +88,7 @@ export async function createProjectionServer(
     void (async () => {
       if (
         request.headers.host !== new URL(origin).host ||
-        request.method !== 'GET' ||
+        !['GET', 'POST'].includes(request.method ?? '') ||
         closing
       ) {
         respond(response, 403, 'Forbidden');
@@ -101,6 +104,54 @@ export async function createProjectionServer(
         return;
       }
       const path = url.pathname.slice(base.length);
+      if (path.startsWith('upload/') && request.method === 'POST') {
+        const [token, chooser, extra] = path.slice(7).split('/');
+        const viewer = active;
+        const metadata = request.headers['x-floe-file'];
+        if (
+          !viewer?.connection ||
+          token !== viewer.uploadToken ||
+          !chooser ||
+          extra ||
+          request.headers.origin !== origin ||
+          typeof metadata !== 'string' ||
+          metadata.length > 8192 ||
+          viewer.ws.readyState !== WebSocket.OPEN
+        ) {
+          respond(response, 403, 'File transfer unavailable');
+          request.resume();
+          return;
+        }
+        const abort = new AbortController();
+        const canceled = () => {
+          if (!response.writableFinished) abort.abort();
+        };
+        response.on('close', canceled);
+        try {
+          const file = JSON.parse(decodeURIComponent(metadata));
+          if (request.headers['content-length'] !== String(file.size))
+            throw new Error('Upload length mismatch');
+          const id = await viewer.connection.upload(
+            chooser,
+            file,
+            request,
+            abort.signal,
+          );
+          respond(response, 200, JSON.stringify({ id }), 'application/json');
+        } catch {
+          if (!response.destroyed)
+            respond(response, 400, 'File transfer rejected');
+          request.resume();
+        } finally {
+          response.off('close', canceled);
+        }
+        return;
+      }
+      if (request.method !== 'GET') {
+        respond(response, 405, 'Method not allowed');
+        request.resume();
+        return;
+      }
       if (path.startsWith('assets/')) {
         const [tab, id] = path.slice(7).split('/');
         const resource =
@@ -207,6 +258,7 @@ export async function createProjectionServer(
     const viewer: NonNullable<typeof active> = {
       ws,
       mediaToken: randomBytes(32).toString('base64url'),
+      uploadToken: randomBytes(32).toString('base64url'),
       release: (): Promise<void> => {
         if (!released) {
           // Revocation is synchronous; draining source work remains page-local.
@@ -286,7 +338,11 @@ export async function createProjectionServer(
         viewer.connection = controller;
         active = viewer;
         ws.send(
-          JSON.stringify({ type: 'carrier', mediaToken: viewer.mediaToken }),
+          JSON.stringify({
+            type: 'carrier',
+            mediaToken: viewer.mediaToken,
+            uploadToken: viewer.uploadToken,
+          }),
         );
         if (disconnected || ws.readyState !== WebSocket.OPEN) {
           await viewer.release();

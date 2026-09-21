@@ -2,7 +2,17 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { Page } from 'playwright';
-import type { SourceDialog, SourcePage, SourceTransport } from './source.js';
+import type {
+  SourceDialog,
+  SourcePage,
+  SourceTransport,
+  SourceFileChooser,
+} from './source.js';
+import {
+  sourceUploads,
+  type UploadBatch,
+  type UploadLimits,
+} from './uploads.js';
 import { PlaywrightSourceBrowser } from './playwright-source.js';
 import {
   clientMessageSchema,
@@ -19,6 +29,8 @@ import {
   type ClientMessage,
   type Command,
   type DialogState,
+  type FileChooserState,
+  type UploadFile,
   type ServerMessage,
 } from '../shared/protocol.js';
 import { DOMProjection } from './projection.js';
@@ -32,6 +44,7 @@ import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
 const attachedPages = new WeakSet<object>();
 
 export interface AttachOptions {
+  uploadLimits?: UploadLimits;
   /** Source-host-only element collector; the host owns this shared bridge. */
   mediaBridge?: SourceMediaBridge;
   /** Independent, authorized binary carrier. It must not share the input queue. */
@@ -53,6 +66,14 @@ export interface AttachOptions {
 }
 export interface Controller {
   receive(message: ClientMessage): Promise<void>;
+  /** Stream an explicitly selected client file over an independently authorized
+   * host carrier. Returned identities belong only to this pending chooser. */
+  upload(
+    chooser: string,
+    file: UploadFile,
+    body: AsyncIterable<Uint8Array>,
+    signal?: AbortSignal,
+  ): Promise<string>;
   close(): Promise<void>;
 }
 export interface ObservationOptions {
@@ -119,6 +140,13 @@ export class BrowserProjection {
   private metadata?: eventWithTime;
   private viewer?: Viewer;
   private dialog?: { source: SourceDialog; state: DialogState; viewer: Viewer };
+  private chooser?: {
+    source: SourceFileChooser;
+    state: FileChooserState;
+    viewer: Viewer;
+    batch: UploadBatch;
+  };
+  private uploads: ReturnType<typeof sourceUploads>;
   private watchers = new Set<Watcher>();
   private observations = new WeakMap<Observation, Watcher>();
   private snapshotTask?: Promise<void>;
@@ -151,6 +179,7 @@ export class BrowserProjection {
     private options: AttachOptions,
   ) {
     this.id = page.id;
+    this.uploads = sourceUploads(page, options.uploadLimits);
     this.find = new SourceFind(page);
     this.resources = new ResourceStore(
       cdp,
@@ -336,6 +365,40 @@ export class BrowserProjection {
       viewer.send({ type: 'dialog', target: this.id, dialog: state });
     });
     this.listen(this.page, 'dialogclosed', () => this.clearDialog());
+    this.listen(this.page, 'filechooser', (source: SourceFileChooser) => {
+      void this.dismissFiles();
+      const viewer = this.viewer;
+      if (!viewer?.active || (viewer.isCurrent && !viewer.isCurrent())) {
+        void source.respond(null).catch(() => {});
+        return;
+      }
+      const state: FileChooserState = {
+        id: randomBytes(18).toString('base64url'),
+        target: this.id,
+        url: source.url.slice(0, 8192),
+        multiple: source.multiple,
+        directory: source.directory,
+        accept: source.accept,
+        ...this.uploads.budget.remaining,
+      };
+      this.chooser = {
+        source,
+        state,
+        viewer,
+        batch: this.uploads.budget.create(source.directory),
+      };
+      viewer.send({ type: 'file_chooser', target: this.id, chooser: state });
+    });
+    this.listen(this.page, 'filechooserfailed', () => {
+      if (this.viewer?.active)
+        this.viewer.send({ type: 'notice', code: 'file_unavailable' });
+    });
+    const retireFiles = () => {
+      if (this.chooser && !this.chooser.source.current())
+        void this.dismissFiles();
+    };
+    this.listen(this.page, 'documentchanged', retireFiles);
+    this.listen(this.page, 'framedetached', retireFiles);
     this.listen(this.page, 'download', () =>
       this.send({
         type: 'notice',
@@ -793,10 +856,27 @@ export class BrowserProjection {
     let retiring: Promise<void> | undefined;
     const controller: Controller = {
       receive: (message) => this.receive(viewer, message),
+      upload: async (id, file, body, signal) => {
+        const chooser = this.chooser;
+        const current = () =>
+          viewer.active &&
+          this.viewer === viewer &&
+          (!viewer.isCurrent || viewer.isCurrent()) &&
+          chooser?.viewer === viewer &&
+          chooser.state.id === id &&
+          chooser.source.current() &&
+          this.chooser === chooser;
+        if (!current() || !chooser) throw new Error('File chooser unavailable');
+        const result = await chooser.batch.write(file, body, signal);
+        if (!current()) throw new Error('File chooser expired');
+        return result;
+      },
       close: () => {
         if (retiring) return retiring;
         viewer.active = false;
         const dialogDrain = this.dismissDialog(viewer);
+        const fileDrain = this.dismissFiles(viewer);
+        const interception = this.page.setFileChooserIntercepted(false);
         this.find = new SourceFind(this.page);
         try {
           watcher.send({ type: 'control', target: this.id, active: false });
@@ -804,7 +884,12 @@ export class BrowserProjection {
           /* Disconnected carrier. */
         }
         if (watcher.control === controller) watcher.control = undefined;
-        retiring = this.queue = Promise.all([this.queue, dialogDrain])
+        retiring = this.queue = Promise.all([
+          this.queue,
+          dialogDrain,
+          fileDrain,
+          interception,
+        ])
           .then(async () => {
             await this.releaseInput();
             if (this.viewer === viewer) this.viewer = undefined;
@@ -817,7 +902,18 @@ export class BrowserProjection {
     };
     watcher.control = controller;
     watcher.send({ type: 'control', target: this.id, active: true });
-    this.queue = this.queue.then(() => {
+    this.queue = this.queue.then(async () => {
+      if (
+        !viewer.active ||
+        this.viewer !== viewer ||
+        (viewer.isCurrent && !viewer.isCurrent())
+      )
+        return;
+      // Renderer configuration precedes this page's input, never session/tab
+      // admission. A hung renderer must not prevent creating a healthy tab.
+      await this.page.setFileChooserIntercepted(true).catch(() => {
+        this.controlFault = true;
+      });
       if (viewer.active && this.viewer === viewer && this.controlFault)
         this.updateState({ status: 'error' });
     });
@@ -834,7 +930,11 @@ export class BrowserProjection {
         observation,
         this.options.authorize,
       );
-      return { receive: controller.receive, close: () => observation.close() };
+      return {
+        receive: controller.receive,
+        upload: controller.upload,
+        close: () => observation.close(),
+      };
     } catch (error) {
       await observation.close();
       throw error;
@@ -1187,6 +1287,37 @@ export class BrowserProjection {
     };
     assertCurrent();
     if (this.controlFault) throw new CommandError('target_unavailable');
+    if (action.kind === 'file_reply') {
+      const chooser = this.chooser;
+      if (
+        !chooser ||
+        chooser.viewer !== viewer ||
+        chooser.state.id !== action.chooser ||
+        !chooser.source.current()
+      )
+        throw new CommandError('stale_view');
+      if (action.files === null) {
+        await this.dismissFiles(viewer);
+        return;
+      }
+      if (
+        !chooser.source.multiple &&
+        !chooser.source.directory &&
+        action.files.length !== 1
+      )
+        throw new CommandError('unsupported');
+      const paths = await chooser.batch.readyPaths(action.files);
+      assertCurrent();
+      if (this.chooser !== chooser || !chooser.source.current())
+        throw new CommandError('stale_view');
+      // Chromium may read selected files lazily. Retain them for the source
+      // document even when its controller disconnects or selection changes.
+      chooser.batch.commit();
+      this.uploads.retain(chooser.batch, chooser.source.frame);
+      this.clearFiles();
+      await chooser.source.respond(paths);
+      return;
+    }
     if (action.kind === 'find') {
       const found = await this.find.next(
         action.query,
@@ -1555,6 +1686,31 @@ export class BrowserProjection {
       }
     }
   }
+  private clearFiles(): void {
+    const chooser = this.chooser;
+    this.chooser = undefined;
+    if (chooser) {
+      try {
+        chooser.viewer.send({
+          type: 'file_chooser',
+          target: this.id,
+          chooser: null,
+        });
+      } catch {
+        /* The old carrier may already be gone. */
+      }
+    }
+  }
+  private dismissFiles(viewer?: Viewer): Promise<void> {
+    const chooser = this.chooser;
+    if (!chooser || (viewer && chooser.viewer !== viewer))
+      return Promise.resolve();
+    this.clearFiles();
+    return Promise.all([
+      chooser.batch.close(),
+      chooser.source.respond(null).catch(() => {}),
+    ]).then(() => {});
+  }
   private dismissDialog(viewer?: Viewer): Promise<void> {
     const dialog = this.dialog;
     if (!dialog || (viewer && dialog.viewer !== viewer))
@@ -1585,6 +1741,8 @@ export class BrowserProjection {
     for (const watcher of this.watchers) watcher.active = false;
     this.watchers.clear();
     await this.dismissDialog();
+    await this.dismissFiles();
+    await this.page.setFileChooserIntercepted(false).catch(() => {});
     await this.queue;
     await this.releaseInput().catch(() => {
       this.controlFault = true;
@@ -1628,6 +1786,7 @@ function documentIndependent(action: Action): boolean {
     'viewport',
     'zoom',
     'dialog_reply',
+    'file_reply',
   ].includes(action.kind);
 }
 function keyCode(key: string, code: string): number {

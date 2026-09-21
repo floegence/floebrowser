@@ -18,4 +18,8 @@ export {
 } from './messages.js';
 export { addressURL, type AddressSuggestion } from './address.js';
 export type { MediaAssets } from './media.js';
-export type { ProjectionConnection } from '../shared/protocol.js';
+export type {
+  ProjectionConnection,
+  FileChooserState,
+  UploadFile,
+} from '../shared/protocol.js';

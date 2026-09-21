@@ -254,7 +254,7 @@ export function installRecorder(binding: string, key: string): void {
   const stop = record({
     emit,
     // Canvas element attributes carry layout; its pixels are never recorded.
-    blockSelector: 'object,embed,input[type="file"]',
+    blockSelector: 'object,embed',
     inlineStylesheet: true,
     inlineImages: false,
     recordCanvas: false,

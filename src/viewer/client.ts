@@ -30,6 +30,7 @@ import type {
   DisconnectReason,
   TabState,
   DialogState,
+  FileChooserState,
 } from '../shared/protocol.js';
 import {
   DISCONNECT_CODES,
@@ -60,6 +61,7 @@ export type ViewOptions = {
   onTabs?: (state: TabState) => void;
   /** Website-native dialogs are delivered only to the active source controller. */
   onDialog?: (dialog: DialogState | null) => void;
+  onFileChooser?: (chooser: FileChooserState | null) => void;
   onFind?: (result: { query: string; found: boolean }) => void;
 };
 type Pending = {
@@ -113,6 +115,7 @@ export class DOMBrowserView {
   private inputDocuments = new WeakMap<Document, Element | null>();
   private viewport = { width: 1280, height: 800 };
   private zoom = 1;
+  private fileChooser: FileChooserState | null = null;
   private viewportMode: ViewportMode = 'responsive';
   private viewportTimer?: ReturnType<typeof setTimeout>;
   private viewportPending?: Promise<boolean>;
@@ -342,6 +345,16 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'file_chooser') {
+      if (
+        message.target === this.tab &&
+        (!message.chooser || this.controlled)
+      ) {
+        this.fileChooser = message.chooser;
+        this.options.onFileChooser?.(message.chooser);
+      }
+      return;
+    }
     if (message.type === 'find') {
       if (message.target === this.tab && message.epoch === this.epoch)
         this.options.onFind?.({ query: message.query, found: message.found });
@@ -370,6 +383,8 @@ export class DOMBrowserView {
         if (!message.active) {
           this.dialogOpen = false;
           this.options.onDialog?.(null);
+          this.fileChooser = null;
+          this.options.onFileChooser?.(null);
           this.queuedWheel = undefined;
           this.inputEngaged = false;
         }
@@ -397,6 +412,8 @@ export class DOMBrowserView {
       if (message.state.active !== this.tab) {
         this.dialogOpen = false;
         this.options.onDialog?.(null);
+        this.fileChooser = null;
+        this.options.onFileChooser?.(null);
         this.controlled = false;
         this.options.onControl?.(false);
         for (const [id, pending] of this.pending) {
@@ -712,6 +729,7 @@ export class DOMBrowserView {
           'reload',
           'stop',
           'dialog_reply',
+          'file_reply',
           'viewport',
           'zoom',
           'tab_new',
@@ -790,6 +808,24 @@ export class DOMBrowserView {
     });
   }
 
+  get canUpload(): boolean {
+    return !!this.connection.upload;
+  }
+  upload(
+    request: FileChooserState,
+    file: File,
+    signal: AbortSignal,
+  ): Promise<string> {
+    if (
+      !this.connected ||
+      !this.controlled ||
+      request.target !== this.tab ||
+      this.fileChooser?.id !== request.id ||
+      !this.connection.upload
+    )
+      return Promise.reject(new Error('File chooser unavailable'));
+    return this.connection.upload(request, file, signal);
+  }
   setFit(fit: boolean): void {
     this.setViewportMode(fit ? 'fit' : 'actual');
   }
@@ -1134,6 +1170,8 @@ export class DOMBrowserView {
   }
 
   private disconnected(reason?: DisconnectReason): void {
+    this.fileChooser = null;
+    this.options.onFileChooser?.(null);
     this.dialogOpen = false;
     this.options.onDialog?.(null);
     clearTimeout(this.viewportTimer);
@@ -1180,6 +1218,7 @@ function mouseButton(button: number): 'left' | 'middle' | 'right' {
 /** No automatic reconnect and no command replay. Reconnect creates a fresh view. */
 export function webSocketConnection(url: string): ProjectionConnection {
   const socket = new WebSocket(url);
+  let uploadToken = '';
   let media: WebSocket | undefined;
   const mediaListeners = new Set<(frame: MediaFrame) => void>();
   const messages = new Set<(message: ServerMessage) => void>();
@@ -1194,6 +1233,12 @@ export function webSocketConnection(url: string): ProjectionConnection {
           !/^[\w-]{43}$/.test(parsed.mediaToken)
         )
           throw new Error('Invalid carrier');
+        if (
+          typeof parsed.uploadToken !== 'string' ||
+          !/^[\w-]{43}$/.test(parsed.uploadToken)
+        )
+          throw new Error('Invalid upload carrier');
+        uploadToken = parsed.uploadToken;
         const address = new URL(url, location.href);
         address.pathname = address.pathname.replace(/stream$/, 'media');
         address.search = `?token=${parsed.mediaToken}`;
@@ -1233,6 +1278,39 @@ export function webSocketConnection(url: string): ProjectionConnection {
     for (const listener of disconnected) listener(reason);
   });
   return {
+    upload: async (request, file, signal) => {
+      if (socket.readyState !== WebSocket.OPEN || !uploadToken)
+        throw new Error('Disconnected');
+      const address = new URL(url, location.href);
+      address.protocol = address.protocol === 'wss:' ? 'https:' : 'http:';
+      address.pathname = address.pathname.replace(
+        /stream$/,
+        `upload/${uploadToken}/${request.id}`,
+      );
+      address.search = '';
+      const response = await fetch(address, {
+        method: 'POST',
+        body: file,
+        signal,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Floe-File': encodeURIComponent(
+            JSON.stringify({
+              name: file.name,
+              size: file.size,
+              ...(file.webkitRelativePath
+                ? { relativePath: file.webkitRelativePath }
+                : {}),
+            }),
+          ),
+        },
+      });
+      if (!response.ok) throw new Error('File transfer rejected');
+      const { id } = await response.json();
+      if (typeof id !== 'string' || !/^[\w-]{32}$/.test(id))
+        throw new Error('Invalid upload identity');
+      return id;
+    },
     send: (message) => {
       if (socket.readyState !== WebSocket.OPEN) throw new Error('Disconnected');
       socket.send(JSON.stringify(message));

@@ -228,6 +228,33 @@ website stylesheet is changed. Source adapters implement both arguments of
 from 25% to 500%, within the existing 8192-pixel CSS viewport limit. New unsent
 zoom choices coalesce, while rejected or uncertain operations are not repeated.
 
+File inputs use Chromium's native file-chooser events, including hidden controls
+opened by page JavaScript, cross-origin frames and directory selection. Only the
+current controller receives `file_chooser`; observers receive no chooser or
+upload identifiers. `mountBrowser` offers a local picker with source origin,
+cancel and transfer progress. Web clients require a new local gesture to open
+that picker after the remote request arrives.
+
+Hosts implement `ProjectionConnection.upload(request, file, signal)` using an
+independently scheduled, authenticated file stream and pass its metadata and byte
+iterator to `SessionConnection.upload` (or `Controller.upload`). The returned
+opaque ID is scoped to that controller's exact pending chooser. The eventual
+`file_reply` command goes through normal action authorization and the source's
+ordered input path. File bytes never enter DOM/control messages; the client never
+submits an operating-system path or uploads directly to the website. The optional
+loopback server supplies this carrier for the standalone browser.
+
+Staging checks the declared byte count, portable names, directory traversal,
+collisions, one directory root, and per-source disk/file limits. Defaults are
+256 MiB and 128 files, configurable via `uploadLimits` when first attaching the
+source. Reservations include pending and already selected files. Incomplete or
+stalled uploads are canceled (120-second transfer deadline); native picker cancel
+does not clear an existing source selection. Navigation, controller revocation
+and disconnection retire pending requests. Accepted files stay available for
+Chromium's lazy reads until their source document or source adapter ends, even
+if the projection detaches. The shared source budget survives projection
+recreation. A source file mutation has no automatic retry after an unknown result.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:
@@ -467,12 +494,13 @@ The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exerci
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser                                                      | Multiple source tabs and one active controlling viewer per session                                                                                      |
 | Canvas 2D, WebGL/WebGL2                                      | Source element images over an independent encrypted channel; alpha and source input supported                                                           |
-| Embeds, file inputs                                          | Explicit unavailable placeholders; no pixel fallback                                                                                                    |
+| Embeds                                                       | Explicit unavailable placeholders; no pixel fallback                                                                                                    |
 | Video and audio                                              | Source-local element collection, host-carried encoded frames and client WebCodecs/AudioWorklet; no screen capture                                       |
 | Frames                                                       | Same-origin, cross-origin and nested iframe DOM; no client website execution                                                                            |
 | New tabs                                                     | Initial page, its descendant popups, and explicitly created tabs; unrelated pages remain outside the session                                            |
 | CAPTCHA                                                      | DOM-based widgets can be shown and operated by the user; site acceptance, image challenges and anti-automation compatibility require site qualification |
 | Native dialogs                                               | Alerts, confirmations, prompts and beforeunload are shown to the current controller; unattended dialogs are cancelled unless handled by the host        |
+| File inputs                                                  | Native source selection; bounded host-carried uploads and directory paths; no arbitrary source file access                                              |
 | Downloads                                                    | Started at the source with a notice; no file-transfer UI                                                                                                |
 | Clipboard                                                    | Text paste and copying projected text; no source OS clipboard synchronization                                                                           |
 | Existing loaded pages                                        | Recover retained source resources on attachment; bodies already discarded by Chromium remain unavailable                                                |

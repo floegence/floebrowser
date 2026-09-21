@@ -15,6 +15,16 @@ export interface SourceDialog {
   /** One response only; failure is an unknown outcome, never a retry grant. */
   respond(accept: boolean, promptText?: string): Promise<void>;
 }
+export interface SourceFileChooser {
+  readonly frame: SourceFrame;
+  readonly url: string;
+  readonly multiple: boolean;
+  readonly directory: boolean;
+  readonly accept: string;
+  current(): boolean;
+  /** Trusted host staging paths only. Null cancels without clearing old files. */
+  respond(paths: readonly string[] | null): Promise<void>;
+}
 export interface SourceElement {
   evaluate<A, R>(
     fn: (node: Element, argument: A) => R | Promise<R>,
@@ -47,6 +57,8 @@ export interface SourcePage {
   frames(): SourceFrame[];
   mainFrame(): SourceFrame;
   sessions(): SourceTransport[];
+  /** The source owner routes native choosers only while remote control is held. */
+  setFileChooserIntercepted(enabled: boolean): Promise<void>;
   url(): string;
   title(): Promise<string>;
   viewportSize(): SourceViewport | null;

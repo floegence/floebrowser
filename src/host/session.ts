@@ -453,6 +453,17 @@ export class BrowserSession {
         return session.state(viewer);
       },
       receive: (message) => this.receive(viewer, message),
+      upload: (id, file, body, signal) => {
+        if (
+          !viewer.active ||
+          !viewer.controller ||
+          !this.entries(viewer).some(
+            (entry) => entry.page.id === viewer.selected,
+          )
+        )
+          return Promise.reject(new Error('Source control unavailable'));
+        return viewer.controller.upload(id, file, body, signal);
+      },
       setMedia: async (enabled) => {
         if (!viewer.active) return;
         viewer.mediaEnabled = enabled;

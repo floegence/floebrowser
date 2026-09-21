@@ -20,6 +20,8 @@ export {
   type Action,
   type BrowserState,
   type DialogState,
+  type FileChooserState,
+  type UploadFile,
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,
@@ -44,11 +46,13 @@ export { PlaywrightSourceBrowser } from './playwright-source.js';
 export type {
   SourcePage,
   SourceDialog,
+  SourceFileChooser,
   SourceFrame,
   SourceElement,
   SourceTransport,
   SourceViewport,
 } from './source.js';
+export { type UploadLimits } from './uploads.js';
 
 export {
   StandaloneSourceDirectory,

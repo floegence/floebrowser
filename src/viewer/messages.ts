@@ -52,6 +52,17 @@ export const englishMessages = {
   'dialog.stay': 'Stay on page',
   'dialog.source': 'Source page',
   'dialog.truncated': 'This website’s message is too long to display in full.',
+  'files.label': 'Choose files for this website',
+  'files.choose': 'Choose files',
+  'files.directory': 'Choose folder',
+  'files.description':
+    'Selected files will be sent to this page in your source browser.',
+  'files.uploading': 'Sending file {current} of {total}…',
+  'files.failed':
+    'The files could not be confirmed. Cancel and choose files again on the page.',
+  'files.unavailable': 'File transfer is not available in this connection.',
+  'files.limit':
+    'Choose fewer or smaller files. Reloading the source page releases its earlier file selections.',
   'status.loading': 'Loading',
   'status.live': 'Live',
   'status.connecting': 'Connecting',
@@ -74,6 +85,8 @@ export const englishMessages = {
   'connection.unconfirmed':
     'Connection lost. Unconfirmed actions have not been repeated.',
   'notice.dismiss': 'Dismiss message',
+  'notice.file_unavailable':
+    'This file selection is no longer available. Choose files again on the current page.',
   'notice.dom_limit': 'This page exceeds the DOM snapshot limit.',
   'notice.dom_update_failed':
     'A page update could not be projected. Reconnect to refresh the view.',

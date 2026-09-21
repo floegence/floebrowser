@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type {
   SourceElement,
   SourceDialog,
+  SourceFileChooser,
   SourceFrame,
   SourceFunction,
   SourcePage,
@@ -44,6 +45,8 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   private closed = false;
   private navigations = new Set<() => void>();
   private disposed = false;
+  private interceptFiles = false;
+  private chooserGeneration = 0;
   private constructor(private options: CDPSourceOptions) {
     super();
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(options.id))
@@ -105,10 +108,12 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
           frame.contextID === executionContextId
         )
           frame.contextID = 0;
+      this.emit('documentchanged');
     });
     listen('Runtime.executionContextsCleared', () => {
       for (const frame of this.frameMap.values())
         if (frame.transport === transport) frame.contextID = 0;
+      this.emit('documentchanged');
     });
     listen('Page.frameNavigated', ({ frame }) => navigate(frame));
     listen('Page.navigatedWithinDocument', ({ frameId, url }) => {
@@ -166,6 +171,11 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       activeDialog = undefined;
       this.emit('dialogclosed', event);
     });
+    listen('Page.fileChooserOpened', (event) => {
+      void this.fileChooser(transport, event).catch(() => {
+        if (active() && this.interceptFiles) this.emit('filechooserfailed');
+      });
+    });
     const entry = {
       dispose: () => {
         for (const dispose of disposers) dispose();
@@ -175,6 +185,10 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     this.sessionMap.set(transport, entry);
     entry.ready = (async () => {
       await transport.send('Page.enable');
+      if (this.interceptFiles)
+        await transport.send('Page.setInterceptFileChooserDialog', {
+          enabled: true,
+        });
       await transport.send('Page.setLifecycleEventsEnabled', { enabled: true });
       const { frameTree } = await transport.send('Page.getFrameTree');
       const visit = (tree: any) => {
@@ -200,6 +214,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     for (const frame of this.frameMap.values())
       if (frame.transport === transport) frame.contextID = 0;
     this.emit('sessiondetached', transport);
+    this.emit('documentchanged');
   }
   private frame(id: string, transport: SourceTransport): CDPFrame {
     let frame = this.frameMap.get(id);
@@ -226,6 +241,89 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   }
   sessions(): SourceTransport[] {
     return [...this.sessionMap.keys()];
+  }
+  async setFileChooserIntercepted(enabled: boolean): Promise<void> {
+    if (this.interceptFiles === enabled) return;
+    this.interceptFiles = enabled;
+    this.chooserGeneration++;
+    await Promise.all(
+      this.sessions().map((transport) =>
+        transport.send('Page.setInterceptFileChooserDialog', { enabled }),
+      ),
+    );
+  }
+  private async fileChooser(
+    transport: SourceTransport,
+    event: { frameId: string; backendNodeId?: number; mode: string },
+  ): Promise<void> {
+    const frame = this.frameMap.get(event.frameId);
+    if (!this.interceptFiles || !frame?.contextID || !event.backendNodeId)
+      return;
+    const generation = ++this.chooserGeneration;
+    const context = frame.contextID;
+    let responded = false;
+    const current = () =>
+      !responded &&
+      !this.disposed &&
+      this.interceptFiles &&
+      generation === this.chooserGeneration &&
+      !frame.isDetached() &&
+      frame.contextID === context;
+    const { node } = await transport.send('DOM.describeNode', {
+      backendNodeId: event.backendNodeId,
+    });
+    const attributes = new Map<string, string>();
+    for (let i = 0; i < (node.attributes?.length ?? 0); i += 2)
+      attributes.set(node.attributes[i], node.attributes[i + 1]);
+    if (
+      !current() ||
+      node.localName !== 'input' ||
+      attributes.get('type')?.toLowerCase() !== 'file'
+    )
+      return;
+    const chooser: SourceFileChooser = {
+      frame,
+      url: frame.url(),
+      multiple: event.mode === 'selectMultiple',
+      directory: attributes.has('webkitdirectory'),
+      accept: (attributes.get('accept') ?? '').slice(0, 4096),
+      current,
+      respond: async (paths) => {
+        if (!current()) throw new Error('Source file chooser expired');
+        responded = true;
+        if (paths === null) return;
+        const { object } = await transport.send('DOM.resolveNode', {
+          backendNodeId: event.backendNodeId,
+          executionContextId: context,
+        });
+        if (!object.objectId) throw new Error('Source file input unavailable');
+        try {
+          const { result } = await transport.send('Runtime.callFunctionOn', {
+            objectId: object.objectId,
+            functionDeclaration:
+              'function() { return this.isConnected && this.localName === "input" && this.type === "file" && !this.disabled; }',
+            returnByValue: true,
+          });
+          if (
+            !result.value ||
+            this.disposed ||
+            !this.interceptFiles ||
+            generation !== this.chooserGeneration ||
+            frame.contextID !== context
+          )
+            throw new Error('Source file input retired');
+          await transport.send('DOM.setFileInputFiles', {
+            objectId: object.objectId,
+            files: paths,
+          });
+        } finally {
+          await transport
+            .send('Runtime.releaseObject', { objectId: object.objectId })
+            .catch(() => {});
+        }
+      },
+    };
+    this.emit('filechooser', chooser);
   }
   mainFrame(): SourceFrame {
     const frame = this.frameMap.get(this.mainID);

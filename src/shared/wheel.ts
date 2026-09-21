@@ -34,11 +34,7 @@ export function mapWheelPoint(
   };
   const supported = (node: Element) => {
     for (let current: Element | null = node; current; current = parent(current))
-      if (
-        current.matches(
-          'object,embed,input[type="file"],[data-floebrowser-unsupported]',
-        )
-      )
+      if (current.matches('object,embed,[data-floebrowser-unsupported]'))
         return false;
     return true;
   };

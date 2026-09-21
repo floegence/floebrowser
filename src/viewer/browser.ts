@@ -5,6 +5,7 @@ import { browserText } from './messages.js';
 import { WebsiteDialog } from './dialog.js';
 import { PageFind } from './find.js';
 import { PageZoom } from './zoom.js';
+import { FilePicker } from './files.js';
 import { browserTemplate } from './template.js';
 import {
   AddressSuggestions,
@@ -85,6 +86,7 @@ export function mountBrowser(
   let changingTab = false;
   let loading = false;
   let dialogOpen = false;
+  let filePickerOpen = false;
   let canGoBack = false;
   let canGoForward = false;
   let offerTakeover = false;
@@ -106,6 +108,16 @@ export function mountBrowser(
     (action) => view?.dispatch(action) ?? Promise.resolve(false),
     (visible) => {
       dialogOpen = visible;
+      updateChrome();
+    },
+  );
+  const files = new FilePicker(
+    stage,
+    text,
+    (request, file, signal) => view!.upload(request, file, signal),
+    (action) => view?.dispatch(action) ?? Promise.resolve(false),
+    (visible) => {
+      filePickerOpen = visible;
       updateChrome();
     },
   );
@@ -172,12 +184,20 @@ export function mountBrowser(
       text(loading ? 'navigation.stop' : 'navigation.reloadPage'),
     );
     setIcon(element('reload'), loading ? 'close' : 'reload');
-    viewport.inert = !connected || !ready || pending || dialogOpen;
+    viewport.inert =
+      !connected || !ready || pending || dialogOpen || filePickerOpen;
     const canFind =
-      connected && controlling && ready && !pending && !dialogOpen;
+      connected &&
+      controlling &&
+      ready &&
+      !pending &&
+      !dialogOpen &&
+      !filePickerOpen;
     element<HTMLButtonElement>('find').disabled = !canFind;
     find.enable(canFind);
-    zoom.enable(connected && controlling && !pending && !dialogOpen);
+    zoom.enable(
+      connected && controlling && !pending && !dialogOpen && !filePickerOpen,
+    );
     for (const [id, item] of rows) {
       item.row.classList.toggle('active', id === selected);
       item.select.setAttribute('aria-selected', String(id === selected));
@@ -419,6 +439,10 @@ export function mountBrowser(
       onDialog: (state) => {
         dialog.show(state);
         options.onDialog?.(state);
+      },
+      onFileChooser: (request) => {
+        files.show(request, view?.canUpload);
+        options.onFileChooser?.(request);
       },
       onControl: (active) => {
         controlling = active;
@@ -857,6 +881,7 @@ export function mountBrowser(
     dialog.destroy();
     find.destroy();
     zoom.destroy();
+    files.destroy();
     view?.destroy();
     root.remove();
   }

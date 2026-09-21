@@ -16,7 +16,19 @@ export const DISCONNECT_CODES = {
   source_unavailable: 4003,
 } as const;
 export type DisconnectReason = keyof typeof DISCONNECT_CODES;
-export const UNSUPPORTED_SELECTOR = 'object,embed,input[type="file"]';
+export const UNSUPPORTED_SELECTOR = 'object,embed';
+
+export type UploadFile = { name: string; size: number; relativePath?: string };
+export type FileChooserState = {
+  id: string;
+  target: string;
+  url: string;
+  multiple: boolean;
+  directory: boolean;
+  accept: string;
+  maxBytes: number;
+  maxFiles: number;
+};
 
 const point = z
   .object({
@@ -27,6 +39,16 @@ const point = z
   .strict();
 const modifiers = z.number().int().min(0).max(15);
 export const actionSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('file_reply'),
+      chooser: z.string().min(1).max(80),
+      files: z
+        .array(z.string().regex(/^[a-zA-Z0-9_-]{32}$/))
+        .max(128)
+        .nullable(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal('zoom'),
@@ -236,6 +258,7 @@ export type SourceMediaPacket = z.infer<typeof sourceMediaPacketSchema>;
 export type MediaPacket = z.infer<typeof mediaPacketSchema>;
 export type MediaState = z.infer<typeof mediaStateSchema>;
 export type NoticeCode =
+  | 'file_unavailable'
   | 'dom_limit'
   | 'dom_update_failed'
   | 'popup_unavailable'
@@ -243,6 +266,7 @@ export type NoticeCode =
   | 'resource_limit'
   | 'tab_unavailable';
 export type ServerMessage =
+  | { type: 'file_chooser'; target: string; chooser: FileChooserState | null }
   | {
       type: 'find';
       target: string;
@@ -292,6 +316,13 @@ export type ServerMessage =
   | { type: 'notice'; code: NoticeCode };
 
 export interface ProjectionConnection {
+  /** Independent binary upload lane; the host authenticates and binds it to
+   * the exact controller and chooser. No data is sent to the website directly. */
+  upload?(
+    request: FileChooserState,
+    file: File,
+    signal: AbortSignal,
+  ): Promise<string>;
   send(message: ClientMessage): void;
   subscribe(listener: (message: ServerMessage) => void): () => void;
   subscribeMedia?(listener: (frame: MediaFrame) => void): () => void;
