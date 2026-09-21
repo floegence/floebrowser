@@ -1,0 +1,170 @@
+import type { MediaFrame } from '../shared/media-wire.js';
+import type { DecoderEvent } from './media-decoder.js';
+
+const scope = globalThis as unknown as {
+  onmessage: (event: MessageEvent) => void;
+  postMessage(message: DecoderEvent, transfer?: Transferable[]): void;
+};
+let video: VideoDecoder | undefined;
+let audio: AudioDecoder | undefined;
+let videoConfiguration = '';
+let needsKey = true;
+let painting = false;
+let latest: VideoFrame | undefined;
+let audioFrames = 0;
+const send = (event: DecoderEvent, transfer?: Transferable[]) =>
+  scope.postMessage(event, transfer);
+
+function resetVideo() {
+  video?.close();
+  video = undefined;
+  videoConfiguration = '';
+  needsKey = true;
+  latest?.close();
+  latest = undefined;
+}
+
+function paint(frame: VideoFrame) {
+  if (painting) {
+    latest?.close();
+    latest = frame;
+    return;
+  }
+  painting = true;
+  send({ type: 'video', frame }, [frame]);
+}
+
+function videoCodec(frame: MediaFrame): string {
+  if (frame.header.codec === 'vp8') return 'vp8';
+  // H.264 access units use Annex B. Its SPS describes the negotiated profile,
+  // compatibility flags and level; no browser-specific profile guess is needed.
+  const bytes = frame.data;
+  for (let i = 2; i + 4 < bytes.length; i++)
+    if (
+      bytes[i - 2] === 0 &&
+      bytes[i - 1] === 0 &&
+      bytes[i] === 1 &&
+      (bytes[i + 1]! & 31) === 7
+    )
+      return (
+        'avc1.' +
+        [...bytes.subarray(i + 2, i + 5)]
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('')
+      );
+  return videoConfiguration.split(':')[0] || '';
+}
+
+function decode(frame: MediaFrame) {
+  const h = frame.header;
+  if (h.track === 'video') {
+    if (video && video.decodeQueueSize >= 6) {
+      resetVideo();
+      send({ type: 'keyframe' });
+    }
+    if (needsKey && !h.keyframe) return;
+    const codec = videoCodec(frame);
+    const configuration = `${codec}:${h.width}:${h.height}`;
+    if (configuration !== videoConfiguration) {
+      resetVideo();
+      if (!h.keyframe || !codec) {
+        send({ type: 'keyframe' });
+        return;
+      }
+      video = new VideoDecoder({
+        output: paint,
+        error: () => {
+          resetVideo();
+          send({ type: 'keyframe' });
+        },
+      });
+      video.configure({
+        codec,
+        codedWidth: h.width,
+        codedHeight: h.height,
+        optimizeForLatency: true,
+      });
+      videoConfiguration = configuration;
+    }
+    video!.decode(
+      new EncodedVideoChunk({
+        type: h.keyframe ? 'key' : 'delta',
+        timestamp: h.timestamp_us,
+        duration: h.duration_us || undefined,
+        data: frame.data,
+      }),
+    );
+    needsKey = false;
+  } else if (h.track === 'audio') {
+    if (!audio) {
+      audio = new AudioDecoder({
+        output: (data) => {
+          try {
+            // Bound even the Worker -> main -> worklet path while the UI is busy.
+            if (audioFrames + data.numberOfFrames > 12000) return;
+            const channels = Array.from(
+              { length: data.numberOfChannels },
+              (_, planeIndex) => {
+                const samples = new Float32Array(data.numberOfFrames);
+                data.copyTo(samples, { planeIndex, format: 'f32-planar' });
+                return samples;
+              },
+            );
+            audioFrames += data.numberOfFrames;
+            send(
+              {
+                type: 'audio',
+                channels,
+                timestamp: data.timestamp,
+                rate: data.sampleRate,
+              },
+              channels.map((c) => c.buffer),
+            );
+          } finally {
+            data.close();
+          }
+        },
+        error: () => {
+          audio = undefined;
+          send({ type: 'unavailable', track: 'audio' });
+        },
+      });
+      audio.configure({
+        codec: 'opus',
+        sampleRate: 48000,
+        numberOfChannels: 2,
+      });
+    }
+    if (audio.decodeQueueSize < 12)
+      audio.decode(
+        new EncodedAudioChunk({
+          type: 'key',
+          timestamp: h.timestamp_us,
+          duration: h.duration_us || undefined,
+          data: frame.data,
+        }),
+      );
+  }
+}
+
+scope.onmessage = ({ data }) => {
+  if (data.type === 'frame') {
+    try {
+      decode(data.frame);
+    } catch {
+      send({ type: 'unavailable', track: data.frame.header.track });
+      if (data.frame.header.track === 'video') resetVideo();
+    } finally {
+      send({ type: 'accepted' });
+    }
+  } else if (data.type === 'reset-video') resetVideo();
+  else if (data.type === 'painted') {
+    painting = false;
+    if (latest) {
+      const frame = latest;
+      latest = undefined;
+      paint(frame);
+    }
+  } else if (data.type === 'audio-consumed')
+    audioFrames = Math.max(0, audioFrames - data.frames);
+};

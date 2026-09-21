@@ -1,16 +1,17 @@
 import { CANVAS_ATTRIBUTE } from '../shared/style.js';
-import { CANVAS_CHANNEL, CanvasFrames } from '../shared/canvas.js';
+import { ElementDecoder, type DecoderEvent } from './media-decoder.js';
+import { AudioOutput } from './audio-output.js';
+import type { MediaFrame } from '../shared/media-wire.js';
 import { setIcon } from './icons.js';
-import type {
-  Action,
-  MediaConfiguration,
-  MediaPacket,
-  MediaState,
-} from '../shared/protocol.js';
+import type { Action, MediaPacket, MediaState } from '../shared/protocol.js';
 
 type Playback = {
   id: number;
-  peer?: RTCPeerConnection;
+  token: string;
+  target: string;
+  view: string;
+  decoder?: ElementDecoder;
+  paint?: HTMLCanvasElement;
   stream?: MediaStream;
   element?: HTMLMediaElement;
   canvasURL?: string;
@@ -19,16 +20,20 @@ type Playback = {
   canvasBytes?: Uint8Array;
   canvasAnimation?: number;
   canvas?: HTMLImageElement;
-  channel?: RTCDataChannel;
-  offer?: string;
-  answer?: string;
-  negotiating: boolean;
   failed?: boolean;
   closed: boolean;
+  clock?: { timestamp: number; at: number };
+  frame?: VideoFrame;
+  frameAnimation?: number;
 };
 
-/** Media uses a separate encrypted realtime connection. The browser's jitter
- * buffer discards late frames without blocking DOM or input transport. */
+export type MediaAssets = {
+  decoderURL: string | URL;
+  audioWorkletURL: string | URL;
+};
+
+/** Decodes host-carried element media. Website code and media URLs never execute
+ * here, and the client never establishes a WebRTC connection. */
 export class MediaView {
   private states = new Map<number, MediaState>();
   private playback = new Map<string, Playback>();
@@ -55,14 +60,22 @@ export class MediaView {
   private audible = true;
   private soundBlocked = false;
   private highlight?: Animation;
-  private configuration: MediaConfiguration = {};
+  private audio: AudioOutput;
   private timer: ReturnType<typeof setInterval>;
   constructor(
     container: HTMLElement | undefined,
     private node: (id: number) => Node | null | undefined,
     private dispatch: (action: Action) => Promise<boolean>,
-    private answer: (node: number, stream: string, sdp: string) => void,
+    private keyframe: (view: string, stream: string) => void,
+    private assets: MediaAssets = {
+      decoderURL: new URL('media-worker.js', document.baseURI),
+      audioWorkletURL: new URL('audio-worklet.js', document.baseURI),
+    },
   ) {
+    this.audio = new AudioOutput(assets.audioWorkletURL, (blocked) => {
+      this.soundBlocked = blocked;
+      this.renderControls();
+    });
     this.controls.className = 'floe-media-controls';
     this.controls.hidden = true;
     this.toggle.type = 'button';
@@ -99,6 +112,7 @@ export class MediaView {
     this.sound.onclick = () => {
       this.audible = this.soundBlocked || !this.audible;
       this.soundBlocked = false;
+      if (this.audible) void this.audio.unlock();
       for (const playback of this.playback.values()) this.volume(playback);
       this.renderControls();
     };
@@ -123,10 +137,7 @@ export class MediaView {
     container?.append(this.controls);
     this.timer = setInterval(() => this.update(), 100);
   }
-  configure(configuration: MediaConfiguration) {
-    this.configuration = configuration;
-  }
-  receive(packet: MediaPacket) {
+  receive(packet: MediaPacket, scope: { target: string; view: string }) {
     if (packet.kind === 'removed') {
       this.remove(packet.id);
       return;
@@ -136,7 +147,24 @@ export class MediaView {
         this.release(token);
     if (packet.kind === 'state') {
       if (!this.states.has(packet.id) && this.states.size >= 8) return;
-      const playback = this.playback.get(packet.stream);
+      let playback = this.playback.get(packet.stream);
+      if (
+        playback &&
+        (playback.target !== scope.target || playback.view !== scope.view)
+      ) {
+        this.release(packet.stream);
+        playback = undefined;
+      }
+      if (!playback && this.playback.size < 8) {
+        playback = {
+          id: packet.id,
+          token: packet.stream,
+          ...scope,
+          closed: false,
+        };
+        this.playback.set(packet.stream, playback);
+        this.keyframe(scope.view, packet.stream);
+      }
       if (playback && playback.id !== packet.id) {
         this.states.delete(playback.id);
         this.rows.get(playback.id)?.root.remove();
@@ -148,149 +176,131 @@ export class MediaView {
       if (playback) this.volume(playback);
       return;
     }
-    void this.offer(packet);
   }
-  private async offer(packet: Extract<MediaPacket, { kind: 'offer' }>) {
-    let playback = this.playback.get(packet.stream);
-    if (!playback) {
-      if (this.playback.size >= 8) return;
-      playback = { id: packet.id, negotiating: false, closed: false };
-      this.playback.set(packet.stream, playback);
-    }
-    if (playback.negotiating) return;
-    if (playback.offer === packet.sdp && playback.answer) {
-      this.answer(packet.id, packet.stream, playback.answer);
+  frame(frame: MediaFrame): void {
+    const h = frame.header;
+    const playback = this.playback.get(h.stream);
+    if (
+      !playback ||
+      playback.closed ||
+      playback.target !== h.target ||
+      playback.view !== h.view ||
+      playback.id !== h.node ||
+      this.states.get(h.node)?.stream !== h.stream
+    )
+      return;
+    if (h.track === 'canvas') {
+      playback.canvasBytes = frame.data;
+      if (playback.canvasAnimation !== undefined) return;
+      playback.canvasAnimation = requestAnimationFrame(() => {
+        playback.canvasAnimation = undefined;
+        const bytes = playback.canvasBytes;
+        playback.canvasBytes = undefined;
+        if (
+          !bytes ||
+          playback.closed ||
+          String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF' ||
+          String.fromCharCode(...bytes.subarray(8, 12)) !== 'WEBP'
+        )
+          return;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 8192)
+          binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        playback.canvasImage = `data:image/webp;base64,${btoa(binary)}`;
+        playback.canvasSize = undefined;
+        this.update();
+      });
       return;
     }
-    playback.negotiating = true;
-    playback.id = packet.id;
-    try {
-      if (!playback.peer) {
-        const peer = new RTCPeerConnection(this.configuration);
-        playback.peer = peer;
-        const current = playback;
-        peer.ondatachannel = (event) => {
-          const channel = event.channel;
-          if (
-            channel.label !== CANVAS_CHANNEL ||
-            current.closed ||
-            current.channel
-          ) {
-            channel.close();
-            return;
-          }
-          current.channel = channel;
-          channel.binaryType = 'arraybuffer';
-          const frames = new CanvasFrames();
-          channel.onmessage = (message) => {
-            if (current.closed || !(message.data instanceof ArrayBuffer))
-              return;
-            const frame = frames.receive(message.data);
-            if (!frame) return;
-            current.canvasBytes = frame.bytes;
-            // A busy viewer paints only the newest complete image on its next
-            // animation frame; decoding old images cannot build a UI backlog.
-            if (current.canvasAnimation !== undefined) return;
-            current.canvasAnimation = requestAnimationFrame(() => {
-              current.canvasAnimation = undefined;
-              const bytes = current.canvasBytes;
-              current.canvasBytes = undefined;
-              if (!bytes || current.closed) return;
-              // Source data supplies bounded WebP bytes, never markup or URLs.
-              if (
-                String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF' ||
-                String.fromCharCode(...bytes.subarray(8, 12)) !== 'WEBP'
-              )
-                return;
-              let binary = '';
-              for (let offset = 0; offset < bytes.length; offset += 8192)
-                binary += String.fromCharCode(
-                  ...bytes.subarray(offset, offset + 8192),
-                );
-              current.canvasImage = `data:image/webp;base64,${btoa(binary)}`;
-              current.canvasSize = undefined;
-              this.update();
-            });
-          };
-        };
-        peer.ontrack = (event) => {
-          if (current.closed) return;
-          current.stream = event.streams[0] ?? new MediaStream([event.track]);
-          this.update();
-        };
-        peer.onconnectionstatechange = () => {
-          if (current.closed) return;
-          if (peer.connectionState === 'failed') current.failed = true;
-          else if (peer.connectionState === 'connected')
-            current.failed = undefined;
-          const state = this.states.get(current.id);
-          if (state) this.renderControls();
-        };
-      }
-      const peer = playback.peer;
-      await peer.setRemoteDescription({ type: 'offer', sdp: packet.sdp });
-      if (playback.closed) return;
-      await peer.setLocalDescription(await peer.createAnswer());
-      if (peer.iceGatheringState !== 'complete')
-        await new Promise<void>((resolve) => {
-          const finish = () => {
-            clearTimeout(timeout);
-            peer.removeEventListener('icegatheringstatechange', changed);
-            resolve();
-          };
-          const changed = () => {
-            if (peer.iceGatheringState === 'complete' || playback!.closed)
-              finish();
-          };
-          const timeout = setTimeout(finish, 3000);
-          peer.addEventListener('icegatheringstatechange', changed);
-          changed();
+    playback.decoder ??= new ElementDecoder(this.assets.decoderURL, (event) =>
+      this.decoded(playback, event),
+    );
+    playback.decoder.push(frame);
+  }
+  private delay(playback: Playback, timestamp: number): number {
+    const now = performance.now();
+    let clock = playback.clock;
+    if (
+      !clock ||
+      now - (clock.at + (timestamp - clock.timestamp) / 1000) > 250 ||
+      clock.at + (timestamp - clock.timestamp) / 1000 - now > 500
+    )
+      playback.clock = clock = { timestamp, at: now + 50 };
+    return clock.at + (timestamp - clock.timestamp) / 1000 - now;
+  }
+  private decoded(playback: Playback, event: DecoderEvent): void {
+    if (playback.closed) {
+      if (event.type === 'video') event.frame.close();
+      return;
+    }
+    if (event.type === 'keyframe') this.keyframe(playback.view, playback.token);
+    else if (event.type === 'unavailable') {
+      playback.failed = true;
+      this.renderControls();
+    } else if (event.type === 'audio') {
+      const count = event.channels[0]?.length ?? 0;
+      void this.audio
+        .add(playback.token, (frames) =>
+          playback.decoder?.audioConsumed(frames),
+        )
+        .then(() => this.volume(playback))
+        .catch(() => {
+          playback.failed = true;
         });
-      if (playback.closed) return;
-      playback.offer = packet.sdp;
-      playback.answer = peer.localDescription!.sdp;
-      this.answer(playback.id, packet.stream, playback.answer);
-    } catch {
-      if (!playback.closed) {
-        playback.failed = true;
-        const state = this.states.get(playback.id);
-        if (state) this.renderControls();
-      }
-    } finally {
-      playback.negotiating = false;
+      if (
+        !this.audio.push(
+          playback.token,
+          event.channels,
+          this.delay(playback, event.timestamp),
+        )
+      )
+        playback.decoder?.audioConsumed(count);
+    } else if (event.type === 'video') {
+      playback.frame?.close();
+      playback.frame = event.frame;
+      // Commit this picture's deadline once. A concurrent audio clock
+      // correction must not reschedule it on every animation frame forever.
+      const presentAt =
+        performance.now() +
+        Math.max(0, this.delay(playback, event.frame.timestamp));
+      const paint = () => {
+        if (playback.closed || !playback.frame) return;
+        if (presentAt - performance.now() > 5) {
+          playback.frameAnimation = requestAnimationFrame(paint);
+          return;
+        }
+        playback.frameAnimation = undefined;
+        const frame = playback.frame;
+        playback.frame = undefined;
+        playback.paint ??= document.createElement('canvas');
+        const canvas = playback.paint;
+        if (canvas.width !== frame.displayWidth)
+          canvas.width = frame.displayWidth;
+        if (canvas.height !== frame.displayHeight)
+          canvas.height = frame.displayHeight;
+        canvas.getContext('2d')!.drawImage(frame, 0, 0);
+        frame.close();
+        playback.stream ??= canvas.captureStream(0);
+        (
+          playback.stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack
+        ).requestFrame();
+        playback.decoder?.painted();
+        this.update();
+      };
+      paint();
     }
   }
   private volume(playback: Playback) {
-    const element = playback.element;
-    if (!element) return;
     const state = this.states.get(playback.id);
-    element.muted =
-      !this.audible || this.soundBlocked || (state?.muted ?? true);
-    element.volume = state?.volume ?? 1;
-    if (state?.paused && element.readyState >= 2) {
-      element.pause();
-      return;
+    const muted =
+      !this.audible || (state?.muted ?? true) || (state?.paused ?? true);
+    this.audio.volume(playback.token, muted ? 0 : (state?.volume ?? 1));
+    // This stream contains decoded video only. Keep its clock running so a
+    // paused source's first frame and later seeks can both be displayed.
+    if (playback.element && playback.stream) {
+      playback.element.muted = true;
+      void playback.element.play().catch(() => {});
     }
-    // A newly bound stream needs its first frame even when the source is
-    // paused. Afterwards the source state owns the receiver's play/pause state.
-    void element
-      .play()
-      .then(() => {
-        if (
-          !playback.closed &&
-          playback.element === element &&
-          this.states.get(playback.id)?.paused
-        )
-          element.pause();
-      })
-      .catch((error) => {
-        if (error.name === 'NotAllowedError' && !element.muted) {
-          if (playback.closed || playback.element !== element) return;
-          this.soundBlocked = true;
-          for (const active of this.playback.values()) this.volume(active);
-          this.renderControls();
-        }
-      });
   }
   private update() {
     for (const playback of this.playback.values()) {
@@ -324,7 +334,11 @@ export class MediaView {
       const node = projected as HTMLMediaElement | null;
       if (!node?.isConnected || !['VIDEO', 'AUDIO'].includes(node.tagName))
         continue;
-      if (node === playback.element || !playback.stream) continue;
+      if (
+        node === playback.element ||
+        (node.tagName === 'VIDEO' && !playback.stream)
+      )
+        continue;
       if (playback.element) {
         playback.element.pause();
         playback.element.srcObject = null;
@@ -334,7 +348,7 @@ export class MediaView {
       node.autoplay = true;
       node.muted = true;
       node.setAttribute('playsinline', '');
-      node.srcObject = playback.stream;
+      if (playback.stream) node.srcObject = playback.stream;
       this.volume(playback);
     }
     for (const state of this.states.values()) {
@@ -364,6 +378,7 @@ export class MediaView {
     this.dismiss();
     if (!event.isTrusted || !this.soundBlocked || !this.audible) return;
     this.soundBlocked = false;
+    void this.audio.unlock();
     for (const playback of this.playback.values()) this.volume(playback);
     this.renderControls();
   }
@@ -619,8 +634,11 @@ export class MediaView {
     if (playback.canvasAnimation !== undefined)
       cancelAnimationFrame(playback.canvasAnimation);
     playback.canvasBytes = undefined;
-    playback.peer?.close();
-    playback.channel?.close();
+    playback.decoder?.close();
+    playback.frame?.close();
+    if (playback.frameAnimation !== undefined)
+      cancelAnimationFrame(playback.frameAnimation);
+    this.audio.remove(token);
     if (playback.canvasURL) URL.revokeObjectURL(playback.canvasURL);
     if (playback.canvas && playback.canvas.src === playback.canvasURL)
       playback.canvas.removeAttribute('src');
@@ -651,6 +669,7 @@ export class MediaView {
   destroy() {
     this.reset();
     clearInterval(this.timer);
+    this.audio.close();
     this.controls.remove();
   }
 }

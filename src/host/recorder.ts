@@ -1,7 +1,6 @@
 import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
 import { record } from '@rrweb/record';
-import type { MediaConfiguration } from '../shared/protocol.js';
 import {
   EventType,
   IncrementalSource,
@@ -9,12 +8,8 @@ import {
 } from '@rrweb/types';
 import { styleAttributes, type SourceStylesheet } from '../shared/style.js';
 
-/** Runs inside source documents. Relay credentials must be scoped and short-lived. */
-export function installRecorder(
-  binding: string,
-  key: string,
-  configuration: MediaConfiguration,
-): void {
+/** Runs only inside source documents; media signaling terminates on this host. */
+export function installRecorder(binding: string, key: string): void {
   // Browser-owned error and security documents are not website DOM.
   if (
     !['http:', 'https:', 'about:', 'blob:', 'data:'].includes(location.protocol)
@@ -313,7 +308,6 @@ export function installRecorder(
           const observer = observeMedia(
             doc,
             key,
-            configuration,
             (node) => record.mirror.getId(node),
             (packet) => record.addCustomEvent('floebrowser:media', packet),
           );

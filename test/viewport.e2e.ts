@@ -141,6 +141,7 @@ test(
     const failures: unknown[] = [];
     viewer.on('websocket', (socket) =>
       socket.on('framereceived', ({ payload }) => {
+        if (typeof payload !== 'string') return;
         const message = JSON.parse(String(payload));
         if (message.type === 'snapshot') snapshots++;
         if (message.type === 'ack' && !message.ok) failures.push(message);
@@ -319,6 +320,7 @@ test(
     const commands: unknown[] = [];
     viewer.on('websocket', (socket) =>
       socket.on('framesent', ({ payload }) => {
+        if (typeof payload !== 'string') return;
         const message = JSON.parse(String(payload));
         if (message.action?.kind === 'viewport') {
           commands.push(message);

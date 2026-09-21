@@ -11,7 +11,7 @@
     "declaration": true,
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"],
+    "types": ["node", "dom-webcodecs"],
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },

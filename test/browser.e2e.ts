@@ -25,7 +25,8 @@ async function setup(t: test.TestContext) {
     (window as any).WebSocket = class extends Original {
       constructor(...args: ConstructorParameters<typeof WebSocket>) {
         super(...args);
-        (window as any).testSocket = this;
+        if (String(args[0]).includes('/stream'))
+          (window as any).testSocket = this;
       }
     };
   });

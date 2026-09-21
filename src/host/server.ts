@@ -10,6 +10,9 @@ import type { Page } from 'playwright';
 import { WebSocketServer, WebSocket } from 'ws';
 import { type AttachOptions, type Controller } from './engine.js';
 import { BrowserSession } from './session.js';
+import { NativeMediaBridge, type SourceMediaBridge } from './media-bridge.js';
+import { mediaExecutable } from './media-executable.js';
+import { MediaSender } from './media-carrier.js';
 import {
   MAX_COMMAND_BYTES,
   MAX_MESSAGE_BYTES,
@@ -20,7 +23,7 @@ import {
 export interface ProjectionServerOptions {
   port?: number;
   authorize: AttachOptions['authorize'];
-  media?: AttachOptions['media'];
+  mediaBridge?: SourceMediaBridge;
 }
 
 /** Optional loopback demo carrier. Redeven can mount BrowserProjection on its own transport. */
@@ -29,9 +32,14 @@ export async function createProjectionServer(
   options: ProjectionServerOptions,
 ) {
   const base = `/session/${randomBytes(32).toString('base64url')}/`;
+  const mediaBridge =
+    options.mediaBridge ?? new NativeMediaBridge(mediaExecutable());
   const session = await BrowserSession.attach(page, {
     authorize: options.authorize,
-    media: options.media,
+    mediaBridge,
+    onMediaFrame: (frame) => active?.sender?.push(frame),
+    onMediaRetired: (scope) =>
+      active?.sender?.retire(scope.target, scope.view, scope.stream),
     resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
   });
   const sockets = new WebSocketServer({
@@ -42,7 +50,15 @@ export async function createProjectionServer(
   let origin = '';
   let closing = false;
   let admission = Promise.resolve();
-  let active: { ws: WebSocket; release: () => Promise<void> } | undefined;
+  let active:
+    | {
+        ws: WebSocket;
+        mediaToken: string;
+        sender?: MediaSender;
+        mediaSocket?: WebSocket;
+        release: () => Promise<void>;
+      }
+    | undefined;
   const securityHeaders = {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
@@ -50,7 +66,7 @@ export async function createProjectionServer(
     'Cross-Origin-Resource-Policy': 'same-origin',
     'X-Frame-Options': 'DENY',
     'Content-Security-Policy':
-      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; media-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; media-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
   const respond = (
     response: ServerResponse,
@@ -97,6 +113,14 @@ export async function createProjectionServer(
         'app.js': ['app.js', 'text/javascript; charset=utf-8'],
         'app.css': ['app.css', 'text/css; charset=utf-8'],
         'style.css': ['style.css', 'text/css; charset=utf-8'],
+        'media-worker.js': [
+          'media-worker.js',
+          'text/javascript; charset=utf-8',
+        ],
+        'audio-worklet.js': [
+          'audio-worklet.js',
+          'text/javascript; charset=utf-8',
+        ],
       };
       const file = files[path];
       if (!file) {
@@ -120,7 +144,8 @@ export async function createProjectionServer(
       request.headers.host !== new URL(origin).host ||
       request.headers.origin !== origin ||
       (request.url !== `${base}stream` &&
-        request.url !== `${base}stream?takeover=1`)
+        request.url !== `${base}stream?takeover=1` &&
+        request.url !== `${base}media?token=${active?.mediaToken}`)
     ) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
@@ -130,15 +155,58 @@ export async function createProjectionServer(
     );
   });
   sockets.on('connection', (ws: WebSocket, request: IncomingMessage) => {
+    if (request.url?.startsWith(`${base}media?`)) {
+      const viewer = active;
+      if (
+        !viewer ||
+        viewer.mediaSocket ||
+        viewer.ws.readyState !== WebSocket.OPEN
+      ) {
+        ws.close(1008, 'Media unavailable');
+        return;
+      }
+      viewer.mediaSocket = ws;
+      viewer.sender = new MediaSender(
+        (chunk) =>
+          new Promise<void>((resolve, reject) => {
+            if (ws.readyState !== WebSocket.OPEN) {
+              reject(new Error('Media disconnected'));
+              return;
+            }
+            ws.send(chunk, (error) => (error ? reject(error) : resolve()));
+          }),
+        (scope) => session.requestMediaKeyframe(scope),
+      );
+      ws.on('message', (data, binary) => {
+        const bytes = Buffer.isBuffer(data)
+          ? data
+          : Buffer.concat(data as Buffer[]);
+        if (
+          !binary ||
+          bytes.length !== 8 ||
+          !viewer.sender?.acknowledge(Number(bytes.readBigUInt64BE()))
+        )
+          ws.close(1008, 'Invalid media credit');
+      });
+      ws.on('error', () => ws.close());
+      ws.on('close', () => {
+        viewer.sender?.close();
+        viewer.sender = undefined;
+      });
+      return;
+    }
     let controller: Controller | undefined;
     let disconnected = false;
     let released: Promise<void> | undefined;
-    const viewer = {
+    const viewer: NonNullable<typeof active> = {
       ws,
+      mediaToken: randomBytes(32).toString('base64url'),
       release: (): Promise<void> => {
         if (!released) {
           // Revocation is synchronous; draining source work remains page-local.
           released = controller?.close() ?? Promise.resolve();
+          viewer.sender?.close();
+          viewer.mediaSocket?.close();
           if (active === viewer) active = undefined;
         }
         return released;
@@ -204,6 +272,9 @@ export async function createProjectionServer(
           ws.send(payload);
         });
         active = viewer;
+        ws.send(
+          JSON.stringify({ type: 'carrier', mediaToken: viewer.mediaToken }),
+        );
         if (disconnected || ws.readyState !== WebSocket.OPEN) {
           await viewer.release();
           return;
@@ -231,6 +302,7 @@ export async function createProjectionServer(
     });
   } catch (error) {
     await session.close();
+    if (!options.mediaBridge) await mediaBridge.close();
     sockets.close();
     throw error;
   }
@@ -249,6 +321,7 @@ export async function createProjectionServer(
       await admission;
       await active?.release();
       await session.close();
+      if (!options.mediaBridge) await mediaBridge.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },

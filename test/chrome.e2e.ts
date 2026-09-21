@@ -35,10 +35,12 @@ async function setup(t: test.TestContext) {
   let started = 0;
   viewer.on('websocket', (socket) => {
     socket.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string') return;
       const m = JSON.parse(String(payload));
       if (m.action?.kind === 'tab_select') started = performance.now();
     });
     socket.on('framereceived', ({ payload }) => {
+      if (typeof payload !== 'string') return;
       const m = JSON.parse(String(payload));
       if (m.type === 'ack' && !m.ok) failures.push(m);
       if (m.type === 'snapshot' && started) {

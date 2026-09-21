@@ -4,9 +4,8 @@ import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import type { Page, CDPSession } from 'playwright';
 import {
   clientMessageSchema,
-  mediaPacketSchema,
-  mediaConfigurationSchema,
-  type MediaConfiguration,
+  sourceMediaPacketSchema,
+  type SourceMediaPacket,
   focusSchema,
   MAX_MESSAGE_BYTES,
   MAX_PENDING_COMMANDS,
@@ -22,12 +21,21 @@ import { DOMProjection } from './projection.js';
 import { ResourceStore } from './resources.js';
 import { FrameBridge } from './frames.js';
 import { mapWheelPoint } from '../shared/wheel.js';
+import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
+import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
 
 const attachedPages = new WeakSet<Page>();
 
 export interface AttachOptions {
-  /** Host-owned ICE/TURN settings. Media is authenticated through controller signaling. */
-  media?: MediaConfiguration;
+  /** Source-host-only element collector; the host owns this shared bridge. */
+  mediaBridge?: SourceMediaBridge;
+  /** Independent, authorized binary carrier. It must not share the input queue. */
+  onMediaFrame?: (frame: MediaFrame) => void;
+  onMediaRetired?: (scope: {
+    target: string;
+    view: string;
+    stream: string;
+  }) => void;
   /** Called immediately before dispatch. The embedding host remains the authority. */
   authorize: (action: Action) => boolean | Promise<boolean>;
   /** Resolves an opaque resource ID through the host's authorized carrier. */
@@ -45,7 +53,6 @@ type Viewer = {
   lastID: number;
   pending: number;
   resyncPending: boolean;
-  mediaPending: Set<string>;
   observing: boolean;
 };
 
@@ -75,6 +82,16 @@ export class BrowserProjection {
   private heldButtons = new Set<string>();
   private state: BrowserState;
   private mediaNodes = new Map<number, string>();
+  private mediaView = randomBytes(18).toString('base64url');
+  private captures = new Map<
+    string,
+    {
+      offer: string;
+      node: number;
+      view: string;
+      subscription?: MediaSubscription;
+    }
+  >();
   private disposers: Array<() => void> = [];
 
   private constructor(
@@ -108,10 +125,6 @@ export class BrowserProjection {
   ): Promise<BrowserProjection> {
     if (attachedPages.has(page))
       throw new Error('This page already has a FloeBrowser projection.');
-    options = {
-      ...options,
-      media: mediaConfigurationSchema.parse(options.media ?? {}),
-    };
     attachedPages.add(page);
     let engine: BrowserProjection | undefined;
     try {
@@ -154,7 +167,7 @@ export class BrowserProjection {
         this.stateRead++;
         this.contextID = context.id;
         this.epoch = '';
-        this.mediaNodes.clear();
+        this.clearMedia();
         this.metadata = undefined;
         this.updateState({ status: 'loading' });
       }
@@ -163,7 +176,7 @@ export class BrowserProjection {
       this.stateRead++;
       this.contextID = 0;
       this.epoch = '';
-      this.mediaNodes.clear();
+      this.clearMedia();
       this.metadata = undefined;
       this.heldKeys.clear();
       this.heldButtons.clear();
@@ -213,7 +226,7 @@ export class BrowserProjection {
     this.listen(this.page, 'crash', () => {
       this.stateRead++;
       this.epoch = '';
-      this.mediaNodes.clear();
+      this.clearMedia();
       this.updateState({ status: 'error' });
     });
     this.listen(this.page, 'popup', (page: Page) =>
@@ -248,7 +261,7 @@ export class BrowserProjection {
       new URL('../assets/recorder.js', import.meta.url),
       'utf8',
     );
-    const script = `${code}\nFloeRecorder.installRecorder(${JSON.stringify(this.binding)},${JSON.stringify(this.recorderKey)},${JSON.stringify(this.options.media)});`;
+    const script = `${code}\nFloeRecorder.installRecorder(${JSON.stringify(this.binding)},${JSON.stringify(this.recorderKey)});`;
     this.scriptID = (
       await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
         source: script,
@@ -334,12 +347,14 @@ export class BrowserProjection {
       event.type === EventType.Custom &&
       event.data.tag === 'floebrowser:media'
     ) {
-      const packet = mediaPacketSchema.safeParse(event.data.payload);
+      const packet = sourceMediaPacketSchema.safeParse(event.data.payload);
       if (packet.success && this.epoch) {
         const media = packet.data;
         if (media.kind === 'removed') {
           // Removal can follow DOM teardown or a checkpoint that temporarily
           // omits a child document. Always let the receiver retire that node.
+          const stream = this.mediaNodes.get(media.id);
+          if (stream) this.retireMedia(stream);
           this.mediaNodes.delete(media.id);
         } else {
           if (!this.projection.isMedia(media.id)) return;
@@ -349,8 +364,17 @@ export class BrowserProjection {
           if (!this.mediaNodes.has(media.id) && this.mediaNodes.size >= 8)
             return;
           this.mediaNodes.set(media.id, media.stream);
+          const capture = this.captures.get(media.stream);
+          if (capture) capture.node = media.id;
         }
-        this.send({ type: 'media', epoch: this.epoch, packet: media });
+        if (media.kind === 'offer') void this.collectMedia(media);
+        else
+          this.send({
+            type: 'media',
+            epoch: this.epoch,
+            view: this.mediaView,
+            packet: media,
+          });
       }
       return;
     }
@@ -432,9 +456,11 @@ export class BrowserProjection {
         if (this.projection.isMedia(id)) continue;
         this.mediaNodes.delete(id);
         retired.push(stream);
+        this.retireMedia(stream);
         this.send({
           type: 'media',
           epoch: this.epoch,
+          view: this.mediaView,
           packet: { kind: 'removed', id },
         });
       }
@@ -512,7 +538,6 @@ export class BrowserProjection {
       lastID: 0,
       pending: 0,
       resyncPending: false,
-      mediaPending: new Set(),
       observing: false,
     };
     this.viewer = viewer;
@@ -541,7 +566,7 @@ export class BrowserProjection {
       send({
         type: 'hello',
         version: PROTOCOL_VERSION,
-        media: this.options.media ?? {},
+        mediaWireVersion: 1,
       });
       send({ type: 'state', state: this.currentState });
       // Begin observation after old input drains. Snapshot completion must not
@@ -571,8 +596,121 @@ export class BrowserProjection {
     }
   }
 
+  requestMediaKeyframe(scope: Pick<MediaFrameHeader, 'view' | 'stream'>): void {
+    const capture = this.captures.get(scope.stream);
+    if (capture?.view === scope.view)
+      void capture.subscription?.requestKeyframe().catch(() => {});
+  }
+
+  private retireMedia(stream: string): void {
+    const capture = this.captures.get(stream);
+    this.captures.delete(stream);
+    if (capture)
+      this.options.onMediaRetired?.({
+        target: this.id,
+        view: capture.view,
+        stream,
+      });
+    void capture?.subscription?.close().catch(() => {});
+  }
+
+  private clearMedia(): void {
+    for (const stream of this.captures.keys()) this.retireMedia(stream);
+    this.mediaNodes.clear();
+    this.mediaView = randomBytes(18).toString('base64url');
+  }
+
+  private async collectMedia(
+    packet: Extract<SourceMediaPacket, { kind: 'offer' }>,
+  ): Promise<void> {
+    const bridge = this.options.mediaBridge;
+    if (!bridge || !this.viewer?.active) return;
+    const old = this.captures.get(packet.stream);
+    if (old?.offer === packet.sdp) return;
+    if (old) this.retireMedia(packet.stream);
+    if (this.captures.size >= 8) return;
+    const capture: {
+      offer: string;
+      node: number;
+      view: string;
+      subscription?: MediaSubscription;
+    } = { offer: packet.sdp, node: packet.id, view: this.mediaView };
+    this.captures.set(packet.stream, capture);
+    const current = () =>
+      this.viewer?.active && this.captures.get(packet.stream) === capture;
+    try {
+      const subscription = await bridge.open(
+        {
+          target: this.id,
+          view: capture.view,
+          stream: packet.stream,
+          node: packet.id,
+          width: 0,
+          height: 0,
+        },
+        packet.sdp,
+        (frame) => {
+          if (current() && this.mediaNodes.get(capture.node) === packet.stream)
+            this.options.onMediaFrame?.({
+              header: { ...frame.header, node: capture.node },
+              data: frame.data,
+            });
+        },
+        () => {
+          if (current()) void this.mediaFailed(packet.stream, capture.node);
+        },
+      );
+      capture.subscription = subscription;
+      if (!current()) {
+        await subscription.close();
+        return;
+      }
+      const element = await this.frames.resolve(capture.node);
+      if (!element) {
+        this.retireMedia(packet.stream);
+        return;
+      }
+      try {
+        if (!current()) return;
+        await element.evaluate(
+          (element, { key, stream, sdp }) =>
+            (element as any)[key]?.answer(stream, sdp),
+          {
+            key: this.recorderKey,
+            stream: packet.stream,
+            sdp: subscription.sdp,
+          },
+        );
+      } finally {
+        await element.dispose();
+      }
+    } catch {
+      if (current()) await this.mediaFailed(packet.stream, capture.node);
+    }
+  }
+
+  private async mediaFailed(stream: string, node: number): Promise<void> {
+    this.retireMedia(stream);
+    try {
+      const element = await this.frames.resolve(node);
+      if (!element) return;
+      try {
+        if (this.mediaNodes.get(node) !== stream) return;
+        await element.evaluate(
+          (element, { key, stream }) =>
+            (element as any)[key]?.captureFailed(stream),
+          { key: this.recorderKey, stream },
+        );
+      } finally {
+        await element.dispose();
+      }
+    } catch {
+      /* A retired document cannot receive media failure state. */
+    }
+  }
+
   private async setMedia(active: boolean): Promise<void> {
-    if (!active) this.mediaNodes.clear();
+    if (!active) this.clearMedia();
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
@@ -583,7 +721,12 @@ export class BrowserProjection {
                 : (window as any)[key]?.suspend(),
             {
               key: this.recorderKey,
-              active: active && !!this.viewer?.active && this.viewer.observing,
+              active:
+                active &&
+                !!this.viewer?.active &&
+                this.viewer.observing &&
+                !!this.options.mediaBridge &&
+                !!this.options.onMediaFrame,
             },
           )
           .catch(() => {}),
@@ -621,38 +764,10 @@ export class BrowserProjection {
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
-    if (message.type === 'media_answer') {
-      if (
-        message.tab !== this.id ||
-        message.epoch !== this.epoch ||
-        this.mediaNodes.get(message.node) !== message.stream ||
-        !this.projection.isMedia(message.node) ||
-        viewer.mediaPending.has(message.stream) ||
-        viewer.mediaPending.size >= 8
-      )
-        return Promise.resolve();
-      viewer.mediaPending.add(message.stream);
-      return (async () => {
-        const element = await this.frames.resolve(message.node);
-        if (!element) return;
-        try {
-          if (
-            !viewer.active ||
-            this.viewer !== viewer ||
-            message.epoch !== this.epoch
-          )
-            return;
-          await element.evaluate(
-            (element, { key, stream, sdp }) =>
-              (element as any)[key]?.answer(stream, sdp),
-            { key: this.recorderKey, stream: message.stream, sdp: message.sdp },
-          );
-        } finally {
-          await element.dispose();
-        }
-      })()
-        .catch(() => {})
-        .finally(() => viewer.mediaPending.delete(message.stream));
+    if (message.type === 'media_keyframe') {
+      if (message.tab === this.id && message.view === this.mediaView)
+        this.requestMediaKeyframe(message);
+      return Promise.resolve();
     }
     if (message.type === 'resync') {
       if (viewer.resyncPending) return this.queue;
@@ -1061,6 +1176,7 @@ export class BrowserProjection {
   private async dispose(): Promise<void> {
     if (this.closed) return;
     if (this.viewer) this.viewer.active = false;
+    this.clearMedia();
     await this.queue;
     await this.releaseInput().catch(() => {
       this.controlFault = true;

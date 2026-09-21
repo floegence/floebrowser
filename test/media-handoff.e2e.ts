@@ -51,6 +51,7 @@ test(
     const acknowledgements: any[] = [];
     next.on('websocket', (socket) =>
       socket.on('framereceived', (event) => {
+        if (typeof event.payload !== 'string') return;
         const message = JSON.parse(String(event.payload));
         if (message.type === 'ack') acknowledgements.push(message);
       }),

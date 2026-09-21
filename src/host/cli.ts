@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFile } from 'node:fs/promises';
-import { mediaConfigurationSchema } from '../shared/protocol.js';
 import { launchSourceBrowser } from './browser.js';
 import { createProjectionServer } from './server.js';
 
@@ -10,14 +8,13 @@ const { values } = parseArgs({
     url: { type: 'string' },
     port: { type: 'string', default: '8787' },
     profile: { type: 'string' },
-    'media-config': { type: 'string' },
     headed: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h' },
   },
 });
 if (values.help) {
   console.log(
-    'FloeBrowser — a DOM-based remote browser\n\nUsage: floebrowser [--url https://example.com] [--port 8787] [--profile ./profile] [--headed] [--media-config ./rtc.json]\n\nThe viewer binds to 127.0.0.1. Keep its private URL secret. Use an SSH tunnel or a host-owned authenticated transport for remote access.',
+    'FloeBrowser — a DOM-based remote browser\n\nUsage: floebrowser [--url https://example.com] [--port 8787] [--profile ./profile] [--headed]\n\nThe viewer binds to 127.0.0.1. Keep its private URL secret. Use an SSH tunnel or a host-owned authenticated transport for remote access.',
   );
 } else {
   const port = Number(values.port);
@@ -25,11 +22,6 @@ if (values.help) {
     throw new Error('Port must be an integer between 0 and 65535.');
   if (values.url && !['http:', 'https:'].includes(new URL(values.url).protocol))
     throw new Error('Only HTTP(S) addresses are supported.');
-  const media = mediaConfigurationSchema.parse(
-    values['media-config']
-      ? JSON.parse(await readFile(values['media-config'], 'utf8'))
-      : {},
-  );
   const context = await launchSourceBrowser({
     profile: values.profile,
     headless: !values.headed,
@@ -47,7 +39,6 @@ if (values.help) {
     service = await createProjectionServer(page, {
       port,
       authorize: () => true,
-      media,
     });
     if (values.url)
       await page

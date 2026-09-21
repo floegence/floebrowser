@@ -38,6 +38,7 @@ test(
     const viewer = await browser.newPage();
     viewer.on('websocket', (socket) =>
       socket.on('framereceived', ({ payload }) => {
+        if (typeof payload !== 'string') return;
         const message = JSON.parse(String(payload));
         if (message.type === 'media' && message.packet.kind === 'state')
           states.push(message.packet);
@@ -179,17 +180,27 @@ test(
       // Deterministic autoplay refusal, lifted only by a real client gesture.
       (window as any).__name = (value: unknown) => value;
       (window as any).allowTestAudio = false;
-      const play = HTMLMediaElement.prototype.play;
-      HTMLMediaElement.prototype.play = function () {
-        if (
-          this.srcObject &&
-          !this.muted &&
-          !(window.top as any).allowTestAudio
-        )
-          return Promise.reject(
-            new DOMException('Gesture required', 'NotAllowedError'),
-          );
-        return play.call(this);
+      (window as any).audioGains = [];
+      (window as any).audioContexts = [];
+      const Original = AudioContext;
+      (window as any).AudioContext = class extends Original {
+        constructor(options?: AudioContextOptions) {
+          super(options);
+          (window as any).audioContexts.push(this);
+          void this.suspend();
+        }
+        resume() {
+          if (!(window as any).allowTestAudio)
+            return Promise.reject(
+              new DOMException('Gesture required', 'NotAllowedError'),
+            );
+          return super.resume();
+        }
+        createGain() {
+          const gain = super.createGain();
+          (window as any).audioGains.push(gain);
+          return gain;
+        }
       };
     });
     await viewer.goto(service.url);
@@ -214,12 +225,15 @@ test(
     );
     await viewer.evaluate(() => ((window as any).allowTestAudio = true));
     await frame.locator('#play').click();
-    await viewer.waitForFunction(() => {
-      const video = document
-        .querySelector<HTMLIFrameElement>('#viewport iframe')
-        ?.contentDocument?.querySelector('video');
-      return video && !video.muted && !video.paused;
-    });
+    await viewer.waitForFunction(
+      () =>
+        (window as any).audioContexts.some(
+          (ctx: AudioContext) => ctx.state === 'running',
+        ) &&
+        (window as any).audioGains.some(
+          (gain: GainNode) => gain.gain.value > 0,
+        ),
+    );
     await viewer
       .getByRole('button', { name: 'Media controls', exact: true })
       .click();
@@ -229,7 +243,11 @@ test(
     await frame.locator('#pause').click();
     await frame.locator('#play').click();
     assert.equal(
-      await frame.locator('video').evaluate((v: HTMLVideoElement) => v.muted),
+      await viewer.evaluate(() =>
+        (window as any).audioGains.every(
+          (gain: GainNode) => gain.gain.value === 0,
+        ),
+      ),
       true,
       'An ordinary page gesture must not override an explicit mute',
     );
@@ -243,12 +261,11 @@ test(
       v.muted = true;
       v.volume = 0.25;
     });
-    await viewer.waitForFunction(() => {
-      const video = document
-        .querySelector<HTMLIFrameElement>('#viewport iframe')
-        ?.contentDocument?.querySelector('video');
-      return video?.muted && video.volume === 0.25;
-    });
+    await viewer.waitForFunction(() =>
+      (window as any).audioGains.every(
+        (gain: GainNode) => gain.gain.value === 0,
+      ),
+    );
     await source.locator('video').evaluate((v: HTMLVideoElement) => {
       v.style.display = 'none';
     });

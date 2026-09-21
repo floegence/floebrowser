@@ -59,12 +59,22 @@ test(
     });
     const viewer = await browser.newPage();
     await viewer.addInitScript(() => {
-      (window as any).mediaPeers = [];
-      const Peer = RTCPeerConnection;
-      (window as any).RTCPeerConnection = class extends Peer {
-        constructor(configuration?: RTCConfiguration) {
-          super(configuration);
-          (window as any).mediaPeers.push(this);
+      (window as any).mediaWorkers = [];
+      const Original = Worker;
+      (window as any).Worker = class extends Original {
+        retired = false;
+        constructor(...args: ConstructorParameters<typeof Worker>) {
+          super(...args);
+          (window as any).mediaWorkers.push(this);
+        }
+        terminate() {
+          this.retired = true;
+          super.terminate();
+        }
+      };
+      (window as any).RTCPeerConnection = class {
+        constructor() {
+          throw new Error('Client RTC is forbidden');
         }
       };
     });
@@ -94,10 +104,8 @@ test(
     await viewer.waitForFunction(
       () =>
         document
-          .querySelector<HTMLIFrameElement>('#viewport iframe')
-          ?.contentDocument?.querySelector<HTMLVideoElement>('#clip')?.paused,
-      null,
-      { timeout: 2000 },
+          .querySelector('.floe-media-play')
+          ?.getAttribute('aria-label') === 'Play source media',
     );
     await source.evaluate(async () => {
       await document.querySelector<HTMLVideoElement>('#clip')!.play();
@@ -106,9 +114,8 @@ test(
     await viewer.waitForFunction(
       () =>
         document
-          .querySelector<HTMLIFrameElement>('#viewport iframe')
-          ?.contentDocument?.querySelector<HTMLVideoElement>('#clip')
-          ?.paused === false,
+          .querySelector('.floe-media-play')
+          ?.getAttribute('aria-label') === 'Pause source media',
     );
     const before = await projected
       .locator('#clip')
@@ -171,8 +178,8 @@ test(
     });
     await viewer.waitForFunction(
       () =>
-        (window as any).mediaPeers.filter(
-          (p: RTCPeerConnection) => p.connectionState !== 'closed',
+        (window as any).mediaWorkers.filter(
+          (p: { retired: boolean }) => !p.retired,
         ).length === 1,
     );
     assert.equal(
@@ -188,8 +195,8 @@ test(
     assert.equal(
       await viewer.evaluate(
         () =>
-          (window as any).mediaPeers.filter(
-            (p: RTCPeerConnection) => p.connectionState !== 'closed',
+          (window as any).mediaWorkers.filter(
+            (p: { retired: boolean }) => !p.retired,
           ).length,
       ),
       0,
@@ -198,7 +205,7 @@ test(
 );
 
 test(
-  'replacing a cross-origin media document retires old peers without exhausting the media limit',
+  'replacing a cross-origin media document retires old decoders without exhausting the media limit',
   { timeout: 30000 },
   async (t) => {
     const { createServer } = await import('node:http');
@@ -234,12 +241,22 @@ test(
     await source.goto(`http://127.0.0.1:${port}/`);
     const viewer = await browser.newPage();
     await viewer.addInitScript(() => {
-      (window as any).mediaPeers = [];
-      const Peer = RTCPeerConnection;
-      (window as any).RTCPeerConnection = class extends Peer {
-        constructor(c?: RTCConfiguration) {
-          super(c);
-          (window as any).mediaPeers.push(this);
+      (window as any).mediaWorkers = [];
+      const Original = Worker;
+      (window as any).Worker = class extends Original {
+        retired = false;
+        constructor(...args: ConstructorParameters<typeof Worker>) {
+          super(...args);
+          (window as any).mediaWorkers.push(this);
+        }
+        terminate() {
+          this.retired = true;
+          super.terminate();
+        }
+      };
+      (window as any).RTCPeerConnection = class {
+        constructor() {
+          throw new Error('Client RTC is forbidden');
         }
       };
     });
@@ -271,8 +288,8 @@ test(
       assert.equal(
         await viewer.evaluate(
           () =>
-            (window as any).mediaPeers.filter(
-              (p: RTCPeerConnection) => p.connectionState !== 'closed',
+            (window as any).mediaWorkers.filter(
+              (p: { retired: boolean }) => !p.retired,
             ).length,
         ),
         1,
@@ -286,8 +303,8 @@ test(
     assert.equal(
       await viewer.evaluate(
         () =>
-          (window as any).mediaPeers.filter(
-            (p: RTCPeerConnection) => p.connectionState !== 'closed',
+          (window as any).mediaWorkers.filter(
+            (p: { retired: boolean }) => !p.retired,
           ).length,
       ),
       0,

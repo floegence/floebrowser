@@ -1,4 +1,5 @@
-import { MediaView } from './media.js';
+import { MediaView, type MediaAssets } from './media.js';
+import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
 import { ReplayPresentation } from './presentation.js';
 import { liveEvent, liveScroll, svgStyles, mathElements } from './replay.js';
 import { mapWheelPoint } from '../shared/wheel.js';
@@ -30,6 +31,7 @@ export type ViewportMode = 'responsive' | 'fit' | 'actual';
 type ViewOptions = {
   /** Mount optional media controls in host browser chrome, outside the page. */
   mediaControls?: HTMLElement;
+  mediaAssets?: MediaAssets;
   onState?: (state: BrowserState) => void;
   onStatus?: (
     status: 'connecting' | 'refreshing' | 'live' | 'disconnected',
@@ -130,22 +132,28 @@ export class DOMBrowserView {
       options.mediaControls,
       (id) => this.replayer?.getMirror().getNode(id),
       (action) => this.dispatch(action),
-      (node, stream, sdp) => {
+      (view, stream) => {
         if (this.connected && this.epoch)
           this.connection.send({
-            type: 'media_answer',
+            type: 'media_keyframe',
             tab: this.tab,
-            epoch: this.epoch,
-            node,
+            view,
             stream,
-            sdp,
           });
       },
+      options.mediaAssets,
     );
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
       connection.onDisconnect((reason) => this.disconnected(reason)),
     );
+    if (connection.subscribeMedia)
+      this.disposers.push(
+        connection.subscribeMedia((frame) => {
+          if (this.connected && frame.header.target === this.tab)
+            this.media.frame(frame);
+        }),
+      );
     this.resize = new ResizeObserver(() => this.layout());
     this.resize.observe(container);
     this.listen(this.sink, 'keydown', (event) =>
@@ -270,7 +278,10 @@ export class DOMBrowserView {
     if (this.destroyed) return;
     if (message.type === 'media') {
       if (message.epoch === this.epoch && this.connected)
-        this.media.receive(message.packet);
+        this.media.receive(message.packet, {
+          target: this.tab,
+          view: message.view,
+        });
       return;
     }
     if (message.type === 'tabs') {
@@ -304,7 +315,6 @@ export class DOMBrowserView {
         this.connection.close();
         return;
       }
-      this.media.configure(message.media);
       this.connected = true;
       // Browser controls depend on the carrier, not on a selected renderer
       // producing its first snapshot (including reconnecting to a hung tab).
@@ -1033,17 +1043,53 @@ function mouseButton(button: number): 'left' | 'middle' | 'right' {
 /** No automatic reconnect and no command replay. Reconnect creates a fresh view. */
 export function webSocketConnection(url: string): ProjectionConnection {
   const socket = new WebSocket(url);
+  let media: WebSocket | undefined;
+  const mediaListeners = new Set<(frame: MediaFrame) => void>();
   const messages = new Set<(message: ServerMessage) => void>();
   const disconnected = new Set<(reason?: DisconnectReason) => void>();
   socket.addEventListener('message', (event) => {
     try {
-      const message: ServerMessage = JSON.parse(event.data);
+      const parsed = JSON.parse(event.data);
+      if (parsed.type === 'carrier') {
+        if (
+          media ||
+          typeof parsed.mediaToken !== 'string' ||
+          !/^[\w-]{43}$/.test(parsed.mediaToken)
+        )
+          throw new Error('Invalid carrier');
+        const address = new URL(url, location.href);
+        address.pathname = address.pathname.replace(/stream$/, 'media');
+        address.search = `?token=${parsed.mediaToken}`;
+        media = new WebSocket(address);
+        media.binaryType = 'arraybuffer';
+        const reader = new MediaPacketReader();
+        let consumed = 0;
+        media.onmessage = ({ data }) => {
+          if (!(data instanceof ArrayBuffer)) {
+            media?.close(1008);
+            return;
+          }
+          try {
+            for (const frame of reader.push(new Uint8Array(data))) {
+              for (const listener of mediaListeners) listener(frame);
+              const ack = new Uint8Array(8);
+              new DataView(ack.buffer).setBigUint64(0, BigInt(++consumed));
+              media!.send(ack);
+            }
+          } catch {
+            media?.close(1008);
+          }
+        };
+        return;
+      }
+      const message: ServerMessage = parsed;
       for (const listener of messages) listener(message);
     } catch {
       socket.close(1008, 'Invalid projection');
     }
   });
   socket.addEventListener('close', (event) => {
+    media?.close();
     const reason = (Object.keys(DISCONNECT_CODES) as DisconnectReason[]).find(
       (reason) => DISCONNECT_CODES[reason] === event.code,
     );
@@ -1060,12 +1106,21 @@ export function webSocketConnection(url: string): ProjectionConnection {
         messages.delete(listener);
       };
     },
+    subscribeMedia: (listener) => {
+      mediaListeners.add(listener);
+      return () => {
+        mediaListeners.delete(listener);
+      };
+    },
     onDisconnect: (listener) => {
       disconnected.add(listener);
       return () => {
         disconnected.delete(listener);
       };
     },
-    close: () => socket.close(),
+    close: () => {
+      media?.close();
+      socket.close();
+    },
   };
 }

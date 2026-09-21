@@ -48,10 +48,12 @@ async function setup(
   const commands = new Map<number, any>();
   viewer.on('websocket', (socket) => {
     socket.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string') return;
       const message = JSON.parse(String(payload));
       if (message.type === 'command') commands.set(message.id, message.action);
     });
     socket.on('framereceived', ({ payload }) => {
+      if (typeof payload !== 'string') return;
       const message = JSON.parse(String(payload));
       if (message.type !== 'ack') return;
       const action = commands.get(message.id);

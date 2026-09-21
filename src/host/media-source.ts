@@ -5,11 +5,7 @@ import {
   CANVAS_HEADER_BYTES,
   MAX_CANVAS_BYTES,
 } from '../shared/canvas.js';
-import type {
-  MediaConfiguration,
-  MediaPacket,
-  MediaState,
-} from '../shared/protocol.js';
+import type { SourceMediaPacket, MediaState } from '../shared/protocol.js';
 
 type CaptureElement =
   (HTMLMediaElement & { captureStream(): MediaStream }) | HTMLCanvasElement;
@@ -39,9 +35,8 @@ type Capture = {
 export function observeMedia(
   doc: Document,
   key: string,
-  configuration: MediaConfiguration,
   idFor: (node: Node) => number,
-  emit: (packet: MediaPacket) => void,
+  emit: (packet: SourceMediaPacket) => void,
 ) {
   const captures = new Map<CaptureElement, Capture>();
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -116,11 +111,7 @@ export function observeMedia(
         capture.status = 'connecting';
       else if (peer.connectionState === 'failed') {
         if (capture.retries++ < 2) void negotiate(capture, true);
-        else
-          unavailable(
-            capture,
-            'Media connection failed. Check the source network or TURN relay configuration.',
-          );
+        else unavailable(capture, 'Source media collection was interrupted.');
       }
     };
   };
@@ -130,7 +121,7 @@ export function observeMedia(
     if (isCanvas(element)) {
       if (!element.width || !element.height || !element.checkVisibility())
         return;
-      const peer = new RTCPeerConnection(configuration);
+      const peer = new RTCPeerConnection({ iceServers: [] });
       capture.peer = peer;
       const channel = peer.createDataChannel(CANVAS_CHANNEL, {
         ordered: false,
@@ -245,7 +236,7 @@ export function observeMedia(
       );
       capture.stream = stream;
       if (!stream.getTracks().length) return;
-      const peer = new RTCPeerConnection(configuration);
+      const peer = new RTCPeerConnection({ iceServers: [] });
       capture.peer = peer;
       for (const track of stream.getTracks()) {
         const video = track.kind === 'video';
@@ -345,6 +336,10 @@ export function observeMedia(
         captures.set(element, capture);
         const current = capture;
         (element as any)[key] = {
+          captureFailed: (token: string) => {
+            if (!current.retired && current.token === token)
+              unavailable(current, 'Source media collection is unavailable.');
+          },
           answer: async (token: string, sdp: string) => {
             if (
               current.retired ||

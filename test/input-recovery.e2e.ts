@@ -46,6 +46,7 @@ for (const confirmation of ['rejected', 'expired'] as const)
         const acks: any[] = [];
         viewer.on('websocket', (socket) =>
           socket.on('framereceived', ({ payload }) => {
+            if (typeof payload !== 'string') return;
             const message = JSON.parse(String(payload));
             if (message.type === 'ack') acks.push(message);
           }),

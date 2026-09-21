@@ -212,7 +212,7 @@ export class BrowserSession {
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
-    if (message.type === 'media_answer') {
+    if (message.type === 'media_keyframe') {
       if (message.tab !== this.selected) return Promise.resolve();
       return viewer.controller?.receive(message) ?? Promise.resolve();
     }
@@ -307,6 +307,13 @@ export class BrowserSession {
       .finally(() => {
         viewer.pending--;
       });
+  }
+  requestMediaKeyframe(scope: {
+    target: string;
+    view: string;
+    stream: string;
+  }): void {
+    this.tabs.get(scope.target)?.engine.requestMediaKeyframe(scope);
   }
   async readResource(tab: string, id: string) {
     return this.tabs.get(tab)?.engine.resources.read(id);

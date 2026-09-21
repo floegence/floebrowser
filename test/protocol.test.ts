@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   clientMessageSchema,
-  mediaConfigurationSchema,
   mediaPacketSchema,
 } from '../src/shared/protocol.js';
 
@@ -46,49 +45,40 @@ test('rejects remote commands with active URLs, oversized text, or extra authori
   );
 });
 
-test('media accepts bounded signaling and host-owned ICE servers only', () => {
-  assert.equal(
-    mediaConfigurationSchema.safeParse({
-      iceServers: [{ urls: 'https://website.test' }],
-    }).success,
-    false,
-  );
-  assert.equal(
-    mediaConfigurationSchema.safeParse({ iceServers: [{ urls: [] }] }).success,
-    false,
-  );
-  assert.equal(
-    mediaConfigurationSchema.safeParse({
-      iceServers: [
-        {
-          urls: 'turns:relay.example.test:443',
-          username: 'temporary',
-          credential: 'temporary',
-        },
-      ],
-      iceTransportPolicy: 'relay',
-    }).success,
-    true,
-  );
+test('remote media feedback cannot inject ICE, SDP or encoded payloads into control', () => {
   assert.equal(
     mediaPacketSchema.safeParse({
-      kind: 'chunk',
+      kind: 'offer',
       id: 1,
-      data: 'old encoded media',
+      stream: 'stream',
+      sdp: 'v=0\r\n',
     }).success,
     false,
   );
-  const answer = {
-    type: 'media_answer',
-    tab: 'tab',
-    epoch: 'epoch',
-    node: 1,
-    stream: 'stream',
-    sdp: 'v=0\r\n',
-  };
-  assert.equal(clientMessageSchema.safeParse(answer).success, true);
   assert.equal(
-    clientMessageSchema.safeParse({ ...answer, sdp: 'x'.repeat(48001) })
+    mediaPacketSchema.safeParse({ kind: 'chunk', id: 1, data: 'encoded media' })
+      .success,
+    false,
+  );
+  const feedback = {
+    type: 'media_keyframe',
+    tab: 'tab',
+    view: 'view',
+    stream: 'stream',
+  };
+  assert.equal(clientMessageSchema.safeParse(feedback).success, true);
+  for (const patch of [
+    { sdp: 'v=0' },
+    { iceServers: [] },
+    { stream: '' },
+    { view: 'x'.repeat(81) },
+  ])
+    assert.equal(
+      clientMessageSchema.safeParse({ ...feedback, ...patch }).success,
+      false,
+    );
+  assert.equal(
+    clientMessageSchema.safeParse({ ...feedback, type: 'media_answer' })
       .success,
     false,
   );

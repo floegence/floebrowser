@@ -2,42 +2,56 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { BrowserProjection } from '../dist/host/engine.js';
+import { NativeMediaBridge } from '../dist/host/media-bridge.js';
+import { mediaExecutable } from '../dist/host/media-executable.js';
 import type { ClientMessage, ServerMessage } from '../src/shared/protocol.js';
 
+// Remote viewers can request decoder recovery, never supply ICE destinations.
 test(
-  'media answers are fenced by controller, tab, epoch, node and stream',
+  'media authority survives DOM checkpoints but not navigation or revocation',
   { timeout: 30000 },
   async (t) => {
     const browser = await chromium.launch({
       channel: 'chromium',
-      headless: true,
       chromiumSandbox: true,
     });
-    t.after(() => browser.close());
+    const bridge = new NativeMediaBridge(mediaExecutable());
+    t.after(async () => {
+      await bridge.close();
+      await browser.close();
+    });
     const page = await browser.newPage();
+    let frames = 0,
+      keys = 0,
+      collectors = 0;
     const projection = await BrowserProjection.attach(page, {
       authorize: () => true,
+      onMediaFrame: () => {
+        frames++;
+      },
+      mediaBridge: {
+        close: () => bridge.close(),
+        open: async (...args) => {
+          collectors++;
+          const subscription = await bridge.open(...args);
+          return {
+            ...subscription,
+            requestKeyframe: async () => {
+              keys++;
+              await subscription.requestKeyframe();
+            },
+          };
+        },
+      },
     });
     t.after(() => projection.close());
     await page.goto('data:text/html,<video muted></video>');
     await page.evaluate(async () => {
-      (window as any).answers = 0;
-      (window as any).peers = [];
-      const Peer = RTCPeerConnection;
-      (window as any).RTCPeerConnection = class extends Peer {
-        constructor(c?: RTCConfiguration) {
-          super(c);
-          (window as any).peers.push(this);
-        }
-        setRemoteDescription(d: RTCSessionDescriptionInit) {
-          (window as any).answers++;
-          return super.setRemoteDescription(d);
-        }
-      };
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d')!;
+      let n = 0;
       setInterval(() => {
-        ctx.fillStyle = 'blue';
+        ctx.fillStyle = n++ % 2 ? 'blue' : 'red';
         ctx.fillRect(0, 0, 300, 150);
       }, 40);
       const video = document.querySelector('video')!;
@@ -47,81 +61,91 @@ test(
     const messages: ServerMessage[] = [];
     const connect = () =>
       projection.connect((message) => messages.push(message));
-    const offer = async () => {
-      const end = Date.now() + 8000;
-      while (Date.now() < end) {
-        const m = messages.findLast(
-          (m) => m.type === 'media' && m.packet.kind === 'offer',
-        );
-        if (m?.type === 'media' && m.packet.kind === 'offer') return m;
-        await new Promise((r) => setTimeout(r, 20));
-      }
-      throw new Error('Source must publish a media offer');
+    const current = () =>
+      messages.findLast((m) => m.type === 'media' && m.packet.kind === 'state');
+    const wait = async (condition: () => boolean) => {
+      const deadline = Date.now() + 8000;
+      while (!condition() && Date.now() < deadline)
+        await new Promise((done) => setTimeout(done, 20));
+      assert.ok(condition());
     };
     const first = await connect();
-    const initial = await offer();
-    const answer: Extract<ClientMessage, { type: 'media_answer' }> = {
-      type: 'media_answer',
+    await wait(() => frames > 2 && !!current());
+    const initial = current()!;
+    assert.ok(initial.type === 'media' && initial.packet.kind === 'state');
+    const feedback: Extract<ClientMessage, { type: 'media_keyframe' }> = {
+      type: 'media_keyframe',
       tab: projection.id,
-      epoch: initial.epoch,
-      node: initial.packet.id,
+      view: initial.view,
       stream: initial.packet.stream,
-      sdp: 'v=0\r\n',
     };
-    const count = () => page.evaluate(() => (window as any).answers);
     for (const patch of [
-      { tab: 'stale' },
-      { epoch: 'stale' },
-      { node: 999999 },
-      { stream: 'stale' },
+      { tab: 'wrong' },
+      { view: 'wrong' },
+      { stream: 'wrong' },
     ])
-      await first.receive({ ...answer, ...patch });
-    assert.equal(
-      await count(),
-      0,
-      'Invalid signaling must not reach the source peer',
-    );
-    await first.receive(answer);
-    assert.equal(
-      await count(),
-      1,
-      'Current signaling reaches the native SDP validator',
-    );
+      await first.receive({ ...feedback, ...patch });
+    assert.equal(keys, 0, 'Invalid identities cannot reach the collector');
+    await first.receive(feedback);
+    assert.equal(keys, 1);
+    const count = collectors;
     await first.receive({ type: 'resync' });
-    await first.receive(answer);
+    await wait(
+      () =>
+        current()?.type === 'media' &&
+        (current() as any).epoch !== initial.epoch,
+    );
     assert.equal(
-      await count(),
-      1,
-      'A checkpoint invalidates the old answer epoch',
+      collectors,
+      count,
+      'DOM-only checkpoints preserve the source media endpoints',
+    );
+    await first.receive(feedback);
+    assert.equal(
+      keys,
+      2,
+      'Media subscription generations do not depend on DOM checkpoint epochs',
     );
     await first.close();
+    const stopped = frames;
+    await new Promise((done) => setTimeout(done, 150));
     assert.equal(
-      await page.evaluate(() =>
-        (window as any).peers.every(
-          (p: RTCPeerConnection) => p.connectionState === 'closed',
-        ),
-      ),
-      true,
+      frames,
+      stopped,
+      'Revocation stops frame delivery synchronously',
     );
     messages.length = 0;
     const next = await connect();
-    const current = await offer();
-    assert.notEqual(current.packet.stream, initial.packet.stream);
-    const fresh = {
-      ...answer,
-      epoch: current.epoch,
-      node: current.packet.id,
-      stream: current.packet.stream,
-    };
-    await first.receive(fresh);
-    await next.receive({ ...fresh, stream: initial.packet.stream });
+    await wait(() => frames > stopped && !!current());
+    const fresh = current()!;
+    assert.ok(fresh.type === 'media' && fresh.packet.kind === 'state');
+    assert.notEqual(fresh.view, initial.view);
+    assert.notEqual(fresh.packet.stream, initial.packet.stream);
+    await first.receive({
+      ...feedback,
+      view: fresh.view,
+      stream: fresh.packet.stream,
+    });
+    await next.receive(feedback);
     assert.equal(
-      await count(),
-      1,
-      'Neither revoked controllers nor retired streams can restart media',
+      keys,
+      2,
+      'Neither an old controller nor old media authority can request work',
     );
-    await next.receive(fresh);
-    assert.equal(await count(), 2);
+    await next.receive({
+      ...feedback,
+      view: fresh.view,
+      stream: fresh.packet.stream,
+    });
+    assert.equal(keys, 3);
+    assert.ok(
+      messages.every((m) => m.type !== 'media' || !('sdp' in m.packet)),
+      'SDP stays on the source host',
+    );
+    await page.goto('data:text/html,<h1>New document</h1>');
+    const navigated = frames;
+    await new Promise((done) => setTimeout(done, 150));
+    assert.equal(frames, navigated);
     await next.close();
   },
 );

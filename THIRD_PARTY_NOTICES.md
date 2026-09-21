@@ -24,6 +24,13 @@ Playwright and is not included in the npm package.
 | source-map-js                                                                          | PostCSS dependency                              | BSD-3-Clause | https://github.com/7rulnik/source-map-js                                                |
 | Inter, via @fontsource/inter                                                           | Development fixture and preview screenshot only | OFL-1.1      | https://github.com/rsms/inter                                                           |
 
+The packaged source media helper additionally links Pion WebRTC and its Go
+protocol dependencies (MIT), mediacommon (MIT), google/uuid (BSD-3-Clause),
+wlynxg/anet (MIT), golang.org/x modules (BSD-3-Clause), and the Go runtime
+(BSD-3-Clause). Exact compiled module versions and their original license texts
+are included in `dist/THIRD_PARTY_LICENSES.txt` at build time. Pion's transitive
+STUN/TURN libraries do not enable external ICE servers in this product.
+
 rrweb copyright: Copyright (c) 2018 Contributors
 (https://github.com/rrweb-io/rrweb/graphs/contributors).
 

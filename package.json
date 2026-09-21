@@ -24,7 +24,13 @@
       "types": "./dist/viewer/client.d.ts",
       "import": "./dist/viewer/client.js"
     },
-    "./viewer.css": "./dist/assets/app.css"
+    "./viewer.css": "./dist/assets/app.css",
+    "./media": {
+      "types": "./dist/shared/media-wire.d.ts",
+      "import": "./dist/shared/media-wire.js"
+    },
+    "./media-worker.js": "./dist/assets/media-worker.js",
+    "./audio-worklet.js": "./dist/assets/audio-worklet.js"
   },
   "bin": {
     "floebrowser": "dist/host/cli.js"
@@ -61,6 +67,7 @@
   },
   "devDependencies": {
     "@fontsource/inter": "5.3.0",
+    "@types/dom-webcodecs": "0.1.19",
     "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "esbuild": "0.28.2",

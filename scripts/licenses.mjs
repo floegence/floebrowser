@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 
@@ -52,5 +53,42 @@ export async function writeThirdPartyLicenses() {
     for (const child of Object.keys(manifest.dependencies ?? {}))
       pending.push({ name: child, parent: join(directory, 'package.json') });
   }
+  const compiledModules = execFileSync(
+    'go',
+    [
+      'list',
+      '-deps',
+      '-f',
+      '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}{{end}}',
+      './cmd/floebrowser-media',
+    ],
+    { cwd: 'media', env: { ...process.env, GOWORK: 'off' }, encoding: 'utf8' },
+  );
+  for (const line of [
+    ...new Set(compiledModules.split('\n').filter(Boolean)),
+  ].sort()) {
+    const [name, version, directory] = line.split('\t');
+    const files = (await readdir(directory)).filter((file) =>
+      /^(license|licence|copying|notice)(\..*)?$/i.test(file),
+    );
+    if (!files.length)
+      throw new Error(`Missing Go dependency license: ${name}`);
+    sections.push(`\n${name}@${version}\n`);
+    for (const file of files)
+      sections.push(await readFile(join(directory, file), 'utf8'));
+  }
+  const toolchain = JSON.parse(
+    execFileSync('go', ['env', '-json', 'GOROOT', 'GOVERSION'], {
+      encoding: 'utf8',
+    }),
+  );
+  sections.push(
+    `Go runtime ${toolchain.GOVERSION}`,
+    await readFile(join(toolchain.GOROOT, 'LICENSE'), 'utf8').catch((error) => {
+      // Homebrew places distribution notices next to its libexec GOROOT.
+      if (error.code !== 'ENOENT') throw error;
+      return readFile(join(dirname(toolchain.GOROOT), 'LICENSE'), 'utf8');
+    }),
+  );
   await writeFile('dist/THIRD_PARTY_LICENSES.txt', sections.join('\n\n'));
 }

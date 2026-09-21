@@ -73,7 +73,8 @@ for (const context of ['2d', 'webgl2'] as const)
         (window as any).WebSocket = class extends Socket {
           constructor(...args: ConstructorParameters<typeof WebSocket>) {
             super(...args);
-            (window as any).testSocket = this;
+            if (String(args[0]).includes('/stream'))
+              (window as any).testSocket = this;
           }
         };
         const Peer = RTCPeerConnection;
@@ -87,6 +88,7 @@ for (const context of ['2d', 'webgl2'] as const)
       });
       viewer.on('websocket', (socket) =>
         socket.on('framereceived', ({ payload }) => {
+          if (typeof payload !== 'string') return;
           const m = JSON.parse(String(payload));
           if (m.type === 'ack' && !m.ok) failures.push(m);
         }),

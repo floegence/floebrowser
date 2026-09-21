@@ -12,13 +12,17 @@ controller and one serialized input path per projection. Never replay input afte
 an uncertain result, reconnect, navigation or takeover.
 
 Static resources come only from observed source-browser responses. Audio/video
-and Canvas graphics may additionally come from individual source elements through
-a controller-authorized WebRTC connection; only media state and SDP signaling
-use the DOM/control carrier. Never enqueue encoded media ahead of user input, or
-capture a display, tab, camera or microphone. Media/Canvas forwarding and encoding
-must stop on controller revocation; signaling uses current view epochs and stream identities. Preserve
-media connections across DOM-only checkpoints. The host owns ICE/TURN policy
-and credentials; do not add an implicit public relay. Do not add a host
+and Canvas graphics come only from individual source elements. Source-host-local
+WebRTC collection binds exclusively to loopback, uses ICE-lite, and accepts no
+STUN/TURN configuration. Remote clients never create WebRTC connections. All
+cross-host data uses host-authorized carriers (Flowersec in Redeven), with encoded
+media on separately scheduled byte streams, bounded queues and consumer credit.
+Never enqueue encoded media ahead of user input, or capture a display, tab, camera
+or microphone. Viewing, media subscriptions and input authority have distinct
+lifetimes. Revoking viewing stops its media delivery and unused capture; revoking
+input does not implicitly revoke authorized observation. Media carries target,
+subscription and stream identities independent of DOM checkpoint epochs. Preserve
+valid media connections across DOM-only checkpoints. Do not add a host
 HTTP fetch fallback, expose cookies, or publish a raw CDP endpoint. Preserve the
 scriptless replay sandbox and same-origin resource policy. Unsupported surfaces
 must remain explicit. Do not enable rrweb's unsafe canvas replay option.
@@ -26,7 +30,8 @@ must remain explicit. Do not enable rrweb's unsafe canvas replay option.
 Canvas observers may retain only bounded current source-local bitmaps to preserve
 static WebGL after its drawing buffer is discarded; no history or disk recording.
 Observe native rendering without changing context options or forcing redraws.
-Only authorized selected-tab endpoints may encode or send those images. Preserve
+Only authorized viewing endpoints may encode or send those images. Hidden video
+reduces or stops picture transmission while authorized background audio continues. Preserve
 alpha, source intrinsic dimensions, bounded latest-frame delivery and explicit
 unsupported surfaces. Canvas payloads never enter the DOM/control carrier.
 

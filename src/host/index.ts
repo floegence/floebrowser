@@ -13,10 +13,17 @@ export {
   PROTOCOL_VERSION,
   type Action,
   type BrowserState,
-  type MediaConfiguration,
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,
   type DisconnectReason,
   type TabState,
 } from '../shared/protocol.js';
+
+export {
+  NativeMediaBridge,
+  type SourceMediaBridge,
+  type MediaScope,
+  type MediaSubscription,
+} from './media-bridge.js';
+export { MediaSender, type MediaSenderLimits } from './media-carrier.js';

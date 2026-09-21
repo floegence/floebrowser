@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
+import { MediaPacketReader } from '../src/shared/media-wire.js';
 
 // Generate a real WebM with video and audio in the source browser. No external site,
 // codec package, microphone or display capture is needed for this regression.
@@ -136,11 +137,28 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       }, variant === 'cross-origin MSE');
       const viewer = await client.newPage();
       await viewer.addInitScript(() => {
+        (window as any).decoderEvents = {};
+        const OriginalWorker = Worker;
+        (window as any).Worker = class extends OriginalWorker {
+          constructor(...args: ConstructorParameters<typeof Worker>) {
+            super(...args);
+            this.addEventListener('message', ({ data }) => {
+              const counts = (window as any).decoderEvents;
+              counts[data.type] = (counts[data.type] ?? 0) + 1;
+            });
+          }
+        };
+        (window as any).RTCPeerConnection = class {
+          constructor() {
+            throw new Error('Client RTC is forbidden');
+          }
+        };
         const Socket = WebSocket;
         (window as any).WebSocket = class extends Socket {
           constructor(...args: ConstructorParameters<typeof WebSocket>) {
             super(...args);
-            (window as any).testSocket = this;
+            if (String(args[0]).includes('/stream'))
+              (window as any).testSocket = this;
           }
         };
       });
@@ -149,8 +167,25 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       const packets: any[] = [];
       const acks: any[] = [];
       const commands: any[] = [];
+      const encoded: string[] = [];
+      const videoHeaders: unknown[] = [];
       viewer.on('websocket', (ws) => {
+        if (ws.url().includes('/media?')) {
+          const reader = new MediaPacketReader();
+          ws.on('framereceived', ({ payload }) => {
+            if (typeof payload !== 'string')
+              for (const frame of reader.push(payload)) {
+                encoded.push(frame.header.track);
+                if (frame.header.track === 'video') {
+                  videoHeaders.push(frame.header);
+                  if (videoHeaders.length > 10) videoHeaders.shift();
+                }
+              }
+          });
+          return;
+        }
         ws.on('framesent', (f) => {
+          if (typeof f.payload !== 'string') return;
           const m = JSON.parse(String(f.payload));
           if (m.type === 'command')
             commands.push({
@@ -160,6 +195,7 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
             });
         });
         ws.on('framereceived', (f) => {
+          if (typeof f.payload !== 'string') return;
           const m = JSON.parse(String(f.payload));
           if (m.type === 'media')
             packets.push({ ...m.packet, data: m.packet.data?.length });
@@ -217,6 +253,10 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
                   })),
               })),
             pageErrors,
+            videoHeaders,
+            decoderEvents: await viewer.evaluate(
+              () => (window as any).decoderEvents,
+            ),
             packets: packets.map(({ kind, stream }) => ({ kind, stream })),
             acks,
             commands,
@@ -226,17 +266,13 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       };
       await decoded();
       assert.ok(
-        packets.some((p) => p.kind === 'offer' && p.sdp.includes('m=audio')),
-        'Stream must contain the source audio track',
+        encoded.includes('audio'),
+        'The carrier contains source Opus audio',
       );
       assert.equal(
-        await projected
-          .locator('#clip')
-          .evaluate(
-            (v: HTMLVideoElement) =>
-              (v.srcObject as MediaStream).getAudioTracks().length,
-          ),
-        1,
+        packets.some((p) => p.kind === 'offer' || 'sdp' in p),
+        false,
+        'Source-local negotiation never reaches the client',
       );
       assert.equal(
         await projected
