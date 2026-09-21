@@ -3,6 +3,10 @@
 export const englishMessages = {
   'tabs.list': 'Source browser tabs',
   'tabs.new': 'New tab',
+  'tabs.menu': 'Tab actions',
+  'tabs.pin': 'Pin tab',
+  'tabs.unpin': 'Unpin tab',
+  'tabs.restore': 'Reopen closed tab',
   'tabs.close': 'Close tab',
   'tabs.closeNamed': 'Close {title}',
   'tabs.moved': 'Tab moved to position {position} of {total}.',

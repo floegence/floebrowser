@@ -43,3 +43,10 @@ export type {
   SourceTransport,
   SourceViewport,
 } from './source.js';
+
+export {
+  StandaloneSourceDirectory,
+  type SourceDirectory,
+  type SourceTab,
+  type DirectoryChange,
+} from './directory.js';

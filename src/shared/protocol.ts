@@ -90,7 +90,14 @@ export const actionSchema = z.discriminatedUnion('kind', [
       time: z.number().finite().min(0).max(1e9).optional(),
     })
     .strict(),
-  z.object({ kind: z.literal('tab_new') }).strict(),
+  z.object({ kind: z.enum(['tab_new', 'tab_restore']) }).strict(),
+  z
+    .object({
+      kind: z.literal('tab_pin'),
+      tab: z.string().min(1).max(80),
+      pinned: z.boolean(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal('tab_move'),
@@ -149,7 +156,7 @@ export type BrowserState = {
 };
 export type TabState = {
   active: string;
-  tabs: Array<{ id: string; title: string; url: string }>;
+  tabs: Array<{ id: string; title: string; url: string; pinned?: boolean }>;
 };
 export const mediaStateSchema = z
   .object({

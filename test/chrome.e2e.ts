@@ -327,3 +327,56 @@ test('typing during a slow tab switch stays editable and composing Enter never s
   await viewer.locator('#address').press('Escape');
   assert.equal(await viewer.locator('#address').inputValue(), before);
 });
+
+test('tab menus pin pages and source-frame shortcuts close and restore a fresh target', async (t) => {
+  const { viewer, service, source, site } = await setup(t);
+  const original = service.session.currentState.active;
+  viewer.on('pageerror', (error) => t.diagnostic(error.message));
+  await viewer
+    .getByRole('tab', { name: 'Workspace · Juniper', exact: true })
+    .click({ button: 'right' });
+  await viewer.getByRole('menuitem', { name: 'Pin tab', exact: true }).click();
+  await viewer.waitForFunction(() => !!document.querySelector('.tab.pinned'));
+  assert.equal(service.session.currentState.tabs[0]!.pinned, true);
+  const width = await viewer.locator('.tab.pinned').boundingBox();
+  assert.ok(width!.width < 60);
+  await viewer.frameLocator('#viewport iframe').locator('#count').focus();
+  await viewer.keyboard.press('Control+w');
+  await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
+  await viewer.locator('#status.live').waitFor();
+  assert.equal(source.isClosed(), true);
+  await viewer.locator('#address').focus();
+  await viewer.keyboard.press('Control+Shift+t');
+  await viewer.frameLocator('#viewport iframe').locator('#count').waitFor();
+  assert.notEqual(service.session.currentState.active, original);
+  assert.equal(
+    service.session.activeProjection.currentState.url,
+    `${site.url}/`,
+  );
+  assert.equal(
+    service.session.currentState.tabs.find(
+      (tab) => tab.id === service.session.currentState.active,
+    )?.pinned,
+    true,
+  );
+  assert.equal(
+    await viewer
+      .frameLocator('#viewport iframe')
+      .locator('#count-value')
+      .textContent(),
+    '0',
+    'Restoration does not replay old input',
+  );
+  await viewer.frameLocator('#viewport iframe').locator('#count').focus();
+  await viewer.keyboard.press('Control+t');
+  await viewer.waitForFunction(
+    () => document.querySelectorAll('[role=tab]').length === 3,
+  );
+  await viewer.locator('#status.live').waitFor();
+  assert.equal(
+    await viewer
+      .locator('#address')
+      .evaluate((e) => e === document.activeElement),
+    true,
+  );
+});

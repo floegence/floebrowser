@@ -18,7 +18,7 @@ import type {
  * persisted browsing data, titles and the underlying environment connection. */
 export type BrowserOptions = Omit<
   ViewOptions,
-  'mediaControls' | 'onAddressFocus'
+  'mediaControls' | 'onAddressFocus' | 'onShortcut'
 > & {
   connect: (request: { takeover: boolean }) => ProjectionConnection;
   title?: string;
@@ -113,6 +113,7 @@ export function mountBrowser(
           command &&
           (command.action.kind === 'tab_select' ||
             command.action.kind === 'tab_new' ||
+            command.action.kind === 'tab_restore' ||
             (command.action.kind === 'tab_close' &&
               command.action.tab === tabState.active)),
       )
@@ -224,6 +225,8 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
+    if (menuTab && !state.tabs.some((tab) => tab.id === menuTab))
+      element('tab-menu').hidePopover();
     if (previous && previous !== state.active) {
       changingTab = true;
       clearTimeout(toastTimer);
@@ -293,7 +296,10 @@ export function mountBrowser(
       }
       const title =
         tab.title || (tab.url === 'about:blank' ? text('tabs.new') : tab.url);
-      if (item.select.textContent !== title) item.select.textContent = title;
+      item.row.classList.toggle('pinned', !!tab.pinned);
+      const label = tab.pinned ? Array.from(title)[0]! : title;
+      if (item.select.textContent !== label) item.select.textContent = label;
+      item.select.setAttribute('aria-label', title);
       item.select.title =
         tab.url === 'about:blank' ? title : `${title} — ${tab.url}`;
       item.close.setAttribute('aria-label', text('tabs.closeNamed', { title }));
@@ -402,6 +408,7 @@ export function mountBrowser(
         }
       },
       onAddressFocus: focusAddress,
+      onShortcut: shortcut,
     });
   }
   function hideSuggestions(): void {
@@ -551,16 +558,111 @@ export function mountBrowser(
   element('address-shortcut').textContent = /Mac/.test(navigator.platform)
     ? '⌘ L'
     : 'Ctrl L';
+  function shortcut(event: KeyboardEvent, phase: 'down' | 'up'): boolean {
+    if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey)
+      return false;
+    const key = event.key.toLowerCase();
+    if (!['l', 'r', 't', 'w', 'tab'].includes(key)) return false;
+    if (phase === 'up') return true;
+    event.preventDefault();
+    if (event.repeat) return true;
+    if (key === 'l') focusAddress();
+    else if (key === 'r') void command({ kind: 'reload' });
+    else if (key === 't')
+      void command({ kind: event.shiftKey ? 'tab_restore' : 'tab_new' }).then(
+        (ok) => {
+          if (ok && !event.shiftKey) focusAddress();
+        },
+      );
+    else if (key === 'w' && desiredTab()) void closeTab(desiredTab());
+    else if (key === 'tab' && tabState.tabs.length) {
+      const index = tabState.tabs.findIndex((tab) => tab.id === desiredTab());
+      const next =
+        (index + (event.shiftKey ? -1 : 1) + tabState.tabs.length) %
+        tabState.tabs.length;
+      selectTab(tabState.tabs[next]!.id);
+    }
+    return true;
+  }
   root.addEventListener('keydown', (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.isComposing) return;
-    if (event.key.toLowerCase() === 'l') {
+    if (shortcut(event, 'down')) event.stopPropagation();
+  });
+  root.addEventListener('keyup', (event) => {
+    if (shortcut(event, 'up')) {
       event.preventDefault();
-      focusAddress();
+      event.stopPropagation();
     }
-    if (event.key.toLowerCase() === 'r') {
+  });
+  const tabMenu = element('tab-menu');
+  let menuTab = '';
+  // Contextmenu can fire before the opening pointerup. An auto popover would
+  // immediately light-dismiss on that same release; own dismissal explicitly.
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (!tabMenu.contains(event.target as Node)) tabMenu.hidePopover();
+    },
+    { capture: true, signal: lifetime.signal },
+  );
+  window.addEventListener('blur', () => tabMenu.hidePopover(), {
+    signal: lifetime.signal,
+  });
+  tabMenu.addEventListener('focusout', (event) => {
+    if (!tabMenu.contains(event.relatedTarget as Node | null))
+      tabMenu.hidePopover();
+  });
+  element('tabs').addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    if (!connected) return;
+    menuTab =
+      (event.target as Element).closest<HTMLElement>('[data-tab-id]')?.dataset
+        .tabId ?? '';
+    const target = tabState.tabs.find((tab) => tab.id === menuTab);
+    element<HTMLButtonElement>('tab-pin').disabled = !target;
+    element<HTMLButtonElement>('tab-close').disabled = !target;
+    element('tab-pin').textContent = text(
+      target?.pinned ? 'tabs.unpin' : 'tabs.pin',
+    );
+    tabMenu.showPopover();
+    tabMenu.style.left = `${Math.max(8, Math.min(event.clientX, innerWidth - tabMenu.offsetWidth - 8))}px`;
+    tabMenu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - tabMenu.offsetHeight - 8))}px`;
+    tabMenu.querySelector<HTMLButtonElement>('button:enabled')?.focus();
+  });
+  element('tab-pin').addEventListener('click', () => {
+    tabMenu.hidePopover();
+    const target = tabState.tabs.find((tab) => tab.id === menuTab);
+    if (target)
+      void command({ kind: 'tab_pin', tab: target.id, pinned: !target.pinned });
+  });
+  element('tab-close').addEventListener('click', () => {
+    tabMenu.hidePopover();
+    if (menuTab) void closeTab(menuTab);
+  });
+  element('tab-restore').addEventListener('click', () => {
+    tabMenu.hidePopover();
+    void command({ kind: 'tab_restore' });
+  });
+  tabMenu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
       event.preventDefault();
-      void command({ kind: 'reload' });
+      tabMenu.hidePopover();
+      rows.get(menuTab)?.select.focus();
+      return;
     }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = [
+      ...tabMenu.querySelectorAll<HTMLButtonElement>('button:enabled'),
+    ];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) %
+            buttons.length;
+    buttons[next]?.focus();
   });
   window.addEventListener('pagehide', destroy, { signal: lifetime.signal });
   function destroy(): void {

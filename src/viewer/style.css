@@ -534,3 +534,48 @@
 .floe-browser .toast button:hover {
   background: #f0f3f7;
 }
+
+.floe-browser .tab.pinned {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+}
+.floe-browser .tab.pinned .tab-select {
+  text-align: center;
+  padding: 0;
+  font-weight: 600;
+}
+.floe-browser .tab.pinned .tab-close {
+  display: none;
+}
+.floe-browser .tab-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 190px;
+  padding: 5px;
+  background: var(--floe-background);
+  color: var(--floe-foreground);
+  border: 1px solid var(--floe-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px #182d4924;
+}
+.floe-browser .tab-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  text-align: left;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.floe-browser .tab-menu button:not(:disabled):hover,
+.floe-browser .tab-menu button:focus-visible {
+  background: var(--floe-field);
+}
+.floe-browser .menu-separator {
+  height: 1px;
+  background: var(--floe-line);
+  margin: 4px;
+}

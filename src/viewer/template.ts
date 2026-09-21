@@ -119,6 +119,12 @@ const template = `    <main class="floe-browser browser-window">
           </div>
         </div>
       </div>
+    <div class="tab-menu" data-floe-ui="tab-menu" popover="manual" role="menu">
+      <button data-floe-ui="tab-pin" role="menuitem"></button>
+      <button data-floe-ui="tab-restore" role="menuitem"></button>
+      <div class="menu-separator" role="separator"></div>
+      <button data-floe-ui="tab-close" role="menuitem"></button>
+    </div>
     <div class="toast" data-floe-ui="toast" role="status" hidden>
       <span data-floe-ui="toast-message"></span
       ><button data-floe-ui="dismiss-toast">
@@ -145,6 +151,7 @@ export function browserTemplate(
   get('browser-title').textContent = title;
   const labels: Record<string, BrowserMessageKey> = {
     tabs: 'tabs.list',
+    'tab-menu': 'tabs.menu',
     navigation: 'navigation.label',
     address: 'address.label',
     'address-suggestions': 'address.suggestions',
@@ -164,6 +171,9 @@ export function browserTemplate(
   get('address').setAttribute('placeholder', text('address.placeholder'));
   get('address').setAttribute('aria-controls', get('address-suggestions').id);
   for (const [id, key] of Object.entries({
+    'tab-pin': 'tabs.pin',
+    'tab-close': 'tabs.close',
+    'tab-restore': 'tabs.restore',
     'start-label': 'address.placeholder',
     status: 'status.connecting',
     'connection-title': 'connection.connecting',

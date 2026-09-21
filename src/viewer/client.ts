@@ -46,6 +46,8 @@ export type ViewOptions = {
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
   onAddressFocus?: () => void;
+  /** Return true for a browser-chrome shortcut consumed by the embedding host. */
+  onShortcut?: (event: KeyboardEvent, phase: 'down' | 'up') => boolean;
   onTabs?: (state: TabState) => void;
 };
 type Pending = {
@@ -644,6 +646,8 @@ export class DOMBrowserView {
           'reload',
           'viewport',
           'tab_new',
+          'tab_restore',
+          'tab_pin',
           'tab_select',
           'tab_close',
           'tab_move',
@@ -1004,6 +1008,11 @@ export class DOMBrowserView {
   private key(event: KeyboardEvent, phase: 'down' | 'up'): void {
     if (phase === 'down') this.media.interact(event);
     if (this.composing || event.isComposing || event.key === 'Process') return;
+    if (this.options.onShortcut?.(event, phase)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (
       (event.ctrlKey || event.metaKey) &&
       ['l', 'r'].includes(event.key.toLowerCase())
