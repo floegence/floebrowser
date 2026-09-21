@@ -10,6 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
 import type { SourcePage } from './source.js';
+import type { SourceDirectory } from './directory.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { type AttachOptions } from './engine.js';
 import { BrowserSession, type SessionConnection } from './session.js';
@@ -33,22 +34,33 @@ export interface ProjectionServerOptions {
 
 /** Optional loopback demo carrier. Redeven can mount BrowserProjection on its own transport. */
 export async function createProjectionServer(
-  page: Page | SourcePage,
+  page: Page | SourcePage | SourceDirectory,
   options: ProjectionServerOptions,
 ) {
   const base = `/session/${randomBytes(32).toString('base64url')}/`;
   const mediaBridge =
     options.mediaBridge ?? new NativeMediaBridge(mediaExecutable());
-  const session = await BrowserSession.attach(page, {
-    uploadLimits: options.uploadLimits,
-    authorize: options.authorize,
-    onState: options.onState,
-    mediaBridge,
-    onMediaFrame: (frame) => active?.sender?.push(frame),
-    onMediaRetired: (scope) =>
-      active?.sender?.retire(scope.target, scope.view, scope.stream),
-    resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
-  });
+  const session = await ('list' in page
+    ? BrowserSession.open(page, {
+        uploadLimits: options.uploadLimits,
+        authorize: options.authorize,
+        onState: options.onState,
+        mediaBridge,
+        onMediaFrame: (frame) => active?.sender?.push(frame),
+        onMediaRetired: (scope) =>
+          active?.sender?.retire(scope.target, scope.view, scope.stream),
+        resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
+      })
+    : BrowserSession.attach(page, {
+        uploadLimits: options.uploadLimits,
+        authorize: options.authorize,
+        onState: options.onState,
+        mediaBridge,
+        onMediaFrame: (frame) => active?.sender?.push(frame),
+        onMediaRetired: (scope) =>
+          active?.sender?.retire(scope.target, scope.view, scope.stream),
+        resourceURL: (id, tab) => `${base}assets/${tab}/${id}`,
+      }));
   const sockets = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_COMMAND_BYTES,
