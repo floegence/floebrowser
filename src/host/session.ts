@@ -21,6 +21,7 @@ type Viewer = {
   send: (message: ServerMessage) => void;
   controller?: Controller;
   observation?: Observation;
+  observations: Map<string, Observation>;
   mediaEnabled: boolean;
   lastID: number;
   pending: number;
@@ -140,14 +141,26 @@ export class BrowserSession {
         'The source tab could not be opened. Try again from the current tab.',
     });
   }
+  private trackRetirement(viewer: Viewer, work: Promise<void>): void {
+    viewer.retiring.add(work);
+    void work.finally(() => viewer.retiring.delete(work)).catch(() => {});
+  }
   private retire(viewer?: Viewer): void {
-    const observation = viewer?.observation;
-    if (!viewer || !observation) return;
+    if (!viewer) return;
+    const observation = viewer.observation;
     viewer.controller = undefined;
     viewer.observation = undefined;
-    const drained = observation.close();
-    viewer.retiring.add(drained);
-    void drained.finally(() => viewer.retiring.delete(drained)).catch(() => {});
+    // Hiding revokes input synchronously, but preserves an authorized audio
+    // subscription. Renderer cleanup never delays a different source target.
+    if (observation)
+      this.trackRetirement(viewer, observation.setVisible(false));
+  }
+  private closeObservations(viewer: Viewer): void {
+    viewer.controller = undefined;
+    viewer.observation = undefined;
+    for (const observation of viewer.observations.values())
+      this.trackRetirement(viewer, observation.close());
+    viewer.observations.clear();
   }
   private async select(id: string): Promise<void> {
     const tab = this.tabs.get(id);
@@ -160,22 +173,35 @@ export class BrowserSession {
     this.publish();
     void tab.page.bringToFront().catch(() => {});
     if (viewer?.active) {
-      const observation = await tab.engine.observe(
-        (message) => {
-          if (
-            viewer.active &&
-            this.viewer === viewer &&
-            this.selected === id &&
-            !(message.type === 'state' && message.state.status === 'closed')
-          )
-            viewer.send(message);
-        },
-        { ...this.options, media: viewer.mediaEnabled },
-      );
-      if (!viewer.active || this.selected !== id) {
+      const observation =
+        viewer.observations.get(id) ??
+        (await tab.engine.observe(
+          (message) => {
+            if (
+              viewer.active &&
+              this.viewer === viewer &&
+              (message.type === 'media' ||
+                message.type === 'media_end' ||
+                (this.selected === id &&
+                  !(
+                    message.type === 'state' &&
+                    message.state.status === 'closed'
+                  )))
+            )
+              viewer.send(message);
+          },
+          { ...this.options, media: viewer.mediaEnabled },
+        ));
+      if (!viewer.active) {
         await observation.close();
         return;
       }
+      viewer.observations.set(id, observation);
+      if (this.selected !== id) {
+        this.trackRetirement(viewer, observation.setVisible(false));
+        return;
+      }
+      this.trackRetirement(viewer, observation.setVisible(true));
       viewer.observation = observation;
       try {
         const controller = await tab.engine.acquireControl(
@@ -187,10 +213,10 @@ export class BrowserSession {
           viewer.observation !== observation ||
           this.selected !== id
         )
-          await observation.close();
+          this.trackRetirement(viewer, observation.setVisible(false));
         else viewer.controller = controller;
       } catch (error) {
-        await observation.close();
+        this.trackRetirement(viewer, observation.setVisible(false));
         if (viewer.observation === observation) viewer.observation = undefined;
         throw error;
       }
@@ -202,6 +228,10 @@ export class BrowserSession {
     const ids = [...this.tabs.keys()];
     const index = ids.indexOf(id);
     if (this.selected === id) this.retire(this.viewer);
+    const observation = this.viewer?.observations.get(id);
+    this.viewer?.observations.delete(id);
+    if (observation && this.viewer)
+      this.trackRetirement(this.viewer, observation.close());
     void tab.engine.close();
     this.tabs.delete(id);
     if (this.selected === id && !this.closing) {
@@ -229,6 +259,7 @@ export class BrowserSession {
       lastID: 0,
       pending: 0,
       retiring: new Set(),
+      observations: new Map(),
       mediaEnabled: options.media !== false,
     };
     this.viewer = viewer;
@@ -236,6 +267,7 @@ export class BrowserSession {
       await this.select(this.selected);
     } catch (error) {
       viewer.active = false;
+      this.closeObservations(viewer);
       this.viewer = undefined;
       throw error;
     }
@@ -245,12 +277,16 @@ export class BrowserSession {
       setMedia: async (enabled) => {
         if (!viewer.active) return;
         viewer.mediaEnabled = enabled;
-        await viewer.observation?.setMedia(enabled);
+        await Promise.all(
+          [...viewer.observations.values()].map((observation) =>
+            observation.setMedia(enabled),
+          ),
+        );
       },
       close: () => {
         closed ??= (async () => {
           viewer.active = false;
-          this.retire(viewer);
+          this.closeObservations(viewer);
           await this.queue;
           if (this.viewer === viewer) this.viewer = undefined;
           await Promise.all(viewer.retiring);
@@ -265,8 +301,10 @@ export class BrowserSession {
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
     if (message.type === 'media_keyframe') {
-      if (message.tab !== this.selected) return Promise.resolve();
-      return viewer.controller?.receive(message) ?? Promise.resolve();
+      return (
+        viewer.observations.get(message.tab)?.receive(message) ??
+        Promise.resolve()
+      );
     }
     if (message.type === 'resync')
       return viewer.controller?.receive(message) ?? Promise.resolve();
@@ -374,7 +412,8 @@ export class BrowserSession {
     return (this.closing ??= (async () => {
       if (this.viewer) {
         this.viewer.active = false;
-        await this.viewer.observation?.close();
+        this.closeObservations(this.viewer);
+        await Promise.all(this.viewer.retiring);
       }
       await this.queue;
       await Promise.allSettled(this.adding.values());

@@ -35,6 +35,7 @@ export function installRecorder(binding: string, key: string): void {
   let styleIDs = new WeakMap<CSSStyleSheet, number>();
   let lastTitle = document.title;
   let mediaActive = false;
+  let picturesActive = true;
   let projecting = true;
   let recordedDocument = false;
   const media = new Set<ReturnType<typeof observeMedia>>();
@@ -237,7 +238,11 @@ export function installRecorder(binding: string, key: string): void {
     if (
       !projecting &&
       event.type !== 4 &&
-      !(event.type === 5 && event.data.tag === 'floebrowser:title')
+      !(
+        event.type === 5 &&
+        (event.data.tag === 'floebrowser:title' ||
+          (mediaActive && event.data.tag === 'floebrowser:media'))
+      )
     )
       return;
     try {
@@ -312,7 +317,7 @@ export function installRecorder(binding: string, key: string): void {
             (packet) => record.addCustomEvent('floebrowser:media', packet),
           );
           media.add(observer);
-          observer.setEnabled(mediaActive);
+          observer.setEnabled(mediaActive, picturesActive);
           const changed = () => queueMicrotask(() => emitFocus(doc));
           const loaded = (event: Event) => {
             const link = event.target as HTMLLinkElement;
@@ -390,14 +395,13 @@ export function installRecorder(binding: string, key: string): void {
   Object.defineProperty(target, key, {
     configurable: true,
     value: {
-      media: (active: boolean) => {
-        mediaActive = active;
-        for (const observer of media) observer.setEnabled(active);
+      display: (visible: boolean) => {
+        projecting = visible;
       },
-      suspend: () => {
-        projecting = false;
-        mediaActive = false;
-        for (const observer of media) observer.setEnabled(false);
+      media: (active: boolean, pictures = true) => {
+        mediaActive = active;
+        picturesActive = pictures;
+        for (const observer of media) observer.setEnabled(active, pictures);
       },
       retireMedia: (streams: string[]) => {
         for (const observer of media) observer.retire(streams);

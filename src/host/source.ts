@@ -11,6 +11,7 @@ export interface SourceElement {
   evaluate<A, R>(
     fn: (node: Element, argument: A) => R | Promise<R>,
     argument: A,
+    options?: { userGesture?: boolean },
   ): Promise<R>;
   ownerFrame(): Promise<SourceFrame | null>;
   dispose(): Promise<void>;

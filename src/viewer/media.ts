@@ -5,6 +5,9 @@ import type { MediaFrame } from '../shared/media-wire.js';
 import { setIcon } from './icons.js';
 import type { Action, MediaPacket, MediaState } from '../shared/protocol.js';
 
+type ScopedState = MediaState & { target: string; view: string };
+const identity = (target: string, stream: string) => `${target}:${stream}`;
+
 type Playback = {
   id: number;
   token: string;
@@ -35,10 +38,10 @@ export type MediaAssets = {
 /** Decodes host-carried element media. Website code and media URLs never execute
  * here, and the client never establishes a WebRTC connection. */
 export class MediaView {
-  private states = new Map<number, MediaState>();
+  private states = new Map<string, ScopedState>();
   private playback = new Map<string, Playback>();
   private rows = new Map<
-    number,
+    string,
     {
       root: HTMLElement;
       label: HTMLElement;
@@ -64,13 +67,18 @@ export class MediaView {
   private timer: ReturnType<typeof setInterval>;
   constructor(
     container: HTMLElement | undefined,
-    private node: (id: number) => Node | null | undefined,
-    private dispatch: (action: Action) => Promise<boolean>,
-    private keyframe: (view: string, stream: string) => void,
+    private node: (id: number, target?: string) => Node | null | undefined,
+    private dispatch: (
+      action: Action,
+      target?: string,
+      stream?: string,
+    ) => Promise<boolean>,
+    private keyframe: (view: string, stream: string, target?: string) => void,
     private assets: MediaAssets = {
       decoderURL: new URL('media-worker.js', document.baseURI),
       audioWorkletURL: new URL('audio-worklet.js', document.baseURI),
     },
+    private targetTitle: (target: string) => string = () => '',
   ) {
     this.audio = new AudioOutput(assets.audioWorkletURL, (blocked) => {
       this.soundBlocked = blocked;
@@ -139,54 +147,67 @@ export class MediaView {
   }
   receive(packet: MediaPacket, scope: { target: string; view: string }) {
     if (packet.kind === 'removed') {
-      this.remove(packet.id);
+      for (const [key, state] of this.states)
+        if (state.target === scope.target && state.id === packet.id)
+          this.remove(key);
       return;
     }
-    for (const [token, playback] of this.playback)
-      if (playback.id === packet.id && token !== packet.stream)
-        this.release(token);
-    if (packet.kind === 'state') {
-      if (!this.states.has(packet.id) && this.states.size >= 8) return;
-      let playback = this.playback.get(packet.stream);
+    for (const [key, playback] of this.playback)
       if (
-        playback &&
-        (playback.target !== scope.target || playback.view !== scope.view)
-      ) {
-        this.release(packet.stream);
-        playback = undefined;
-      }
-      if (!playback && this.playback.size < 8) {
-        playback = {
-          id: packet.id,
-          token: packet.stream,
-          ...scope,
-          closed: false,
-        };
-        this.playback.set(packet.stream, playback);
-        this.keyframe(scope.view, packet.stream);
-      }
-      if (playback && playback.id !== packet.id) {
-        this.states.delete(playback.id);
-        this.rows.get(playback.id)?.root.remove();
-        this.rows.delete(playback.id);
-        playback.id = packet.id;
-      }
-      this.states.set(packet.id, packet);
-      this.renderControls();
-      if (playback) this.volume(playback);
-      return;
+        playback.target === scope.target &&
+        playback.id === packet.id &&
+        playback.token !== packet.stream
+      )
+        this.remove(key, false);
+    const key = identity(scope.target, packet.stream);
+    let playback = this.playback.get(key);
+    if (playback && playback.view !== scope.view) {
+      this.remove(key, false);
+      playback = undefined;
     }
+    if (!playback) {
+      if (
+        this.playback.size >= 128 ||
+        [...this.playback.values()].filter(
+          (item) => item.target === scope.target,
+        ).length >= 8
+      )
+        return;
+      playback = {
+        id: packet.id,
+        token: packet.stream,
+        ...scope,
+        closed: false,
+      };
+      this.playback.set(key, playback);
+      this.keyframe(scope.view, packet.stream, scope.target);
+    }
+    playback.id = packet.id;
+    this.states.set(key, { ...packet, ...scope });
+    this.renderControls();
+    this.volume(playback);
+  }
+  nodeID(target: string, stream: string): number | undefined {
+    return this.states.get(identity(target, stream))?.id;
+  }
+  select(target: string): void {
+    for (const playback of this.playback.values()) {
+      if (playback.target !== target) continue;
+      playback.decoder?.resetVideo();
+      this.keyframe(playback.view, playback.token, playback.target);
+    }
+    this.update();
   }
   frame(frame: MediaFrame): void {
     const h = frame.header;
-    const playback = this.playback.get(h.stream);
+    const playback = this.playback.get(identity(h.target, h.stream));
     if (
       !playback ||
       playback.closed ||
       playback.target !== h.target ||
       playback.view !== h.view ||
       playback.id !== h.node ||
-      this.states.get(h.node)?.stream !== h.stream
+      this.states.get(identity(h.target, h.stream))?.stream !== h.stream
     )
       return;
     if (h.track === 'canvas') {
@@ -233,14 +254,15 @@ export class MediaView {
       if (event.type === 'video') event.frame.close();
       return;
     }
-    if (event.type === 'keyframe') this.keyframe(playback.view, playback.token);
+    if (event.type === 'keyframe')
+      this.keyframe(playback.view, playback.token, playback.target);
     else if (event.type === 'unavailable') {
       playback.failed = true;
       this.renderControls();
     } else if (event.type === 'audio') {
       const count = event.channels[0]?.length ?? 0;
       void this.audio
-        .add(playback.token, (frames) =>
+        .add(identity(playback.target, playback.token), (frames) =>
           playback.decoder?.audioConsumed(frames),
         )
         .then(() => this.volume(playback))
@@ -249,7 +271,7 @@ export class MediaView {
         });
       if (
         !this.audio.push(
-          playback.token,
+          identity(playback.target, playback.token),
           event.channels,
           this.delay(playback, event.timestamp),
         )
@@ -291,10 +313,13 @@ export class MediaView {
     }
   }
   private volume(playback: Playback) {
-    const state = this.states.get(playback.id);
+    const state = this.states.get(identity(playback.target, playback.token));
     const muted =
       !this.audible || (state?.muted ?? true) || (state?.paused ?? true);
-    this.audio.volume(playback.token, muted ? 0 : (state?.volume ?? 1));
+    this.audio.volume(
+      identity(playback.target, playback.token),
+      muted ? 0 : (state?.volume ?? 1),
+    );
     // This stream contains decoded video only. Keep its clock running so a
     // paused source's first frame and later seeks can both be displayed.
     if (playback.element && playback.stream) {
@@ -304,7 +329,10 @@ export class MediaView {
   }
   private update() {
     for (const playback of this.playback.values()) {
-      const projected = this.node(playback.id) as Element | null;
+      const projected = this.node(
+        playback.id,
+        playback.target,
+      ) as Element | null;
       if (
         projected?.isConnected &&
         projected.tagName === 'IMG' &&
@@ -352,12 +380,15 @@ export class MediaView {
       this.volume(playback);
     }
     for (const state of this.states.values()) {
-      const image = this.node(state.id) as HTMLImageElement | null;
+      const image = this.node(
+        state.id,
+        state.target,
+      ) as HTMLImageElement | null;
       if (image?.tagName !== 'IMG' || !image.hasAttribute(CANVAS_ATTRIBUTE))
         continue;
       const failed =
         state.status === 'unavailable' ||
-        this.playback.get(state.stream)?.failed;
+        this.playback.get(identity(state.target, state.stream))?.failed;
       if (failed) {
         image.setAttribute(
           'data-floebrowser-unsupported',
@@ -385,9 +416,11 @@ export class MediaView {
   private dismiss() {
     if (this.panel.matches(':popover-open')) this.panel.hidePopover();
   }
-  private relevant(state: MediaState) {
-    const node = this.node(state.id) as HTMLMediaElement | null;
-    if (!node?.isConnected || node.hasAttribute(CANVAS_ATTRIBUTE)) return false;
+  private relevant(state: ScopedState) {
+    const node = this.node(state.id, state.target) as HTMLMediaElement | null;
+    if (!node?.isConnected)
+      return !state.paused && (state.volume > 0 || state.duration > 0);
+    if (node.hasAttribute(CANVAS_ATTRIBUTE)) return false;
     // Background audio remains controllable even without a rendered element.
     if (!state.paused && !state.muted && state.volume > 0) return true;
     return this.visible(node);
@@ -411,10 +444,10 @@ export class MediaView {
     return true;
   }
   private renderControls() {
-    const relevant = new Set<number>();
+    const relevant = new Set<string>();
     for (const state of this.states.values()) {
       if (!this.relevant(state)) continue;
-      relevant.add(state.id);
+      relevant.add(identity(state.target, state.stream));
       this.render(state);
     }
     for (const [id, row] of this.rows) row.root.hidden = !relevant.has(id);
@@ -433,8 +466,8 @@ export class MediaView {
       String(!this.audible || this.soundBlocked),
     );
   }
-  private render(state: MediaState) {
-    let row = this.rows.get(state.id);
+  private render(state: ScopedState) {
+    let row = this.rows.get(identity(state.target, state.stream));
     if (!row) {
       const root = document.createElement('div');
       root.className = 'floe-media-row';
@@ -442,7 +475,9 @@ export class MediaView {
       badge.className = 'floe-media-art';
       setIcon(
         badge,
-        this.node(state.id)?.nodeName === 'AUDIO' ? 'audio' : 'video',
+        this.node(state.id, state.target)?.nodeName === 'AUDIO'
+          ? 'audio'
+          : 'video',
       );
       const info = document.createElement('div');
       info.className = 'floe-media-info';
@@ -456,13 +491,19 @@ export class MediaView {
       play.type = 'button';
       play.className = 'floe-media-play';
       play.onclick = () => {
-        const current = this.states.get(state.id);
+        const current = this.states.get(identity(state.target, state.stream));
         if (current)
-          void this.dispatch({
-            kind: 'media',
-            node: state.id,
-            operation: current.paused ? 'play' : 'pause',
-          });
+          void this.dispatch(
+            {
+              kind: 'media',
+              node:
+                this.states.get(identity(state.target, state.stream))?.id ??
+                state.id,
+              operation: current.paused ? 'play' : 'pause',
+            },
+            state.target,
+            state.stream,
+          );
       };
       const seek = document.createElement('input');
       seek.type = 'range';
@@ -479,12 +520,18 @@ export class MediaView {
       timeline.append(seek, times);
       seek.oninput = () => this.progress(seek, elapsed, Number(seek.value));
       seek.onchange = () => {
-        void this.dispatch({
-          kind: 'media',
-          node: state.id,
-          operation: 'seek',
-          time: Number(seek.value),
-        });
+        void this.dispatch(
+          {
+            kind: 'media',
+            node:
+              this.states.get(identity(state.target, state.stream))?.id ??
+              state.id,
+            operation: 'seek',
+            time: Number(seek.value),
+          },
+          state.target,
+          state.stream,
+        );
       };
       const location = document.createElement('div');
       location.className = 'floe-media-location';
@@ -495,18 +542,33 @@ export class MediaView {
       setIcon(icon, 'locate');
       locate.append(icon, document.createTextNode('Show on page'));
       locate.onclick = async () => {
-        const current = this.states.get(state.id);
+        const current = this.states.get(identity(state.target, state.stream));
         if (!current || locate.disabled) return;
         locate.disabled = true;
         try {
-          const ok = await this.dispatch({
-            kind: 'media',
-            node: state.id,
-            operation: 'reveal',
-          });
-          if (!ok || this.states.get(state.id)?.stream !== current.stream)
+          if (!this.node(current.id, state.target)) {
+            if (await this.dispatch({ kind: 'tab_select', tab: state.target }))
+              this.dismiss();
             return;
-          const node = this.node(state.id) as HTMLElement | null;
+          }
+          const ok = await this.dispatch(
+            {
+              kind: 'media',
+              node:
+                this.states.get(identity(state.target, state.stream))?.id ??
+                state.id,
+              operation: 'reveal',
+            },
+            state.target,
+            state.stream,
+          );
+          if (
+            !ok ||
+            this.states.get(identity(state.target, state.stream))?.stream !==
+              current.stream
+          )
+            return;
+          const node = this.node(state.id, state.target) as HTMLElement | null;
           if (!node?.isConnected) return;
           this.dismiss();
           this.toggle.focus({ preventScroll: true });
@@ -555,23 +617,30 @@ export class MediaView {
         locate,
         location,
       };
-      this.rows.set(state.id, row);
+      this.rows.set(identity(state.target, state.stream), row);
     }
     row.root.hidden = false;
-    const node = this.node(state.id) as HTMLElement | null;
+    const node = this.node(state.id, state.target) as HTMLElement | null;
     const title =
       node?.getAttribute('aria-label') ||
       node?.title ||
       node?.ownerDocument.title ||
+      this.targetTitle(state.target) ||
       (node?.tagName === 'AUDIO' ? 'Audio' : 'Video');
     if (row.title.textContent !== title) row.title.textContent = title;
     row.title.title = title;
     const visible = !!node && this.visible(node);
-    if (visible && row.locate.parentElement !== row.location)
+    const canLocate = visible || !node;
+    const label = visible ? 'Show on page' : 'Open tab';
+    if (row.locate.lastChild?.textContent !== label)
+      row.locate.lastChild!.textContent = label;
+    if (canLocate && row.locate.parentElement !== row.location)
       row.location.replaceChildren(row.locate);
-    else if (!visible && row.location.textContent !== 'No visible player')
+    else if (!canLocate && row.location.textContent !== 'No visible player')
       row.location.textContent = 'No visible player';
-    const failure = this.playback.get(state.stream)?.failed;
+    const failure = this.playback.get(
+      identity(state.target, state.stream),
+    )?.failed;
     row.label.textContent =
       state.status === 'unavailable'
         ? 'This media cannot play in this browser.'
@@ -648,18 +717,17 @@ export class MediaView {
       playback.element.srcObject = null;
     }
   }
-  private remove(id: number) {
-    for (const [token, playback] of this.playback)
-      if (playback.id === id) this.release(token);
-    this.states.delete(id);
-    this.rows.get(id)?.root.remove();
-    this.rows.delete(id);
-    this.renderControls();
+  private remove(key: string, render = true) {
+    this.release(key);
+    this.states.delete(key);
+    this.rows.get(key)?.root.remove();
+    this.rows.delete(key);
+    if (render) this.renderControls();
   }
   end(target: string, view: string): void {
-    for (const playback of this.playback.values())
+    for (const [key, playback] of this.playback)
       if (playback.target === target && playback.view === view)
-        this.remove(playback.id);
+        this.remove(key);
   }
   reset() {
     this.highlight?.cancel();

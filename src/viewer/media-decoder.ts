@@ -57,6 +57,11 @@ export class ElementDecoder {
       [data.buffer],
     );
   }
+  resetVideo(): void {
+    if (this.closed) return;
+    this.needKey = true;
+    this.worker.postMessage({ type: 'reset-video' });
+  }
   painted(): void {
     if (!this.closed) this.worker.postMessage({ type: 'painted' });
   }

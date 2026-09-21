@@ -369,24 +369,28 @@ for (const variant of ['blob', 'cross-origin MSE'] as const)
       await viewer
         .getByRole('button', { name: 'New tab', exact: true })
         .click();
-      await mediaFrame.waitForFunction(
-        () => (window as any).activeMediaPeers === 0,
+      await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
+      assert.equal(
+        await mediaFrame.evaluate(() => (window as any).activeMediaPeers),
+        1,
+        'Background audio retains its source collector across tab selection',
       );
       assert.equal(
         await viewer.locator('.floe-media-controls').isVisible(),
-        false,
+        true,
+        'Playing background media remains discoverable',
       );
       await viewer.getByRole('tab').first().click();
       await decoded();
+      await viewer
+        .getByRole('button', { name: 'Media controls', exact: true })
+        .click();
       await mediaFrame.evaluate(async () => {
         const video = document.querySelector('video')!;
         Object.defineProperty(video, 'mediaKeys', { value: {} });
         video.src = URL.createObjectURL((window as any).fixtureBlob);
         await video.play();
       });
-      await viewer
-        .getByRole('button', { name: 'Media controls', exact: true })
-        .click();
       await viewer
         .getByText('This media cannot play in this browser.', { exact: true })
         .waitFor();

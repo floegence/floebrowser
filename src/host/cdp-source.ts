@@ -465,6 +465,7 @@ class CDPElement implements SourceElement {
   async evaluate<A, R>(
     fn: (node: Element, argument: A) => R | Promise<R>,
     argument: A,
+    options: { userGesture?: boolean } = {},
   ): Promise<R> {
     if (
       this.disposed ||
@@ -479,6 +480,7 @@ class CDPElement implements SourceElement {
       arguments: [{ value: argument }],
       returnByValue: true,
       awaitPromise: true,
+      userGesture: options.userGesture === true,
     });
     if (result.exceptionDetails)
       throw new Error('Source element evaluation failed');

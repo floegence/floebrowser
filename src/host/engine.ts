@@ -50,6 +50,8 @@ export interface Controller {
   close(): Promise<void>;
 }
 export interface ObservationOptions {
+  /** Hidden observations retain authorized audio without DOM or picture traffic. */
+  visible?: boolean;
   /** The host may admit DOM before its independently authorized media carrier. */
   media?: boolean;
   onMediaFrame?: (frame: MediaFrame) => void;
@@ -64,6 +66,7 @@ export interface Observation {
   /** Only resynchronization and media recovery are accepted here, never input. */
   receive(message: ClientMessage): Promise<void>;
   setMedia(enabled: boolean): Promise<void>;
+  setVisible(visible: boolean): Promise<void>;
   close(): Promise<void>;
 }
 type Watcher = ObservationOptions & {
@@ -71,6 +74,7 @@ type Watcher = ObservationOptions & {
   view: string;
   active: boolean;
   mediaEnabled: boolean;
+  visible: boolean;
   send: (message: ServerMessage) => void;
   resyncPending: boolean;
   control?: Controller;
@@ -361,6 +365,12 @@ export class BrowserProjection {
   private send(message: ServerMessage): void {
     for (const watcher of this.watchers) {
       if (!watcher.active) continue;
+      if (message.type === 'media' && !watcher.mediaEnabled) continue;
+      if (
+        !watcher.visible &&
+        ['snapshot', 'events', 'focus'].includes(message.type)
+      )
+        continue;
       try {
         watcher.send(
           message.type === 'media'
@@ -371,6 +381,16 @@ export class BrowserProjection {
         void this.unobserve(watcher);
       }
     }
+  }
+  private get domWatched(): boolean {
+    return [...this.watchers].some(
+      (watcher) => watcher.active && watcher.visible,
+    );
+  }
+  private get picturesWatched(): boolean {
+    return [...this.watchers].some(
+      (watcher) => watcher.active && watcher.visible && watcher.mediaEnabled,
+    );
   }
   private get mediaWatched(): boolean {
     return [...this.watchers].some(
@@ -414,7 +434,7 @@ export class BrowserProjection {
       event.data.tag === 'floebrowser:media'
     ) {
       const packet = sourceMediaPacketSchema.safeParse(event.data.payload);
-      if (packet.success && this.epoch) {
+      if (packet.success && this.mediaWatched) {
         const media = packet.data;
         if (media.kind === 'removed') {
           // Removal can follow DOM teardown or a checkpoint that temporarily
@@ -423,12 +443,14 @@ export class BrowserProjection {
           if (stream) this.retireMedia(stream);
           this.mediaNodes.delete(media.id);
         } else {
-          if (!this.projection.isMedia(media.id)) return;
+          if (this.domWatched && !this.projection.isMedia(media.id)) return;
           for (const [id, stream] of this.mediaNodes)
             if (stream === media.stream && id !== media.id)
               this.mediaNodes.delete(id);
           if (!this.mediaNodes.has(media.id) && this.mediaNodes.size >= 8)
             return;
+          const previous = this.mediaNodes.get(media.id);
+          if (previous && previous !== media.stream) this.retireMedia(previous);
           this.mediaNodes.set(media.id, media.stream);
           const capture = this.captures.get(media.stream);
           if (capture) capture.node = media.id;
@@ -437,6 +459,7 @@ export class BrowserProjection {
         else
           this.send({
             type: 'media',
+            target: this.id,
             epoch: this.epoch,
             view: this.mediaView,
             packet: media,
@@ -514,6 +537,11 @@ export class BrowserProjection {
         this.send({ type: 'focus', epoch: this.epoch, focus: focus.data });
       return;
     }
+    if (!this.domWatched) {
+      if (event.type === EventType.FullSnapshot)
+        void this.setMedia(this.mediaWatched);
+      return;
+    }
     const projected = this.projection.event(event, this.page.url());
     if (!projected) return;
     if (event.type !== EventType.FullSnapshot) {
@@ -525,6 +553,7 @@ export class BrowserProjection {
         this.retireMedia(stream);
         this.send({
           type: 'media',
+          target: this.id,
           epoch: this.epoch,
           view: this.mediaView,
           packet: { kind: 'removed', id },
@@ -605,6 +634,7 @@ export class BrowserProjection {
       view: randomBytes(18).toString('base64url'),
       active: true,
       mediaEnabled: !!options.onMediaFrame && options.media !== false,
+      visible: options.visible !== false,
       send,
       resyncPending: false,
     };
@@ -612,6 +642,17 @@ export class BrowserProjection {
     const observation: Observation = {
       id: watcher.id,
       receive: (message) => this.receiveObservation(watcher, message),
+      setVisible: async (visible) => {
+        if (!watcher.active || watcher.visible === visible) return;
+        watcher.visible = visible;
+        if (!this.domWatched) this.epoch = '';
+        if (!visible) await watcher.control?.close();
+        if (visible) await this.snapshot();
+        await this.setMedia(this.mediaWatched);
+        if (visible)
+          for (const capture of this.captures.values())
+            void capture.subscription?.requestKeyframe().catch(() => {});
+      },
       setMedia: async (enabled) => {
         if (
           !watcher.active ||
@@ -640,7 +681,9 @@ export class BrowserProjection {
     try {
       send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
       send({ type: 'state', state: this.currentState });
-      void this.snapshot().catch(() => {
+      void (
+        watcher.visible ? this.snapshot() : this.setMedia(this.mediaWatched)
+      ).catch(() => {
         if (watcher.active && !this.closed)
           this.updateState({ status: 'error' });
       });
@@ -677,7 +720,13 @@ export class BrowserProjection {
     authorize: AttachOptions['authorize'],
   ): Promise<Controller> {
     const watcher = this.observations.get(observation);
-    if (!watcher?.active || this.closed || this.closing || this.hasController)
+    if (
+      !watcher?.active ||
+      !watcher.visible ||
+      this.closed ||
+      this.closing ||
+      this.hasController
+    )
       throw new Error('Source control unavailable');
     const viewer: Viewer = {
       watcher,
@@ -757,7 +806,7 @@ export class BrowserProjection {
         this.requestMediaKeyframe(message);
       return Promise.resolve();
     }
-    if (watcher.resyncPending) return Promise.resolve();
+    if (!watcher.visible || watcher.resyncPending) return Promise.resolve();
     watcher.resyncPending = true;
     return this.snapshot()
       .catch(() => {})
@@ -795,8 +844,18 @@ export class BrowserProjection {
     for (const stream of this.captures.keys()) this.retireMedia(stream);
     this.mediaNodes.clear();
     this.mediaView = randomBytes(18).toString('base64url');
-    for (const watcher of this.watchers)
+    for (const watcher of this.watchers) {
+      try {
+        watcher.send({
+          type: 'media_end',
+          target: this.id,
+          view: watcher.view,
+        });
+      } catch {
+        /* Carrier already closed. */
+      }
       watcher.view = randomBytes(18).toString('base64url');
+    }
   }
 
   private async collectMedia(
@@ -832,7 +891,12 @@ export class BrowserProjection {
           if (!current() || this.mediaNodes.get(capture.node) !== packet.stream)
             return;
           for (const watcher of this.watchers) {
-            if (!watcher.active || !watcher.mediaEnabled) continue;
+            if (
+              !watcher.active ||
+              !watcher.mediaEnabled ||
+              (!watcher.visible && frame.header.track !== 'audio')
+            )
+              continue;
             try {
               watcher.onMediaFrame?.({
                 header: {
@@ -903,16 +967,17 @@ export class BrowserProjection {
   private async setMedia(active: boolean): Promise<void> {
     const enabled = active && this.mediaWatched && !!this.options.mediaBridge;
     if (!enabled) this.clearMedia();
-    const observing = this.watchers.size > 0;
+    const observing = this.domWatched;
+    const pictures = this.picturesWatched;
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
           .evaluate(
-            ({ key, enabled, observing }) => {
-              if (observing) (window as any)[key]?.media(enabled);
-              else (window as any)[key]?.suspend();
+            ({ key, enabled, observing, pictures }) => {
+              (window as any)[key]?.display(observing);
+              (window as any)[key]?.media(enabled, pictures);
             },
-            { key: this.recorderKey, enabled, observing },
+            { key: this.recorderKey, enabled, observing, pictures },
           )
           .catch(() => {}),
       ),
@@ -920,12 +985,11 @@ export class BrowserProjection {
   }
 
   private snapshot(): Promise<void> {
-    if (this.closed || !this.contextID || !this.watchers.size)
+    if (this.closed || !this.contextID || !this.domWatched)
       return Promise.resolve();
     if (this.snapshotTask) return this.snapshotTask.then(() => this.snapshot());
     const contextID = this.contextID;
-    const current = () =>
-      this.watchers.size > 0 && this.contextID === contextID;
+    const current = () => this.domWatched && this.contextID === contextID;
     this.snapshotPending = true;
     const task = (async () => {
       try {
@@ -1094,6 +1158,7 @@ export class BrowserProjection {
             return true;
           },
           { action, key: this.recorderKey },
+          { userGesture: true },
         );
         if (!result) throw new CommandError('unsupported');
       } finally {
@@ -1193,31 +1258,35 @@ export class BrowserProjection {
       if (!element) throw new CommandError('stale_view');
       try {
         assertCurrent();
-        const selected = await element.evaluate((node, values) => {
-          const select = node as HTMLSelectElement;
-          if (
-            select.tagName !== 'SELECT' ||
-            !select.isConnected ||
-            select.disabled ||
-            (!select.multiple && values.length !== 1)
-          )
-            return false;
-          if (
-            values.some(
-              (value) =>
-                !Array.from(select.options).some(
-                  (option) => option.value === value && !option.disabled,
-                ),
+        const selected = await element.evaluate(
+          (node, values) => {
+            const select = node as HTMLSelectElement;
+            if (
+              select.tagName !== 'SELECT' ||
+              !select.isConnected ||
+              select.disabled ||
+              (!select.multiple && values.length !== 1)
             )
-          )
-            return false;
-          select.focus();
-          for (const option of select.options)
-            option.selected = values.includes(option.value);
-          select.dispatchEvent(new Event('input', { bubbles: true }));
-          select.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }, action.values);
+              return false;
+            if (
+              values.some(
+                (value) =>
+                  !Array.from(select.options).some(
+                    (option) => option.value === value && !option.disabled,
+                  ),
+              )
+            )
+              return false;
+            select.focus();
+            for (const option of select.options)
+              option.selected = values.includes(option.value);
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          },
+          action.values,
+          { userGesture: true },
+        );
         if (!selected) throw new CommandError('unsupported');
       } finally {
         await element.dispose();

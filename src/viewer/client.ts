@@ -66,6 +66,8 @@ export class DOMBrowserView {
   private media: MediaView;
   private epoch = '';
   private tab = '';
+  private tabTitles = new Map<string, string>();
+  private readiness = new Set<() => void>();
   private sequence = 0;
   private nextID = 0;
   private connected = false;
@@ -130,18 +132,22 @@ export class DOMBrowserView {
     container.append(this.pageError);
     this.media = new MediaView(
       options.mediaControls,
-      (id) => this.replayer?.getMirror().getNode(id),
-      (action) => this.dispatch(action),
-      (view, stream) => {
-        if (this.connected && this.epoch)
+      (id, target) =>
+        target === this.tab
+          ? this.replayer?.getMirror().getNode(id)
+          : undefined,
+      (action, target, stream) => this.dispatchMedia(action, target, stream),
+      (view, stream, target) => {
+        if (this.connected && target)
           this.connection.send({
             type: 'media_keyframe',
-            tab: this.tab,
+            tab: target,
             view,
             stream,
           });
       },
       options.mediaAssets,
+      (target) => this.tabTitles.get(target) ?? '',
     );
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
@@ -150,8 +156,7 @@ export class DOMBrowserView {
     if (connection.subscribeMedia)
       this.disposers.push(
         connection.subscribeMedia((frame) => {
-          if (this.connected && frame.header.target === this.tab)
-            this.media.frame(frame);
+          if (this.connected) this.media.frame(frame);
         }),
       );
     this.resize = new ResizeObserver(() => this.layout());
@@ -274,21 +279,58 @@ export class DOMBrowserView {
     );
   }
 
+  private async dispatchMedia(
+    action: Action,
+    target?: string,
+    stream?: string,
+  ): Promise<boolean> {
+    if (!target || target === this.tab) return this.dispatch(action);
+    if (!(await this.dispatch({ kind: 'tab_select', tab: target })))
+      return false;
+    const ready = await new Promise<boolean>((resolve) => {
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        this.readiness.delete(changed);
+        resolve(ok);
+      };
+      const changed = () => {
+        if (!this.connected || this.destroyed || this.tab !== target)
+          done(false);
+        else if (this.ready) done(true);
+      };
+      const timer = setTimeout(() => done(false), 10000);
+      this.readiness.add(changed);
+      changed();
+    });
+    if (!ready || action.kind !== 'media' || !stream) return ready;
+    const node = this.media.nodeID(target, stream);
+    return node !== undefined && this.dispatch({ ...action, node });
+  }
   private receive(message: ServerMessage): void {
+    try {
+      this.receiveMessage(message);
+    } finally {
+      for (const changed of this.readiness) changed();
+    }
+  }
+  private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
     if (message.type === 'media_end') {
       this.media.end(message.target, message.view);
       return;
     }
     if (message.type === 'media') {
-      if (message.epoch === this.epoch && this.connected)
+      if (this.connected)
         this.media.receive(message.packet, {
-          target: this.tab,
+          target: message.target,
           view: message.view,
         });
       return;
     }
     if (message.type === 'tabs') {
+      this.tabTitles = new Map(
+        message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
+      );
       if (message.state.active !== this.tab) {
         for (const [id, pending] of this.pending) {
           if (pending.chrome) continue;
@@ -300,11 +342,11 @@ export class DOMBrowserView {
         this.pageError.hidden = true;
         this.queuedWheel = undefined;
         this.clearFrame();
-        this.media.reset();
         this.presentation?.dispose();
         this.replayer?.destroy();
         this.replayer = undefined;
         this.tab = message.state.active;
+        this.media.select(this.tab);
         this.epoch = '';
         this.options.onStatus?.(this.connected ? 'refreshing' : 'connecting');
       }
@@ -343,7 +385,6 @@ export class DOMBrowserView {
         this.presentation?.dispose();
         this.ready = false;
         this.queuedWheel = undefined;
-        this.media.reset();
       }
       this.pageError.hidden = message.state.status !== 'error';
       if (message.state.status === 'error') {
@@ -407,6 +448,7 @@ export class DOMBrowserView {
           this.surface.inert = false;
           this.applyFocus();
           this.options.onStatus?.('live');
+          for (const changed of this.readiness) changed();
         },
         () =>
           this.options.onNotice?.(
@@ -1013,6 +1055,7 @@ export class DOMBrowserView {
     this.dragging = false;
     this.presentation?.dispose();
     this.options.onStatus?.('disconnected', this.disconnectReason);
+    for (const changed of this.readiness) changed();
     if (this.pending.size)
       this.options.onNotice?.(
         'Connection lost. Unconfirmed actions have not been repeated.',

@@ -28,6 +28,7 @@ type Capture = {
   negotiating: boolean;
   retries: number;
   stopWatching?: () => void;
+  pictureUpdate?: Promise<void>;
 };
 
 /** Captures only source media elements. RTP congestion control drops late frames;
@@ -41,6 +42,25 @@ export function observeMedia(
   const captures = new Map<CaptureElement, Capture>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let enabled = false;
+  let pictures = true;
+  const updatePictures = (capture: Capture) => {
+    if (capture.pictureUpdate || !capture.peer || capture.retired) return;
+    const active = pictures;
+    capture.pictureUpdate = (async () => {
+      for (const sender of capture.peer!.getSenders()) {
+        if (sender.track?.kind !== 'video') continue;
+        const parameters = sender.getParameters();
+        if (!parameters.encodings?.length) continue;
+        for (const encoding of parameters.encodings) encoding.active = active;
+        await sender.setParameters(parameters);
+      }
+    })()
+      .catch(() => {})
+      .finally(() => {
+        capture.pictureUpdate = undefined;
+        if (active !== pictures) updatePictures(capture);
+      });
+  };
   const sourceObject = (element: CaptureElement) => {
     const source = isCanvas(element) ? null : element.srcObject;
     // Chromium can return a new MediaStream wrapper for the same source.
@@ -140,6 +160,7 @@ export function observeMedia(
         if (
           capture.retired ||
           !enabled ||
+          !pictures ||
           encoding ||
           channel.readyState !== 'open' ||
           channel.bufferedAmount
@@ -167,7 +188,12 @@ export function observeMedia(
             };
           }
           const bytes = encoded.bytes;
-          if (capture.retired || !enabled || channel.readyState !== 'open')
+          if (
+            capture.retired ||
+            !enabled ||
+            !pictures ||
+            channel.readyState !== 'open'
+          )
             return;
           if (bytes.length > MAX_CANVAS_BYTES)
             throw new Error('Canvas frame exceeds the graphics limit.');
@@ -248,6 +274,7 @@ export function observeMedia(
           sendEncodings: [
             video
               ? {
+                  active: pictures,
                   maxBitrate: 1_500_000,
                   maxFramerate: 24,
                   scaleResolutionDownBy: Math.max(1, width / 1280),
@@ -306,7 +333,11 @@ export function observeMedia(
       ) {
         release(capture);
         captures.delete(element);
-        emit({ kind: 'removed', id: capture.id });
+        // A source replacement retains the element identity. Its fresh state
+        // atomically replaces the old stream; a false DOM removal would close
+        // an open media panel and transiently erase the source's controls.
+        if (!elements.has(element) || !element.isConnected || isCanvas(element))
+          emit({ kind: 'removed', id: capture.id });
       }
     }
     for (const element of elements) {
@@ -397,7 +428,11 @@ export function observeMedia(
         emit({ kind: 'removed', id: capture.id });
       }
     },
-    setEnabled(active: boolean) {
+    setEnabled(active: boolean, visible = true) {
+      if (pictures !== visible) {
+        pictures = visible;
+        for (const capture of captures.values()) updatePictures(capture);
+      }
       if (active === enabled) {
         if (active) scan(true);
         return;
