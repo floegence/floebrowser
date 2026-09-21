@@ -14,6 +14,7 @@ export class ElementDecoder {
   private pending = 0;
   private closed = false;
   private needKey = true;
+  private unavailable = new Set<'audio' | 'video'>();
   constructor(
     workerURL: string | URL,
     private output: (event: DecoderEvent) => void,
@@ -28,16 +29,23 @@ export class ElementDecoder {
         this.pending = Math.max(0, this.pending - 1);
       else {
         if (data.type === 'keyframe') this.needKey = true;
+        if (data.type === 'unavailable') this.unavailable.add(data.track);
         this.output(data);
       }
     };
     this.worker.onerror = () => {
       this.output({ type: 'unavailable', track: 'video' });
+      this.output({ type: 'unavailable', track: 'audio' });
       this.close();
     };
   }
   push(frame: MediaFrame): void {
-    if (this.closed || frame.header.track === 'canvas') return;
+    if (
+      this.closed ||
+      frame.header.track === 'canvas' ||
+      this.unavailable.has(frame.header.track)
+    )
+      return;
     const video = frame.header.track === 'video';
     if (this.pending >= 8) {
       if (video && !this.needKey) {

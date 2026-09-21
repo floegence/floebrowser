@@ -12,16 +12,39 @@ let needsKey = true;
 let painting = false;
 let latest: VideoFrame | undefined;
 let audioFrames = 0;
+const MAX_DECODE_FAILURES = 3;
+let videoFailures = 0;
+let audioFailures = 0;
+const unavailable = new Set<'video' | 'audio'>();
 const send = (event: DecoderEvent, transfer?: Transferable[]) =>
   scope.postMessage(event, transfer);
 
 function resetVideo() {
-  video?.close();
+  // WebCodecs closes itself before invoking the asynchronous error callback.
+  if (video && video.state !== 'closed') video.close();
   video = undefined;
   videoConfiguration = '';
   needsKey = true;
   latest?.close();
   latest = undefined;
+}
+
+function failed(track: 'video' | 'audio', error?: unknown) {
+  if (unavailable.has(track)) return;
+  if (track === 'video') resetVideo();
+  else {
+    if (audio && audio.state !== 'closed') audio.close();
+    audio = undefined;
+  }
+  const count = track === 'video' ? ++videoFailures : ++audioFailures;
+  const unsupported =
+    !error ||
+    (error instanceof DOMException && error.name === 'NotSupportedError');
+  if (unsupported || count >= MAX_DECODE_FAILURES) {
+    unavailable.add(track);
+    send({ type: 'unavailable', track });
+  } else if (track === 'video') send({ type: 'keyframe' });
+  // Opus packets are independently decodable; the next packet can recover audio.
 }
 
 function paint(frame: VideoFrame) {
@@ -57,7 +80,12 @@ function videoCodec(frame: MediaFrame): string {
 
 function decode(frame: MediaFrame) {
   const h = frame.header;
+  if (h.track === 'canvas' || unavailable.has(h.track)) return;
   if (h.track === 'video') {
+    if (typeof VideoDecoder !== 'function') {
+      failed('video');
+      return;
+    }
     if (video && video.decodeQueueSize >= 6) {
       resetVideo();
       send({ type: 'keyframe' });
@@ -71,13 +99,20 @@ function decode(frame: MediaFrame) {
         send({ type: 'keyframe' });
         return;
       }
-      video = new VideoDecoder({
-        output: paint,
-        error: () => {
-          resetVideo();
-          send({ type: 'keyframe' });
+      const decoder = new VideoDecoder({
+        output: (frame) => {
+          if (video !== decoder) {
+            frame.close();
+            return;
+          }
+          videoFailures = 0;
+          paint(frame);
+        },
+        error: (error) => {
+          if (video === decoder) failed('video', error);
         },
       });
+      video = decoder;
       video.configure({
         codec,
         codedWidth: h.width,
@@ -96,10 +131,16 @@ function decode(frame: MediaFrame) {
     );
     needsKey = false;
   } else if (h.track === 'audio') {
+    if (typeof AudioDecoder !== 'function') {
+      failed('audio');
+      return;
+    }
     if (!audio) {
-      audio = new AudioDecoder({
+      const decoder = new AudioDecoder({
         output: (data) => {
           try {
+            if (audio !== decoder) return;
+            audioFailures = 0;
             // Bound even the Worker -> main -> worklet path while the UI is busy.
             if (audioFrames + data.numberOfFrames > 12000) return;
             const channels = Array.from(
@@ -124,11 +165,11 @@ function decode(frame: MediaFrame) {
             data.close();
           }
         },
-        error: () => {
-          audio = undefined;
-          send({ type: 'unavailable', track: 'audio' });
+        error: (error) => {
+          if (audio === decoder) failed('audio', error);
         },
       });
+      audio = decoder;
       audio.configure({
         codec: 'opus',
         sampleRate: 48000,
@@ -151,9 +192,8 @@ scope.onmessage = ({ data }) => {
   if (data.type === 'frame') {
     try {
       decode(data.frame);
-    } catch {
-      send({ type: 'unavailable', track: data.frame.header.track });
-      if (data.frame.header.track === 'video') resetVideo();
+    } catch (error) {
+      failed(data.frame.header.track, error);
     } finally {
       send({ type: 'accepted' });
     }

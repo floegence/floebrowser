@@ -100,6 +100,15 @@ DOM removal retires media by stream identity, so reinserting an element establis
 
 The standalone loopback server creates a second private WebSocket for encoded media and consumer acknowledgements. Its token belongs to the admitted viewer and expires with that viewer; it does not transfer control authority. An SSH TCP tunnel carries both connections. Product integrations supply authenticated byte streams and HTTPS client origins supporting WebCodecs, Workers and AudioWorklet. DRM, origin restrictions, source autoplay policy, unsupported codecs and client platform support can still prevent playback; these cases are explicit rather than replaced with screen capture.
 
+Decoder failures are scoped to a single element track. A damaged video packet
+requests a fresh keyframe; a damaged Opus packet can recover from the next
+packet. Three consecutive decoding failures retire that track until a fresh
+media subscription, while a successfully decoded frame renews the recovery
+budget. Missing or unsupported platform codecs retire their track immediately
+and report unavailability once. Audio and video fail independently; a broken
+video decoder cannot stop healthy audio or flood the control carrier with
+keyframe requests.
+
 ## Source Canvas graphics
 
 Canvas 2D and WebGL/WebGL2 images reach the source-local collector through an element data channel, then use the authorized binary carrier. The source observes native render completion and retains only the current bitmap of up to eight visible canvases per document, downscaled to a maximum 1280-pixel edge. This bounded source-local cache is necessary because WebGL normally discards its drawing buffer after presentation. It is not a recording, is never persisted, and cannot send data without an authorized media observation. Native drawing methods keep their arguments, return values and exceptions; source context options and render scheduling are not changed. Website Canvas commands and JavaScript never execute in the viewer; rrweb Canvas recording and unsafe Canvas replay remain disabled.
