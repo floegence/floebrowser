@@ -313,6 +313,16 @@ chrome; component styles do not reset the embedding document. The host supplies
 constrained dimensions and the authenticated connection factory. The component
 never creates a new host environment connection itself.
 
+Hosts can supply `suggest(query, { tabs, signal })` to return authorized history,
+bookmarks and open tabs. Results contain `title`, an HTTP(S) `url`, optional `tab`
+and optional `bookmarked`; canceled or out-of-order responses cannot replace a
+newer query. Blur, composition, changed tab scope and disposal cancel outstanding
+requests. When supplied, this callback is the recommendation authority; the
+component does not maintain a second visit history. It must query the authorized
+host store, never send each keystroke to a third-party search service. `searchURL`
+customizes only explicitly submitted search terms. Neither callback permits
+active schemes or URLs containing credentials.
+
 For a host that already supplies browser chrome, use the lower-level projection:
 
 ```ts

@@ -21,6 +21,7 @@ export const englishMessages = {
   'address.open': 'Open website',
   'address.go': 'Go',
   'address.switchTab': 'Switch to tab',
+  'address.bookmark': 'Bookmark',
   'address.visited': 'Visited',
   'address.invalid': 'Enter a valid HTTP or HTTPS address, or a search term.',
   'control.take': 'Take control',

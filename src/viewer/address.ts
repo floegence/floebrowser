@@ -1,6 +1,11 @@
 import type { TabState } from '../shared/protocol.js';
 
-export type AddressSuggestion = { title: string; url: string; tab?: string };
+export type AddressSuggestion = {
+  title: string;
+  url: string;
+  tab?: string;
+  bookmarked?: boolean;
+};
 
 /** Suggestions remain in this window's memory; typing never contacts a website. */
 export class AddressSuggestions {
@@ -35,7 +40,11 @@ export class AddressSuggestions {
   }
 }
 
-export function addressURL(value: string): string | undefined {
+export function addressURL(
+  value: string,
+  searchURL: (query: string) => string = (query) =>
+    `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+): string | undefined {
   const text = value.trim();
   if (!text) return;
   const local =
@@ -44,11 +53,13 @@ export function addressURL(value: string): string | undefined {
     );
   const domain = /^[^\s/:]+\.[^\s/:]+(?=[:/?#]|$)/.test(text);
   const explicit = /^[a-z][a-z\d+.-]*:/i.test(text) && !local && !domain;
-  if (!explicit && !local && !domain)
-    return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
   try {
     const url = new URL(
-      explicit ? text : `${local ? 'http' : 'https'}://${text}`,
+      !explicit && !local && !domain
+        ? searchURL(text)
+        : explicit
+          ? text
+          : `${local ? 'http' : 'https'}://${text}`,
     );
     if (
       ['http:', 'https:'].includes(url.protocol) &&

@@ -57,6 +57,7 @@ const template = `    <main class="floe-browser browser-window">
             aria-controls="address-suggestions"
             aria-expanded="false"
            
+            maxlength="8192"
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"

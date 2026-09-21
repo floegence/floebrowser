@@ -22,6 +22,14 @@ export type BrowserOptions = Omit<
 > & {
   connect: (request: { takeover: boolean }) => ProjectionConnection;
   title?: string;
+  /** Host-owned authorized history/bookmarks/tabs; never contact a search engine
+   * on each keystroke. Omission uses this view's bounded in-memory visits. */
+  suggest?: (
+    query: string,
+    context: { tabs: TabState; signal: AbortSignal },
+  ) => readonly AddressSuggestion[] | Promise<readonly AddressSuggestion[]>;
+  /** Invoked only when a user submits a search, never while typing. */
+  searchURL?: (query: string) => string;
   /** The product performs user/AI takeover through its authorized host API. */
   onTakeControl?: (target: string) => void | Promise<void>;
   /** A unique ID namespace. The standalone document uses the empty prefix. */
@@ -59,6 +67,7 @@ export function mountBrowser(
   const suggestionList = element('address-suggestions');
   let matches: AddressSuggestion[] = [];
   let selectedSuggestion = -1;
+  let suggestionRequest: AbortController | undefined;
   let composing = false;
   let addressEditing = false;
   let view: DOMBrowserView | undefined;
@@ -240,6 +249,9 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
+    const scopeChanged =
+      JSON.stringify(state.tabs.map((tab) => [tab.id, tab.url])) !==
+      JSON.stringify(tabState.tabs.map((tab) => [tab.id, tab.url]));
     if (menuTab && !state.tabs.some((tab) => tab.id === menuTab))
       element('tab-menu').hidePopover();
     if (previous && previous !== state.active) {
@@ -318,9 +330,13 @@ export function mountBrowser(
       item.select.title =
         tab.url === 'about:blank' ? title : `${title} — ${tab.url}`;
       item.close.setAttribute('aria-label', text('tabs.closeNamed', { title }));
-      suggestions.remember(tab.url, title);
+      if (!options.suggest) suggestions.remember(tab.url, title);
     });
     tabOrder.sync(state.tabs.map((tab) => tab.id));
+    if (scopeChanged) {
+      hideSuggestions();
+      showSuggestions();
+    }
     updateChrome();
     if (previous !== state.active && !current) {
       setAddress();
@@ -372,7 +388,7 @@ export function mountBrowser(
             document.activeElement !== address)
         )
           address.value = state.url === 'about:blank' ? '' : state.url;
-        suggestions.remember(state.url, state.title);
+        if (!options.suggest) suggestions.remember(state.url, state.title);
         updateChrome();
       },
       onStatus: (status, reason) => {
@@ -437,16 +453,60 @@ export function mountBrowser(
     });
   }
   function hideSuggestions(): void {
+    suggestionRequest?.abort();
+    suggestionRequest = undefined;
+    matches = [];
     suggestionList.hidden = true;
     selectedSuggestion = -1;
     address.setAttribute('aria-expanded', 'false');
     address.removeAttribute('aria-activedescendant');
   }
   function showSuggestions(): void {
-    if (document.activeElement !== address || composing) return;
-    matches = suggestions.match(address.value, tabState);
-    selectedSuggestion = -1;
-    address.removeAttribute('aria-activedescendant');
+    if (destroyed || document.activeElement !== address || composing) return;
+    hideSuggestions();
+    const request = new AbortController();
+    suggestionRequest = request;
+    const query = address.value;
+    const render = (items: readonly AddressSuggestion[]) => {
+      if (
+        destroyed ||
+        request.signal.aborted ||
+        document.activeElement !== address ||
+        address.value !== query ||
+        composing
+      )
+        return;
+      matches = items
+        .filter(
+          (item) =>
+            /^https?:\/\//i.test(item.url) &&
+            !!addressURL(item.url) &&
+            (!item.tab || tabState.tabs.some((tab) => tab.id === item.tab)),
+        )
+        .slice(0, 6)
+        .map((item) => ({ ...item }));
+      renderSuggestions();
+    };
+    if (!options.suggest) {
+      render(suggestions.match(query, tabState));
+      return;
+    }
+    try {
+      const result = options.suggest(query, {
+        tabs: {
+          active: tabState.active,
+          tabs: tabState.tabs.map((tab) => ({ ...tab })),
+        },
+        signal: request.signal,
+      });
+      void Promise.resolve(result).then(render, () => {
+        if (!request.signal.aborted) hideSuggestions();
+      });
+    } catch {
+      hideSuggestions();
+    }
+  }
+  function renderSuggestions(): void {
     suggestionList.replaceChildren(
       ...matches.map((match, index) => {
         const row = document.createElement('div');
@@ -468,7 +528,7 @@ export function mountBrowser(
         kind.textContent =
           match.tab && match.tab !== tabState.active
             ? text('address.switchTab')
-            : text('address.visited');
+            : text(match.bookmarked ? 'address.bookmark' : 'address.visited');
         row.append(description, kind);
         row.addEventListener('mousedown', (event) => event.preventDefault());
         row.addEventListener('click', () => choose(match));
@@ -479,19 +539,21 @@ export function mountBrowser(
     address.setAttribute('aria-expanded', String(!!matches.length));
   }
   function focusAddress(): void {
+    const focused = document.activeElement === address;
     address.focus();
     address.select();
-    showSuggestions();
+    if (focused) showSuggestions();
   }
   function choose(match: AddressSuggestion): void {
     hideSuggestions();
     address.blur();
-    if (match.tab && tabState.tabs.some((tab) => tab.id === match.tab))
-      selectTab(match.tab);
-    else navigate(match.url);
+    if (match.tab) {
+      if (tabState.tabs.some((tab) => tab.id === match.tab))
+        selectTab(match.tab);
+    } else navigate(match.url);
   }
   function navigate(value: string): void {
-    const url = addressURL(value);
+    const url = addressURL(value, options.searchURL);
     if (!url) {
       notice(text('address.invalid'));
       return;
@@ -711,6 +773,7 @@ export function mountBrowser(
     destroyed = true;
     generation++;
     lifetime.abort();
+    suggestionRequest?.abort();
     clearTimeout(toastTimer);
     for (const pending of commands.splice(0)) pending.resolve(false);
     current?.resolve(false);

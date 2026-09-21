@@ -11,7 +11,7 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
       contents: `
         import { mountBrowser, englishMessages } from './src/viewer/index.js';
         import { PROTOCOL_VERSION } from './src/shared/protocol.js';
-        window.sent = [[], []]; window.closeCounts = [0, 0]; window.deliver=[]; window.takeovers=[];
+        window.sent = [[], []]; window.closeCounts = [0, 0]; window.deliver=[]; window.takeovers=[]; window.autocomplete=[];
         window.views = [0, 1].map(index => {
           let receiver;
           const connection = {
@@ -34,6 +34,7 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
           return mountBrowser(document.querySelector('#host-'+index), {
             connect: () => connection,
             messages: Object.fromEntries(Object.entries(englishMessages).map(([key, value]) => [key, index ? value : 'Localized ' + value])),
+            suggest: index ? undefined : (query,{signal}) => new Promise(resolve=>window.autocomplete.push({query,signal,resolve})),
             onTakeControl: target => {window.takeovers.push(target);throw new Error('Denied by host');},
             title: index ? 'Second browser' : '<img src=x onerror=alert(1)>'
           });
@@ -105,6 +106,47 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
       elements.map((e) => e.getAttribute('aria-controls')),
     );
   assert.equal(new Set(ids).size, 2);
+  await first.getByRole('combobox').fill('alpha');
+  await first.getByRole('combobox').fill('beta');
+  await page.evaluate(() => {
+    const requests = (window as any).autocomplete;
+    requests
+      .findLast((request: any) => request.query === 'beta')
+      .resolve([
+        {
+          title: 'Beta bookmark',
+          url: 'https://beta.invalid/',
+          bookmarked: true,
+        },
+        { title: 'Unsafe', url: 'javascript:alert(1)' },
+      ]);
+  });
+  await first
+    .getByRole('option')
+    .filter({ hasText: 'Beta bookmark' })
+    .waitFor();
+  assert.equal(await first.getByRole('option').count(), 1);
+  assert.equal(
+    await first.getByRole('option').textContent(),
+    'Beta bookmarkhttps://beta.invalid/Localized Bookmark',
+  );
+  assert.equal(
+    await page.evaluate(
+      () =>
+        (window as any).autocomplete.findLast((r: any) => r.query === 'alpha')
+          .signal.aborted,
+    ),
+    true,
+  );
+  await page.evaluate(() =>
+    (window as any).autocomplete
+      .findLast((r: any) => r.query === 'alpha')
+      .resolve([{ title: 'Stale alpha', url: 'https://alpha.invalid/' }]),
+  );
+  assert.equal(
+    await first.getByRole('option').textContent(),
+    'Beta bookmarkhttps://beta.invalid/Localized Bookmark',
+  );
   await page.locator('#outside').focus();
   await page.keyboard.press('Control+l');
   assert.equal(

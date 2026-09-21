@@ -43,3 +43,29 @@ test('suggestions deduplicate open tabs, match titles and bound in-memory visits
   assert.equal(history.match('109', tabs).length, 1);
   assert.equal(history.match('New tab', tabs).length, 0);
 });
+
+test('host search policy is used only for submitted search terms and cannot create active URLs', () => {
+  const queries: string[] = [];
+  const search = (query: string) => {
+    queries.push(query);
+    return `https://search.example/?q=${encodeURIComponent(query)}`;
+  };
+  assert.equal(
+    addressURL('example.com/path', search),
+    'https://example.com/path',
+  );
+  assert.deepEqual(queries, []);
+  assert.equal(
+    addressURL('canvas examples', search),
+    'https://search.example/?q=canvas%20examples',
+  );
+  assert.deepEqual(queries, ['canvas examples']);
+  assert.equal(
+    addressURL('search term', () => 'javascript:alert(1)'),
+    undefined,
+  );
+  assert.equal(
+    addressURL('search term', () => 'https://name:secret@example.com'),
+    undefined,
+  );
+});
