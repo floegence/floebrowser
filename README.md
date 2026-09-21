@@ -218,6 +218,16 @@ the query. Search text is not sent to a search service or indexed in a host-side
 copy of the document. Find is an input operation and requires the current control
 lease. Switching tabs cancels an unsent query and closes its find surface.
 
+Page zoom is per source target and survives viewer reconnection and tab switches.
+The toolbar and Control/Command with +, − and 0 control it. Zoom changes the source
+CSS viewport and raster density together, then the viewer scales that projection
+to the control window. Responsive layouts, resolution media queries, Canvas and
+input coordinates therefore use the same source geometry; no `style.zoom` or
+website stylesheet is changed. Source adapters implement both arguments of
+`setViewportSize(size, deviceScaleFactor)` as one viewport operation. Zoom ranges
+from 25% to 500%, within the existing 8192-pixel CSS viewport limit. New unsent
+zoom choices coalesce, while rejected or uncertain operations are not repeated.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:

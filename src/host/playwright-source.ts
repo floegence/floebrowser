@@ -32,7 +32,16 @@ export class PlaywrightSourceBrowser {
         id: id ?? target.targetInfo.targetId,
         transport: root,
         viewport: page.viewportSize() ?? undefined,
-        setViewport: (size) => page.setViewportSize(size),
+        setViewport: async (size, deviceScaleFactor) => {
+          // Keep Playwright's CSS viewport model aligned with the borrowed CDP
+          // owner; source raster density determines responsive assets/canvases.
+          await page.setViewportSize(size);
+          await root.send('Emulation.setDeviceMetricsOverride', {
+            ...size,
+            deviceScaleFactor,
+            mobile: false,
+          });
+        },
         activate: () => page.bringToFront(),
         close: () => closePage(page, root),
         createPage: async () => this.adopt(await page.context().newPage()),

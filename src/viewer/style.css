@@ -35,6 +35,30 @@
 .floe-browser button {
   -webkit-tap-highlight-color: transparent;
 }
+.floe-browser .zoom-toggle,
+.floe-browser .zoom-reset {
+  border: 0;
+  padding: 5px 8px;
+  min-width: 44px;
+  border-radius: 6px;
+  background: var(--floe-field);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.floe-browser .page-zoom {
+  position: absolute;
+  right: 12px;
+  top: 8px;
+  z-index: 35;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 5px 20px #17263e1a;
+  background: var(--floe-background);
+}
 .floe-browser .page-find {
   position: absolute;
   top: 8px;

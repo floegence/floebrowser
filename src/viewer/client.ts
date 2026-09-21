@@ -112,6 +112,7 @@ export class DOMBrowserView {
   private frameDisposers: Array<() => void> = [];
   private inputDocuments = new WeakMap<Document, Element | null>();
   private viewport = { width: 1280, height: 800 };
+  private zoom = 1;
   private viewportMode: ViewportMode = 'responsive';
   private viewportTimer?: ReturnType<typeof setTimeout>;
   private viewportPending?: Promise<boolean>;
@@ -439,6 +440,7 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'state') {
+      this.zoom = message.state.zoom;
       if (this.tab !== message.state.id) this.queuedWheel = undefined;
       this.tab = message.state.id;
       this.viewport = {
@@ -711,6 +713,7 @@ export class DOMBrowserView {
           'stop',
           'dialog_reply',
           'viewport',
+          'zoom',
           'tab_new',
           'tab_restore',
           'tab_pin',
@@ -832,7 +835,8 @@ export class DOMBrowserView {
       width < 1 ||
       height < 1 ||
       this.tabCommands ||
-      (width === this.viewport.width && height === this.viewport.height)
+      (Math.round(width / this.zoom) === this.viewport.width &&
+        Math.round(height / this.zoom) === this.viewport.height)
     )
       return;
     const request = `${this.tab}:${width}:${height}`;
@@ -864,11 +868,11 @@ export class DOMBrowserView {
     const scale =
       mode !== 'actual'
         ? Math.min(
-            1,
+            this.zoom,
             this.container.clientWidth / this.viewport.width,
             this.container.clientHeight / this.viewport.height,
           )
-        : 1;
+        : this.zoom;
     this.surface.style.width = `${this.viewport.width}px`;
     this.surface.style.height = `${this.viewport.height}px`;
     this.surface.style.transform = `scale(${scale})`;

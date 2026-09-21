@@ -20,7 +20,10 @@ export interface CDPSourceOptions {
    * Register this adapter before Runtime.enable, or supply the owner's cache. */
   contexts?: readonly SourceContext[];
   viewport?: SourceViewport;
-  setViewport?: (size: SourceViewport) => Promise<void>;
+  setViewport?: (
+    size: SourceViewport,
+    deviceScaleFactor: number,
+  ) => Promise<void>;
   activate?: () => Promise<void>;
   close?: () => Promise<void>;
   createPage?: () => Promise<SourcePage>;
@@ -238,12 +241,16 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   viewportSize(): SourceViewport | null {
     return this.size && { ...this.size };
   }
-  async setViewportSize(size: SourceViewport): Promise<void> {
-    if (this.options.setViewport) await this.options.setViewport(size);
+  async setViewportSize(
+    size: SourceViewport,
+    deviceScaleFactor = 1,
+  ): Promise<void> {
+    if (this.options.setViewport)
+      await this.options.setViewport(size, deviceScaleFactor);
     else
       await this.transport.send('Emulation.setDeviceMetricsOverride', {
         ...size,
-        deviceScaleFactor: 1,
+        deviceScaleFactor,
         mobile: false,
       });
     this.size = { ...size };

@@ -4,6 +4,7 @@ import { DOMBrowserView, type ViewOptions } from './client.js';
 import { browserText } from './messages.js';
 import { WebsiteDialog } from './dialog.js';
 import { PageFind } from './find.js';
+import { PageZoom } from './zoom.js';
 import { browserTemplate } from './template.js';
 import {
   AddressSuggestions,
@@ -88,6 +89,12 @@ export function mountBrowser(
   let canGoForward = false;
   let offerTakeover = false;
   let toastTimer: ReturnType<typeof setTimeout>;
+  const zoom = new PageZoom(
+    element<HTMLButtonElement>('zoom'),
+    stage,
+    text,
+    (action) => command(action),
+  );
   const find = new PageFind(
     stage,
     text,
@@ -170,6 +177,7 @@ export function mountBrowser(
       connected && controlling && ready && !pending && !dialogOpen;
     element<HTMLButtonElement>('find').disabled = !canFind;
     find.enable(canFind);
+    zoom.enable(connected && controlling && !pending && !dialogOpen);
     for (const [id, item] of rows) {
       item.row.classList.toggle('active', id === selected);
       item.select.setAttribute('aria-selected', String(id === selected));
@@ -429,6 +437,7 @@ export function mountBrowser(
       onState: (state) => {
         if (generation !== admittedGeneration || destroyed) return;
         options.onState?.(state);
+        zoom.state(state);
         if (state.status === 'error') element('toast').hidden = true;
         const changedTab = sourceID !== state.id;
         sourceID = state.id;
@@ -725,9 +734,15 @@ export function mountBrowser(
     if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey)
       return false;
     const key = event.key.toLowerCase();
-    if (!['l', 'r', 't', 'w', 'tab', 'f'].includes(key)) return false;
+    if (!['l', 'r', 't', 'w', 'tab', 'f', '+', '=', '-', '0'].includes(key))
+      return false;
     if (phase === 'up') return true;
     event.preventDefault();
+    if (['+', '=', '-', '0'].includes(key)) {
+      if (key === '0') zoom.change(1);
+      else zoom.step(key === '-' ? -1 : 1);
+      return true;
+    }
     if (event.repeat) return true;
     if (key === 'l') focusAddress();
     else if (key === 'f') find.open();
@@ -841,6 +856,7 @@ export function mountBrowser(
     tabOrder.destroy();
     dialog.destroy();
     find.destroy();
+    zoom.destroy();
     view?.destroy();
     root.remove();
   }

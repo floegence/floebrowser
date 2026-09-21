@@ -4,6 +4,8 @@ import type { MediaFrame } from './media-wire.js';
 
 export const PROTOCOL_VERSION = 17;
 export const MAX_VIEWPORT_DIMENSION = 8192;
+export const MIN_PAGE_ZOOM = 0.25;
+export const MAX_PAGE_ZOOM = 5;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
 export const MAX_PENDING_COMMANDS = 64;
@@ -25,6 +27,12 @@ const point = z
   .strict();
 const modifiers = z.number().int().min(0).max(15);
 export const actionSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('zoom'),
+      factor: z.number().min(MIN_PAGE_ZOOM).max(MAX_PAGE_ZOOM),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal('viewport'),
@@ -166,6 +174,7 @@ export type BrowserState = {
   title: string;
   status: 'loading' | 'ready' | 'error' | 'closed';
   loading: boolean;
+  zoom: number;
   width: number;
   height: number;
   canGoBack: boolean;

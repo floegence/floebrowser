@@ -50,7 +50,11 @@ export interface SourcePage {
   url(): string;
   title(): Promise<string>;
   viewportSize(): SourceViewport | null;
-  setViewportSize(size: SourceViewport): Promise<void>;
+  /** CSS viewport and source raster density. Zoom never changes website CSS. */
+  setViewportSize(
+    size: SourceViewport,
+    deviceScaleFactor?: number,
+  ): Promise<void>;
   navigate(url: string): Promise<void>;
   traverse(direction: -1 | 1): Promise<void>;
   reload(): Promise<void>;

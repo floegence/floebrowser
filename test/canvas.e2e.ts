@@ -213,6 +213,16 @@ for (const context of ['2d', 'webgl2'] as const)
       await viewer
         .getByRole('button', { name: 'New tab', exact: true })
         .click();
+      // The viewer never creates WebRTC peers. Wait for the new source tab,
+      // rather than a vacuously true empty peer list, before switching back.
+      await viewer.waitForFunction(
+        () =>
+          document.querySelector('[role="tab"][aria-selected="true"]')
+            ?.textContent === 'New tab' &&
+          document
+            .querySelector('#viewport')
+            ?.parentElement?.classList.contains('switching') === false,
+      );
       await viewer
         .waitForFunction(() =>
           (window as any).peers.every(
@@ -236,6 +246,14 @@ for (const context of ['2d', 'webgl2'] as const)
       await viewer
         .getByRole('tab', { name: 'Canvas fixture', exact: true })
         .click();
+      await viewer.waitForFunction(() => {
+        const viewport = document.querySelector('#viewport');
+        return (
+          viewport?.parentElement?.classList.contains('switching') === false &&
+          document.querySelector('[role="tab"][aria-selected="true"]')
+            ?.textContent === 'Canvas fixture'
+        );
+      });
       await pixels();
       await viewer.reload();
       await pixels();

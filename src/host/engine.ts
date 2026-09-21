@@ -11,6 +11,7 @@ import {
   focusSchema,
   MAX_MESSAGE_BYTES,
   MAX_PENDING_COMMANDS,
+  MAX_VIEWPORT_DIMENSION,
   UNSUPPORTED_SELECTOR,
   PROTOCOL_VERSION,
   type Action,
@@ -130,6 +131,7 @@ export class BrowserProjection {
   private heldKeys = new Map<string, Record<string, unknown>>();
   private heldButtons = new Set<string>();
   private state: BrowserState;
+  private displayViewport: { width: number; height: number };
   private mediaNodes = new Map<number, string>();
   private mediaView = randomBytes(18).toString('base64url');
   private captures = new Map<
@@ -159,12 +161,14 @@ export class BrowserProjection {
     );
     this.projection = new DOMProjection(this.resources);
     const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+    this.displayViewport = { ...viewport };
     this.state = {
       id: this.id,
       url: page.url(),
       title: '',
       status: 'loading',
       loading: false,
+      zoom: 1,
       canGoBack: false,
       canGoForward: false,
       ...viewport,
@@ -1212,13 +1216,31 @@ export class BrowserProjection {
       await dialog.source.respond(action.accept, action.text);
       return;
     }
-    if (action.kind === 'viewport') {
-      const size = { width: action.width, height: action.height };
+    if (action.kind === 'viewport' || action.kind === 'zoom') {
+      const display =
+        action.kind === 'viewport'
+          ? { width: action.width, height: action.height }
+          : this.displayViewport;
+      const zoom = action.kind === 'zoom' ? action.factor : this.state.zoom;
+      const size = {
+        width: Math.max(1, Math.round(display.width / zoom)),
+        height: Math.max(1, Math.round(display.height / zoom)),
+      };
+      if (
+        size.width > MAX_VIEWPORT_DIMENSION ||
+        size.height > MAX_VIEWPORT_DIMENSION
+      )
+        throw new CommandError('unsupported');
       const current = this.page.viewportSize();
-      if (current?.width !== size.width || current.height !== size.height) {
-        await this.page.setViewportSize(size);
-        this.updateState(size);
+      if (
+        current?.width !== size.width ||
+        current.height !== size.height ||
+        this.state.zoom !== zoom
+      ) {
+        await this.page.setViewportSize(size, zoom);
+        this.updateState({ ...size, zoom });
       }
+      this.displayViewport = display;
       return;
     }
     if (action.kind === 'media') {
@@ -1604,6 +1626,7 @@ function documentIndependent(action: Action): boolean {
     'reload',
     'stop',
     'viewport',
+    'zoom',
     'dialog_reply',
   ].includes(action.kind);
 }
