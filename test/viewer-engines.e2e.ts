@@ -3,7 +3,11 @@ import test, { type TestContext } from 'node:test';
 import { chromium, firefox, webkit, type BrowserType } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
-async function fixture(t: TestContext, client: BrowserType) {
+async function fixture(
+  t: TestContext,
+  client: BrowserType,
+  codec: 'vp8' | 'h264' = 'vp8',
+) {
   const sourceBrowser = await chromium.launch({
     channel: 'chromium',
     chromiumSandbox: true,
@@ -20,6 +24,27 @@ async function fixture(t: TestContext, client: BrowserType) {
   const context = await sourceBrowser.newContext();
   const source = await context.newPage();
   source.setDefaultTimeout(6000);
+  // Exercise both supported source-local RTP encodings, not just Chromium's
+  // default preference. This fixture never changes the production negotiation.
+  await source.addInitScript((codec) => {
+    const Native = RTCPeerConnection;
+    (window as any).RTCPeerConnection = class extends Native {
+      addTransceiver(
+        track: MediaStreamTrack | string,
+        options?: RTCRtpTransceiverInit,
+      ) {
+        const transceiver = super.addTransceiver(track, options);
+        if ((typeof track === 'string' ? track : track.kind) === 'video') {
+          transceiver.setCodecPreferences(
+            RTCRtpSender.getCapabilities('video')!.codecs.filter(
+              (c) => c.mimeType.toLowerCase() === `video/${codec}`,
+            ),
+          );
+        }
+        return transceiver;
+      }
+    };
+  }, codec);
   service = await createProjectionServer(source, { authorize: () => true });
   viewerBrowser = await client.launch();
   await source.goto(
@@ -29,9 +54,9 @@ async function fixture(t: TestContext, client: BrowserType) {
   const graphic=document.querySelector('#graphic');
   graphic.getContext('2d').fillStyle='lime';graphic.getContext('2d').fillRect(0,0,120,60);
   async function start(){
-    const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;
+    const canvas=window.fixtureCanvas=document.createElement('canvas');canvas.width=160;canvas.height=90;
     const ctx=canvas.getContext('2d');
-    setInterval(()=>{ctx.fillStyle='lime';ctx.fillRect(0,0,160,90);ctx.fillStyle='black';ctx.fillText(String(Date.now()),80,80)},40);
+    setInterval(()=>{ctx.fillStyle='lime';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='black';ctx.fillText(String(Date.now()),80,80)},40);
     const audio=new AudioContext();await audio.resume();
     const oscillator=audio.createOscillator(),gain=audio.createGain(),destination=audio.createMediaStreamDestination();gain.gain.value=0;oscillator.connect(gain).connect(destination);oscillator.start();
     const stream=canvas.captureStream(25);stream.addTrack(destination.stream.getAudioTracks()[0]);
@@ -54,6 +79,7 @@ async function fixture(t: TestContext, client: BrowserType) {
   });
   await viewer.addInitScript(() => {
     (window as any).decoded = {};
+    (window as any).codecs = {};
     const Native = Worker;
     (window as any).Worker = class extends Native {
       constructor(...args: ConstructorParameters<typeof Worker>) {
@@ -63,10 +89,23 @@ async function fixture(t: TestContext, client: BrowserType) {
             ((window as any).decoded[data.type] ?? 0) + 1;
         });
       }
+      postMessage(data: any, transfer: Transferable[]) {
+        if (data.type === 'frame')
+          (window as any).codecs[data.frame.header.codec] = true;
+        super.postMessage(data, transfer);
+      }
     };
     (window as any).RTCPeerConnection = class {
       constructor() {
         throw new Error('Client RTC is forbidden');
+      }
+    };
+    const NativeSocket = WebSocket;
+    (window as any).WebSocket = class extends NativeSocket {
+      constructor(...args: ConstructorParameters<typeof WebSocket>) {
+        super(...args);
+        if (String(args[0]).includes('/stream'))
+          (window as any).controlSocket = this;
       }
     };
   });
@@ -107,86 +146,135 @@ for (const client of [chromium, firefox, webkit]) {
     },
   );
 
-  test(
-    `the ${client.name()} viewer renders inert DOM and decodes host-carried element video, audio and Canvas`,
-    {
-      timeout: 30000,
-    },
-    async (t) => {
-      const { source, viewer, content, external, failures } = await fixture(
-        t,
-        client,
-      );
-      assert.equal(
-        await content
-          .locator('#layout')
-          .evaluate((node) => getComputedStyle(node).backgroundColor),
-        'rgb(30, 80, 130)',
-      );
-      assert.equal(
-        await content
-          .locator('body')
-          .evaluate(() => (window as any).sourceRuns),
-        undefined,
-        'Website scripts never execute in the client',
-      );
-      await viewer.setViewportSize({ width: 1100, height: 780 });
-      await source.waitForFunction(() => innerWidth === 1100);
-      await viewer.waitForFunction(
-        () =>
-          Math.abs(
-            (document
+  for (const codec of ['vp8', 'h264'] as const)
+    test(
+      `the ${client.name()} viewer renders inert DOM and decodes host-carried ${codec} video, audio and Canvas`,
+      {
+        timeout: 30000,
+      },
+      async (t) => {
+        const { source, viewer, content, external, failures } = await fixture(
+          t,
+          client,
+          codec,
+        );
+        assert.equal(
+          await content
+            .locator('#layout')
+            .evaluate((node) => getComputedStyle(node).backgroundColor),
+          'rgb(30, 80, 130)',
+        );
+        assert.equal(
+          await content
+            .locator('body')
+            .evaluate(() => (window as any).sourceRuns),
+          undefined,
+          'Website scripts never execute in the client',
+        );
+        await viewer.setViewportSize({ width: 1100, height: 780 });
+        await source.waitForFunction(() => innerWidth === 1100);
+        await viewer.waitForFunction(
+          () =>
+            Math.abs(
+              (document
+                .querySelector<HTMLIFrameElement>('#viewport iframe')
+                ?.contentDocument?.querySelector('#layout')
+                ?.getBoundingClientRect().width ?? 0) - 1060,
+            ) < 2,
+        );
+        await viewer.waitForFunction(() =>
+          document
+            .querySelector<HTMLIFrameElement>('#viewport iframe')
+            ?.contentDocument?.querySelector<HTMLImageElement>('#graphic')
+            ?.src.startsWith('blob:'),
+        );
+        // A source user or AI may start playback while this client only watches.
+        await source
+          .getByRole('button', { name: 'Start media', exact: true })
+          .click();
+        try {
+          await viewer.waitForFunction(() => {
+            const v = document
               .querySelector<HTMLIFrameElement>('#viewport iframe')
-              ?.contentDocument?.querySelector('#layout')
-              ?.getBoundingClientRect().width ?? 0) - 1060,
-          ) < 2,
-      );
-      await viewer.waitForFunction(() =>
-        document
-          .querySelector<HTMLIFrameElement>('#viewport iframe')
-          ?.contentDocument?.querySelector<HTMLImageElement>('#graphic')
-          ?.src.startsWith('blob:'),
-      );
-      // A source user or AI may start playback while this client only watches.
-      await source
-        .getByRole('button', { name: 'Start media', exact: true })
-        .click();
-      try {
+              ?.contentDocument?.querySelector('video');
+            return (
+              !!v &&
+              v.videoWidth === 160 &&
+              v.readyState >= 2 &&
+              (window as any).decoded.audio > 3 &&
+              (window as any).decoded.video > 3
+            );
+          });
+        } catch (error) {
+          t.diagnostic(
+            JSON.stringify({
+              failures,
+              decoded: await viewer.evaluate(() => (window as any).decoded),
+            }),
+          );
+          throw error;
+        }
+        assert.equal(
+          await content.locator('video').evaluate((video: HTMLVideoElement) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 1;
+            const ctx = canvas.getContext('2d')!;
+            ctx.drawImage(video, 0, 0, 1, 1);
+            const pixel = ctx.getImageData(0, 0, 1, 1).data;
+            return pixel[1]! > 180 && pixel[0]! < 80 && pixel[2]! < 80;
+          }),
+          true,
+          'The client presents decoded source pixels',
+        );
+        assert.deepEqual(
+          await viewer.evaluate(() =>
+            Object.keys((window as any).codecs).sort(),
+          ),
+          [codec, 'opus'].sort(),
+        );
+        await source.evaluate(() => {
+          const canvas = (window as any).fixtureCanvas as HTMLCanvasElement;
+          canvas.width = 240;
+          canvas.height = 136;
+        });
         await viewer.waitForFunction(() => {
-          const v = document
+          const video = document
             .querySelector<HTMLIFrameElement>('#viewport iframe')
             ?.contentDocument?.querySelector('video');
-          return (
-            !!v &&
-            v.videoWidth === 160 &&
-            v.readyState >= 2 &&
-            (window as any).decoded.audio > 3 &&
-            (window as any).decoded.video > 3
+          return video?.videoWidth === 240 && video.videoHeight === 136;
+        });
+        await source.locator('video').evaluate((video) => video.pause());
+        await viewer.evaluate(() => {
+          (window as any).priorProjection =
+            document.querySelector('#viewport iframe');
+          (window as any).controlSocket.send(
+            JSON.stringify({ type: 'resync' }),
           );
         });
-      } catch (error) {
-        t.diagnostic(
-          JSON.stringify({
-            failures,
-            decoded: await viewer.evaluate(() => (window as any).decoded),
-          }),
+        await viewer.waitForFunction(
+          () =>
+            document.querySelector('#viewport iframe') !==
+            (window as any).priorProjection,
         );
-        throw error;
-      }
-      assert.equal(
-        await content.locator('video').evaluate((video: HTMLVideoElement) => {
-          const canvas = document.createElement('canvas');
-          canvas.width = canvas.height = 1;
-          const ctx = canvas.getContext('2d')!;
-          ctx.drawImage(video, 0, 0, 1, 1);
-          const pixel = ctx.getImageData(0, 0, 1, 1).data;
-          return pixel[1]! > 180 && pixel[0]! < 80 && pixel[2]! < 80;
-        }),
-        true,
-        'The client presents decoded source pixels',
-      );
-      assert.deepEqual(external, []);
-      assert.deepEqual(failures, []);
-    },
-  );
+        await viewer.waitForFunction(() => {
+          const video = document
+            .querySelector<HTMLIFrameElement>('#viewport iframe')
+            ?.contentDocument?.querySelector('video');
+          return video?.videoWidth === 240 && video.readyState >= 2;
+        });
+        assert.equal(
+          await content.locator('video').evaluate((video: HTMLVideoElement) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 1;
+            const ctx = canvas.getContext('2d')!;
+            ctx.drawImage(video, 0, 0, 1, 1);
+            return ctx.getImageData(0, 0, 1, 1).data[1]! > 180;
+          }),
+          true,
+          'A DOM checkpoint keeps the decoded paused picture after a source size change',
+        );
+        assert.deepEqual(external, []);
+        assert.deepEqual(failures, []);
+      },
+    );
 }

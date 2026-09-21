@@ -540,8 +540,11 @@ This matrix qualifies the listed Chromium fixtures, not every CSS or browser fea
 
 `test/viewer-engines.e2e.ts` additionally exercises the Playwright Chromium 153,
 Firefox 155 and WebKit 26.6 development engines. All three receive inert DOM,
-responsive layout, Canvas images and actual VP8/Opus decoding without client
-website requests or client WebRTC. Decoded pictures use automatic Canvas stream
+responsive layout, Canvas images and actual VP8/H.264 video with Opus decoding
+without client website requests or client WebRTC. Both video codecs are forced
+at the fixture's source RTP negotiation and verified at the receiving worker;
+source resolution changes and paused pictures survive DOM checkpoints in each
+engine. Decoded pictures use automatic Canvas stream
 capture; Firefox does not expose `CanvasCaptureMediaStreamTrack.requestFrame()`.
 Chromium and Firefox also forward source clicks and text. WebKit suppresses even
 host-installed event listeners inside scriptless sandbox frames, so its input
