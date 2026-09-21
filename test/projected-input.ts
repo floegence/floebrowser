@@ -1,15 +1,14 @@
 import type { Locator } from 'playwright';
 
 /** Locate inert content, then deliver a real pointer event to the trusted host
- * surface at that content's position. Check actionability on the actual input
- * surface so dialogs and other browser chrome cannot swallow a forced click. */
+ * surface at that content's position. Frame-node actionability deliberately
+ * fails because projected nodes never receive local browser input. */
 export async function clickProjected(
   locator: Locator,
   options: Parameters<Locator['click']>[0] = {},
 ): Promise<void> {
   await ready(locator);
-  const { surface, position } = await destination(locator, options.position);
-  await surface.click({ ...options, position });
+  await locator.click({ ...options, force: true });
 }
 
 export async function hoverProjected(
@@ -17,25 +16,7 @@ export async function hoverProjected(
   options: Parameters<Locator['hover']>[0] = {},
 ): Promise<void> {
   await ready(locator);
-  const { surface, position } = await destination(locator, options.position);
-  await surface.hover({ ...options, position });
-}
-
-async function destination(locator: Locator, at?: { x: number; y: number }) {
-  const surface = locator.page().locator('.floe-input-surface');
-  const [target, origin] = await Promise.all([
-    locator.boundingBox(),
-    surface.boundingBox(),
-  ]);
-  if (!target || !origin)
-    throw new Error('Projected input geometry unavailable');
-  return {
-    surface,
-    position: {
-      x: target.x - origin.x + (at?.x ?? target.width / 2),
-      y: target.y - origin.y + (at?.y ?? target.height / 2),
-    },
-  };
+  await locator.hover({ ...options, force: true });
 }
 
 async function ready(locator: Locator): Promise<void> {
