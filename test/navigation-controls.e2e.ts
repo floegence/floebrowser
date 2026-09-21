@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer, type ServerResponse } from 'node:http';
@@ -70,10 +71,11 @@ test(
       performance.now() - started < 1500,
       'Stopping does not wait for the navigation timeout',
     );
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Current page', exact: true })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Current page', exact: true }),
+    );
     await page.getByRole('button', { name: 'Clicked', exact: true }).waitFor();
     assert.equal(page.url(), url);
     assert.equal(

@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium, type Page } from 'playwright';
@@ -99,7 +100,9 @@ for (const allowed of [true, false])
           size,
         );
       }
-      await viewer.frameLocator('#viewport iframe').locator('#count').click();
+      await clickProjected(
+        viewer.frameLocator('#viewport iframe').locator('#count'),
+      );
       await source.waitForFunction(
         () => document.querySelector('#count-value')?.textContent === '1',
         null,
@@ -177,7 +180,9 @@ test(
         ),
       1,
     );
-    await viewer.frameLocator('#viewport iframe').locator('#edge').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#edge'),
+    );
     await source.waitForFunction(() => (window as any).clicks === 1);
     for (const width of [850, 1000, 1250, 1500, 1100])
       await viewer.setViewportSize({ width, height: 780 });

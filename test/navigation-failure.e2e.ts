@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir } from 'node:fs/promises';
@@ -138,10 +139,9 @@ for (const failure of [
         link.textContent = 'Open a failing source tab';
         document.body.prepend(link);
       }, url);
-      await viewer
-        .frameLocator('#viewport iframe')
-        .locator('#failed-popup')
-        .click();
+      await clickProjected(
+        viewer.frameLocator('#viewport iframe').locator('#failed-popup'),
+      );
     } else {
       await viewer.locator('#new-tab').click();
       await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
@@ -174,7 +174,9 @@ for (const failure of [
       'The old website must not remain on an error tab',
     );
     await viewer.locator(`[data-tab="${original}"]`).click();
-    await viewer.frameLocator('#viewport iframe').locator('#count').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#count'),
+    );
     await source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );

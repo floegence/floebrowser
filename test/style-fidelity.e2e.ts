@@ -1,3 +1,4 @@
+import { clickProjected, hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -537,7 +538,9 @@ test('root and nested scrollbar gutters preserve source content geometry and scr
       );
   };
   await eventually(verify);
-  await root.locator('#content').hover({ position: { x: 100, y: 100 } });
+  await hoverProjected(root.locator('#content'), {
+    position: { x: 100, y: 100 },
+  });
   await viewer.mouse.wheel(0, 160);
   await source.waitForFunction(
     () => document.querySelector('#scroll')!.scrollTop > 0,
@@ -646,7 +649,7 @@ test('live entry animations reveal content and preserve explicitly paused source
     ),
   );
   assert.equal(await root.locator('#paused').evaluate(opacity), '0');
-  await root.locator('#action').click();
+  await clickProjected(root.locator('#action'));
   await source.waitForFunction(
     () => document.querySelector('#action')?.textContent === 'Confirmed',
   );
@@ -705,11 +708,13 @@ test('canvas placeholders preserve editor overlays, hidden surfaces, native sizi
       ),
     );
   }
-  await root.locator('#target').click();
+  await clickProjected(root.locator('#target'));
   await source.waitForFunction(
     () => document.querySelector('#target')?.textContent === 'Confirmed',
   );
-  await root.locator('#editor').hover({ position: { x: 470, y: 80 } });
+  await hoverProjected(root.locator('#editor'), {
+    position: { x: 470, y: 80 },
+  });
   await viewer.mouse.wheel(0, 300);
   await source.waitForFunction(
     () => document.querySelector('#editor')!.scrollTop >= 300,
@@ -788,7 +793,7 @@ test('cross-origin frame animations and intrinsic canvas sizes survive projectio
       await sourceChild.locator('#surface').evaluate(size),
     );
   });
-  await child.getByRole('button', { name: 'Resize surface' }).click();
+  await clickProjected(child.getByRole('button', { name: 'Resize surface' }));
   await eventually(async () => {
     assert.equal(
       await sourceChild.locator('#surface').getAttribute('height'),
@@ -825,9 +830,10 @@ test('animated nested document scrolling does not enter a stale-view refresh loo
         .evaluate((n) => getComputedStyle(n).transform),
     ),
   );
-  await root
-    .locator('#article')
-    .hover({ position: { x: 100, y: 50 }, timeout: 3000 });
+  await hoverProjected(root.locator('#article'), {
+    position: { x: 100, y: 50 },
+    timeout: 3000,
+  });
   for (let i = 0; i < 12; i++) {
     await viewer.mouse.wheel(0, 80);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -848,7 +854,7 @@ test('animated nested document scrolling does not enter a stale-view refresh loo
   await source.waitForFunction(
     () => document.querySelector('#article')!.scrollTop === 0,
   );
-  await root.locator('#switch').click();
+  await clickProjected(root.locator('#switch'));
   await source.waitForFunction(() => location.hash === '#next');
   assert.deepEqual(
     failures,

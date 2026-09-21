@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile, mkdir } from 'node:fs/promises';
@@ -51,7 +52,7 @@ test(
     let saves = 0;
     viewer.on('download', () => saves++);
     await viewer.goto(service.url);
-    await viewer.frameLocator('#viewport iframe').locator('a').click();
+    await clickProjected(viewer.frameLocator('#viewport iframe').locator('a'));
     await viewer
       .getByRole('button', { name: 'Downloads', exact: true })
       .click();
@@ -189,7 +190,7 @@ test(
     viewer.setDefaultTimeout(3000);
     await viewer.goto(service.url);
     const native = source.waitForEvent('download');
-    await viewer.frameLocator('#viewport iframe').locator('a').click();
+    await clickProjected(viewer.frameLocator('#viewport iframe').locator('a'));
     const file = await native;
     await viewer
       .getByRole('button', { name: 'Downloads', exact: true })

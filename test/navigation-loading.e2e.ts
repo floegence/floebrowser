@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -52,7 +53,9 @@ for (const mode of ['parser', 'deferred'])
       }, `${site.url}/popup`);
       await viewer.goto(service.url);
       const original = service.session.currentState.active;
-      await viewer.frameLocator('#viewport iframe').locator('#popup').click();
+      await clickProjected(
+        viewer.frameLocator('#viewport iframe').locator('#popup'),
+      );
       await viewer.waitForFunction(
         () => document.querySelectorAll('[role="tab"]').length === 2,
       );
@@ -193,10 +196,9 @@ for (const redirect of ['redirect', 'client-redirect'])
       await viewer.locator('#address:not([readonly])').waitFor();
       await viewer.locator('#address').fill(`${site.url}/${redirect}`);
       await viewer.locator('#address').press('Enter');
-      await viewer
-        .frameLocator('#viewport iframe')
-        .locator('#next-click')
-        .click();
+      await clickProjected(
+        viewer.frameLocator('#viewport iframe').locator('#next-click'),
+      );
       const destination = context
         .pages()
         .find((page) => page !== source && page !== viewer);

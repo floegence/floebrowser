@@ -1,3 +1,4 @@
+import { clickProjected, hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { chromium, firefox, webkit, type BrowserType } from 'playwright';
@@ -47,9 +48,7 @@ async function fixture(
   }, codec);
   service = await createProjectionServer(source, { authorize: () => true });
   viewerBrowser = await client.launch();
-  await source.goto(
-    'data:text/html,' +
-      encodeURIComponent(`<!doctype html><title>Cross-engine source</title><style>body{margin:20px;font:16px sans-serif}#layout{width:calc(100vw - 40px);height:40px;background:rgb(30,80,130)}</style><div id=layout></div><input aria-label="Source input"><button id=count onclick="this.textContent=String(++window.count)">Count</button><button id=play onclick="start()">Start media</button><video width=160 height=90 muted></video><canvas id=graphic width=120 height=60></canvas><output></output><script>
+  const sourceHTML = `<!doctype html><title>Cross-engine source</title><style>body{margin:20px;font:16px sans-serif}#layout{width:calc(100vw - 40px);height:40px;background:rgb(30,80,130)}</style><div id=layout></div><input aria-label="Source input"><button id=count onclick="this.textContent=String(++window.count)">Count</button><button id=play onclick="start()">Start media</button><video width=160 height=90 muted></video><canvas id=graphic width=120 height=60></canvas><output></output><script>
   window.count=0;window.sourceRuns=1;
   const graphic=document.querySelector('#graphic');
   graphic.getContext('2d').fillStyle='lime';graphic.getContext('2d').fillRect(0,0,120,60);
@@ -62,8 +61,14 @@ async function fixture(
     const stream=canvas.captureStream(25);stream.addTrack(destination.stream.getAudioTracks()[0]);
     const video=document.querySelector('video');video.srcObject=stream;await video.play();
   }
-  </script>`),
+  </script>`;
+  await context.route('http://engine.test/', (route) =>
+    route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: sourceHTML,
+    }),
   );
+  await source.goto('http://engine.test/');
   const viewer = await viewerBrowser.newPage({
     viewport: { width: 1000, height: 750 },
   });
@@ -121,25 +126,95 @@ for (const client of [chromium, firefox, webkit]) {
     `the ${client.name()} viewer forwards input through a scriptless projection`,
     {
       timeout: 20000,
-      todo:
-        client === webkit
-          ? 'WebKit suppresses host event listeners in scriptless sandbox frames; interactive Safari qualification is blocked'
-          : false,
     },
     async (t) => {
       const { source, viewer, content, external, failures } = await fixture(
         t,
         client,
       );
-      await content.getByRole('button', { name: 'Count', exact: true }).click();
+      await clickProjected(
+        content.getByRole('button', { name: 'Count', exact: true }),
+      );
       await source.waitForFunction(() => (window as any).count === 1);
-      await content
-        .getByRole('textbox', { name: 'Source input', exact: true })
-        .click();
+      await clickProjected(
+        content.getByRole('textbox', { name: 'Source input', exact: true }),
+      );
       await viewer.keyboard.insertText('Source-only text 世界');
       await source.waitForFunction(
         () =>
           document.querySelector('input')!.value === 'Source-only text 世界',
+      );
+      await source.waitForFunction(
+        () => document.querySelector('input')!.selectionStart === 19,
+      );
+      await viewer.keyboard.press('ArrowLeft');
+      await viewer.keyboard.press('ArrowLeft');
+      await viewer.keyboard.type('X');
+      await source.waitForFunction(
+        () =>
+          document.querySelector('input')!.value === 'Source-only text X世界',
+      );
+      await viewer.waitForFunction(() => {
+        const input =
+          document.querySelector<HTMLInputElement>('.floe-input-proxy');
+        return (
+          input?.value === 'Source-only text X世界' &&
+          input.selectionStart === 18 &&
+          document.activeElement === input
+        );
+      });
+      await source.evaluate(() => {
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', 'Source choice');
+        select.innerHTML =
+          '<option value="first">First</option><optgroup label="Other"><option value="second">Second</option></optgroup>';
+        document.body.append(select);
+        const shadow = document.createElement('div');
+        shadow.id = 'shadow';
+        shadow.attachShadow({ mode: 'open' }).innerHTML =
+          '<button onclick="window.count++">Shadow action</button>';
+        document.body.append(shadow);
+        const child = document.createElement('iframe');
+        child.srcdoc =
+          '<!doctype html><button onclick="this.textContent=event.isTrusted ? \'Trusted child action\' : \'Untrusted\'">Child action</button><input aria-label="Child input"><div style="height:3000px">Child scrolling</div>';
+        child.style.cssText =
+          'width:400px;height:180px;border:8px solid black;transform:scale(.85);transform-origin:top left';
+        document.body.append(child);
+      });
+      await hoverProjected(content.getByRole('combobox'));
+      await viewer.locator('select.floe-input-proxy').selectOption('second');
+      await source.waitForFunction(
+        () => document.querySelector('select')!.value === 'second',
+      );
+      await clickProjected(content.locator('#shadow button'));
+      await source.waitForFunction(() => (window as any).count === 2);
+      const child = content.frameLocator('iframe');
+
+      await clickProjected(
+        child.getByRole('button', { name: 'Child action', exact: true }),
+      );
+      await child
+        .getByRole('button', { name: 'Trusted child action', exact: true })
+        .waitFor();
+      await clickProjected(
+        child.getByRole('textbox', { name: 'Child input', exact: true }),
+      );
+      await viewer.keyboard.insertText('Nested 世界');
+      await source
+        .frames()
+        .find((frame) => frame.parentFrame())!
+        .waitForFunction(
+          () => document.querySelector('input')!.value === 'Nested 世界',
+        );
+      await hoverProjected(child.locator('input'));
+      await viewer.mouse.wheel(0, 240);
+      await source
+        .frames()
+        .find((frame) => frame.parentFrame())!
+        .waitForFunction(() => scrollY > 0);
+      assert.equal(
+        await viewer.locator('#viewport iframe').getAttribute('sandbox'),
+        'allow-same-origin',
       );
       assert.deepEqual(external, []);
       assert.deepEqual(failures, []);
@@ -236,6 +311,11 @@ for (const client of [chromium, firefox, webkit]) {
           const canvas = (window as any).fixtureCanvas as HTMLCanvasElement;
           canvas.width = 240;
           canvas.height = 136;
+          // Resizing clears a canvas. Fill the new frame in the same task so a
+          // source capture cannot legitimately pause on that transparent reset.
+          const context = canvas.getContext('2d')!;
+          context.fillStyle = 'lime';
+          context.fillRect(0, 0, canvas.width, canvas.height);
         });
         await viewer.waitForFunction(() => {
           const video = document

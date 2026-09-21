@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -52,6 +52,7 @@ const point = z
   .strict();
 const modifiers = z.number().int().min(0).max(15);
 export const actionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('release_input') }).strict(),
   z
     .object({
       kind: z.literal('download_cancel'),

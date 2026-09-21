@@ -1,5 +1,6 @@
 import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
+import { observeInteraction, sourceInteraction } from './interaction-source.js';
 import { record } from '@rrweb/record';
 import {
   EventType,
@@ -83,6 +84,7 @@ export function installRecorder(binding: string, key: string): void {
     if (node.type === 2) {
       const element = record.mirror.getNode(node.id) as Element | null;
       if (element?.nodeType === 1) {
+        node.floeInteraction = sourceInteraction(element);
         if (element.localName === 'canvas')
           node.floeCanvas ??= canvasSize(element as HTMLCanvasElement);
         if (element.namespaceURI === 'http://www.w3.org/1998/Math/MathML')
@@ -319,6 +321,11 @@ export function installRecorder(binding: string, key: string): void {
           media.add(observer);
           observer.setEnabled(mediaActive, picturesActive);
           const changed = () => queueMicrotask(() => emitFocus(doc));
+          const stopInteraction = observeInteraction(doc, (element, state) => {
+            const id = record.mirror.getId(element);
+            if (id > 0)
+              record.addCustomEvent('floebrowser:interaction', { id, state });
+          });
           const loaded = (event: Event) => {
             const link = event.target as HTMLLinkElement;
             if (link?.nodeName === 'LINK') {
@@ -351,6 +358,7 @@ export function installRecorder(binding: string, key: string): void {
             )
               Object.defineProperty(prototype, 'disabled', disabled);
             observer.close();
+            stopInteraction();
             canvasObserver.close();
             media.delete(observer);
             for (const event of ['focusin', 'selectionchange', 'input'])

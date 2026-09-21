@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -43,7 +44,7 @@ test(
     await viewer
       .getByRole('button', { name: 'Page zoom', exact: true })
       .click();
-    await button.click();
+    await clickProjected(button);
     await source
       .getByRole('button', { name: 'Clicked at source', exact: true })
       .waitFor();

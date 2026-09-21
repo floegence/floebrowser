@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -185,7 +186,7 @@ test(
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
     const content = viewer.frameLocator('#viewport iframe');
-    await content.locator('#upload').click();
+    await clickProjected(content.locator('#upload'));
     const dialog = viewer.getByRole('dialog', {
       name: 'Choose files for this website',
       exact: true,
@@ -208,10 +209,11 @@ test(
     );
     await dialog.waitFor({ state: 'hidden' });
     assert.equal(await source.evaluate(() => (window as any).changes), 1);
-    await content
-      .frameLocator('iframe')
-      .getByRole('button', { name: 'Attach file' })
-      .click();
+    await clickProjected(
+      content
+        .frameLocator('iframe')
+        .getByRole('button', { name: 'Attach file' }),
+    );
     await dialog.waitFor();
     assert.ok((await dialog.textContent())?.includes('child.test'));
     await dialog.locator('input[type=file]').setInputFiles({

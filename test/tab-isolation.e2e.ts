@@ -1,3 +1,4 @@
+import { clickProjected, hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -204,7 +205,7 @@ test(
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     const count = s.viewer.frameLocator('#viewport iframe').locator('#count');
     await count.waitFor({ timeout: 1200 });
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
       null,
@@ -238,7 +239,9 @@ test(
     void cdp
       .send('Runtime.evaluate', { expression: 'for (;;) {}' })
       .catch(() => {});
-    await s.viewer.frameLocator('#viewport iframe').locator('#second').hover();
+    await hoverProjected(
+      s.viewer.frameLocator('#viewport iframe').locator('#second'),
+    );
     await new Promise((resolve) => setTimeout(resolve, 2100));
     assert.equal(
       await s.viewer.locator('#connection-overlay').isVisible(),
@@ -250,7 +253,7 @@ test(
     const count = s.viewer.frameLocator('#viewport iframe').locator('#count');
     await count.waitFor({ timeout: 1200 });
     assert.equal(await s.viewer.locator('#toast').isVisible(), false);
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
       null,
@@ -281,7 +284,7 @@ test(
       await s.viewer.locator('#connection-overlay').isVisible(),
       false,
     );
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '2',
       null,
@@ -321,12 +324,12 @@ test(
     const count = s.viewer.frameLocator('#viewport iframe').locator('#count');
     await count.waitFor();
     blocked = true;
-    await count.click();
+    await clickProjected(count);
     await waiting;
     blocked = false;
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     await count.waitFor({ timeout: 1200 });
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );
@@ -334,7 +337,7 @@ test(
     await s.viewer.locator(`[data-tab="${s.second}"]`).click();
     await count.waitFor({ timeout: 1200 });
     assert.equal(await s.other.locator('#count-value').textContent(), '0');
-    await count.click();
+    await clickProjected(count);
     await s.other.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );
@@ -393,7 +396,7 @@ test(
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     const count = s.viewer.frameLocator('#viewport iframe').locator('#count');
     await count.waitFor({ timeout: 1200 });
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );
@@ -445,7 +448,7 @@ test(
       () => document.querySelectorAll('[role=tab]').length === 3,
     );
     assert.equal(s.service.session.currentState.active, s.original);
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );
@@ -484,7 +487,7 @@ test(
       .waitFor();
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     await count.waitFor({ timeout: 1200 });
-    await count.click();
+    await clickProjected(count);
     await s.source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '1',
     );

@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium, type Page } from 'playwright';
@@ -100,7 +101,9 @@ async function drag(viewer: Page, from: string, to: string) {
 test('dragging foreground and background tabs preserves the live document and session order survives reload', async (t) => {
   const s = await setup(t);
   const { viewer, ids, service, original } = s;
-  await viewer.frameLocator('#viewport iframe').locator('#count').click();
+  await clickProjected(
+    viewer.frameLocator('#viewport iframe').locator('#count'),
+  );
   await s.source.waitForFunction(
     () => document.querySelector('#count-value')?.textContent === '1',
   );
@@ -151,7 +154,9 @@ test('dragging foreground and background tabs preserves the live document and se
     false,
   );
   assert.equal(service.session.currentState.active, original);
-  await viewer.frameLocator('#viewport iframe').locator('#count').click();
+  await clickProjected(
+    viewer.frameLocator('#viewport iframe').locator('#count'),
+  );
   await s.source.waitForFunction(
     () => document.querySelector('#count-value')?.textContent === '2',
   );

@@ -1,3 +1,4 @@
+import { clickProjected, hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir } from 'node:fs/promises';
@@ -125,7 +126,7 @@ test('projects authenticated DOM, images, CSS and fonts without client website r
 
 test('clicks, text input, IME, selects and form submission execute in the source browser', async (t) => {
   const { page, viewer, projected, site, externalRequests } = await setup(t);
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '1',
     'Source receives the click',
@@ -137,7 +138,7 @@ test('clicks, text input, IME, selects and form submission execute in the source
     async () => (await projected.locator('#count-value').textContent()) === '1',
     'Click result reaches the projection',
   );
-  await projected.locator('#name').click();
+  await clickProjected(projected.locator('#name'));
   await viewer.keyboard.type('Floe ');
   await viewer.keyboard.insertText('你好');
   await eventually(
@@ -155,12 +156,13 @@ test('clicks, text input, IME, selects and form submission execute in the source
     async () => (await page.locator('#name').inputValue()) === 'Floe 你好世界',
     'IME commits exactly once in the source',
   );
-  await projected.locator('#region').selectOption('ap');
+  await hoverProjected(projected.locator('#region'));
+  await viewer.locator('select.floe-input-proxy').selectOption('ap');
   await eventually(
     async () => (await page.locator('#region').inputValue()) === 'ap',
     'Selection reaches the source',
   );
-  await projected.locator('#save').click();
+  await clickProjected(projected.locator('#save'));
   await eventually(
     async () => site.submissions.length === 1,
     'Form submits once from the source',
@@ -182,9 +184,9 @@ test('clicks, text input, IME, selects and form submission execute in the source
 
 test('streams live mutations and scrolls the source without local navigation', async (t) => {
   const { page, viewer, projected, externalRequests } = await setup(t);
-  await projected.locator('#mutate').click();
+  await clickProjected(projected.locator('#mutate'));
   await projected.locator('#live-update').waitFor();
-  await projected.locator('h1').hover();
+  await hoverProjected(projected.locator('h1'));
   await viewer.mouse.wheel(0, 480);
   await eventually(
     () => page.evaluate(() => scrollY > 100),
@@ -194,7 +196,7 @@ test('streams live mutations and scrolls the source without local navigation', a
     () => projected.locator('body').evaluate(() => scrollY > 100),
     'Source scroll is projected',
   );
-  await projected.locator('#next').click();
+  await clickProjected(projected.locator('#next'));
   await eventually(
     async () => page.url().endsWith('/second'),
     'Link navigation happens at the source',
@@ -206,7 +208,7 @@ test('streams live mutations and scrolls the source without local navigation', a
 
 test('reconnects with a fresh document and never repeats prior input', async (t) => {
   const { page, viewer, projected } = await setup(t);
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '1',
     'Initial action executes',
@@ -220,7 +222,7 @@ test('reconnects with a fresh document and never repeats prior input', async (t)
     async () => (await projected.locator('#count-value').textContent()) === '2',
     'Reconnect reflects current source state',
   );
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '3',
     'Fresh controller executes one new click',
@@ -229,7 +231,7 @@ test('reconnects with a fresh document and never repeats prior input', async (t)
 
 test('explains an occupied browser and transfers control only on an explicit request', async (t) => {
   const { page, viewer, projected, client, service } = await setup(t);
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '1',
     'The first viewer controls the source',
@@ -253,7 +255,7 @@ test('explains an occupied browser and transfers control only on an explicit req
     'Control moved to another window',
   );
   const secondProjection = second.frameLocator('#viewport iframe');
-  await secondProjection.locator('#count').click();
+  await clickProjected(secondProjection.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '2',
     'The new viewer controls the same source without replaying previous clicks',
@@ -270,7 +272,7 @@ test('explains an occupied browser and transfers control only on an explicit req
     .getByRole('button', { name: 'Use in this window', exact: true })
     .click();
   await viewer.locator('#status.live').waitFor();
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '3',
     'The original window can recover after the other window closes',
@@ -280,12 +282,12 @@ test('explains an occupied browser and transfers control only on an explicit req
 test('handles scaled input, double clicks, text selection, and multiline editing', async (t) => {
   const { page, viewer, projected } = await setup(t);
   await viewer.setViewportSize({ width: 900, height: 720 });
-  await projected.locator('#count').dblclick();
+  await clickProjected(projected.locator('#count'), { clickCount: 2 });
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '2',
     'Both clicks execute at the scaled source target',
   );
-  await projected.locator('h1').click({ clickCount: 3 });
+  await clickProjected(projected.locator('h1'), { clickCount: 3 });
   await eventually(
     () =>
       projected
@@ -301,7 +303,7 @@ test('handles scaled input, double clicks, text selection, and multiline editing
     document.body.append(editor);
   });
   await projected.locator('#multiline').waitFor();
-  await projected.locator('#multiline').click();
+  await clickProjected(projected.locator('#multiline'));
   await viewer.keyboard.type('line one');
   await viewer.keyboard.press('Enter');
   await viewer.keyboard.type('line two');
@@ -323,7 +325,7 @@ test('follows source redirects and manages new tabs, popups, switching and closi
     link.style.cssText = 'position:fixed;top:10px;left:500px;z-index:100';
     document.body.append(link);
   });
-  await projected.locator('#popup-link').click();
+  await clickProjected(projected.locator('#popup-link'));
   await projected.locator('#second').waitFor();
   await viewer.getByRole('tab', { name: 'Second page', exact: true }).waitFor();
   assert.equal(page.context().pages().length, 2);
@@ -334,7 +336,7 @@ test('follows source redirects and manages new tabs, popups, switching and closi
   await viewer
     .getByRole('tab', { name: 'Workspace · Juniper', exact: true })
     .click();
-  await projected.locator('#count').click();
+  await clickProjected(projected.locator('#count'));
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '1',
     'Switching returns control to the original page',
@@ -384,7 +386,7 @@ test('follows source redirects and manages new tabs, popups, switching and closi
     button.onclick = () => window.open('/second', '_blank');
     document.body.append(button);
   });
-  await projected.locator('#script-popup').click();
+  await clickProjected(projected.locator('#script-popup'));
   await projected.locator('#second').waitFor();
   await viewer
     .getByRole('button', { name: 'Close Second page', exact: true })
@@ -417,7 +419,7 @@ test('projects the source-selected responsive image after an image load', async 
 
 test('keeps the source caret visible and supports insertion in the middle of text', async (t) => {
   const { page, viewer, projected } = await setup(t);
-  await projected.locator('#name').click();
+  await clickProjected(projected.locator('#name'));
   await viewer.keyboard.type('abcd');
   await eventually(
     async () => (await page.locator('#name').inputValue()) === 'abcd',
@@ -427,13 +429,13 @@ test('keeps the source caret visible and supports insertion in the middle of tex
   await viewer.keyboard.press('ArrowLeft');
   await eventually(
     () =>
-      projected
-        .locator('#name')
+      viewer
+        .locator('.floe-input-proxy')
         .evaluate(
           (input: HTMLInputElement) =>
             document.activeElement === input && input.selectionStart === 2,
         ),
-    'The projected field retains native focus and the source caret',
+    'The host input control retains native focus and the source caret',
   );
   await viewer.keyboard.type('X');
   await eventually(
@@ -442,8 +444,8 @@ test('keeps the source caret visible and supports insertion in the middle of tex
   );
   await eventually(
     () =>
-      projected
-        .locator('#name')
+      viewer
+        .locator('.floe-input-proxy')
         .evaluate(
           (input: HTMLInputElement) =>
             input.value === 'abXcd' && input.selectionStart === 3,

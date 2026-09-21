@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -235,7 +236,7 @@ test(
     await viewer.locator(`[data-tab="${original}"]`).click();
     await viewer.locator('#status.live').waitFor();
     const healthy = viewer.frameLocator('#viewport iframe').locator('#healthy');
-    await healthy.click();
+    await clickProjected(healthy);
     await source.waitForFunction(
       () => document.querySelector('#healthy')?.textContent === 'Clicked',
     );
@@ -405,7 +406,7 @@ test(
       await card.evaluate((node) => getComputedStyle(node).backgroundColor),
       'rgb(10, 80, 160)',
     );
-    await card.click();
+    await clickProjected(card);
     await source.waitForFunction(
       () => document.querySelector('#card')?.textContent === 'Clicked',
     );

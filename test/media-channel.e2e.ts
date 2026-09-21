@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -71,10 +72,11 @@ test(
       null,
       { timeout: 2000 },
     );
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Click', exact: true })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Click', exact: true }),
+    );
     await source
       .getByRole('button', { name: 'Clicked', exact: true })
       .waitFor();

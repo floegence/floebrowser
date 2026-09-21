@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -40,7 +41,7 @@ test(
       name: 'Website dialog',
       exact: true,
     });
-    await content.locator('#confirm').click();
+    await clickProjected(content.locator('#confirm'));
     await dialog.waitFor();
     assert.ok((await dialog.textContent())?.includes(new URL(site.url).host));
     assert.ok((await dialog.textContent())?.includes('Confirm this change?'));
@@ -48,12 +49,12 @@ test(
     await source.waitForFunction(
       () => document.querySelector('output')?.textContent === 'false',
     );
-    await content.locator('#confirm').click();
+    await clickProjected(content.locator('#confirm'));
     await dialog.getByRole('button', { name: 'OK', exact: true }).click();
     await source.waitForFunction(
       () => document.querySelector('output')?.textContent === 'true',
     );
-    await content.locator('#prompt').click();
+    await clickProjected(content.locator('#prompt'));
     const input = dialog.getByRole('textbox', {
       name: 'Response',
       exact: true,
@@ -67,7 +68,7 @@ test(
       () =>
         document.querySelector('output')?.textContent === 'ユーザーの入力 🪷',
     );
-    await content.locator('#alert').click();
+    await clickProjected(content.locator('#alert'));
     await dialog.waitFor();
     assert.ok(
       (await dialog.textContent())?.includes(
@@ -80,7 +81,7 @@ test(
       () => document.querySelector('output')?.textContent === 'dismissed',
     );
     assert.equal(await viewer.locator('#toast').isVisible(), false);
-    await content.locator('#confirm').click();
+    await clickProjected(content.locator('#confirm'));
     await dialog.waitFor();
     await viewer.locator('#new-tab').click();
     await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
@@ -117,10 +118,11 @@ test(
     const viewer = await browser.newPage();
     viewer.setDefaultTimeout(3000);
     await viewer.goto(service.url);
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Confirm', exact: true })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Confirm', exact: true }),
+    );
     const dialog = viewer.getByRole('dialog', {
       name: 'Website dialog',
       exact: true,
@@ -159,7 +161,9 @@ test(
     const viewer = await browser.newPage();
     viewer.setDefaultTimeout(3000);
     await viewer.goto(service.url);
-    await viewer.frameLocator('#viewport iframe').locator('#count').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#count'),
+    );
     await source.evaluate(() => {
       window.onbeforeunload = () => true;
     });
@@ -175,7 +179,9 @@ test(
     await viewer.locator('#status.live').waitFor();
     assert.equal(source.url(), url);
     assert.equal(await viewer.locator('#toast').isVisible(), false);
-    await viewer.frameLocator('#viewport iframe').locator('#count').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#count'),
+    );
     await source.waitForFunction(
       () => document.querySelector('#count-value')?.textContent === '2',
     );

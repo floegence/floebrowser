@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -105,13 +106,13 @@ for (const isolated of [false, true])
           await root.locator('#remote').getAttribute('sandbox'),
           'allow-same-origin',
         );
-        await frame
-          .getByRole('button', { name: 'Frame action', exact: true })
-          .click();
+        await clickProjected(
+          frame.getByRole('button', { name: 'Frame action', exact: true }),
+        );
         await frame
           .getByRole('button', { name: 'Trusted frame click' })
           .waitFor();
-        await frame.locator('#entry').click();
+        await clickProjected(frame.locator('#entry'));
         await viewer.keyboard.type('source text');
         await page
           .frameLocator('#remote')
@@ -126,11 +127,13 @@ for (const isolated of [false, true])
           'source text',
         );
         const nested = frame.frameLocator('iframe');
-        await nested.getByRole('button', { name: 'Nested action' }).click();
+        await clickProjected(
+          nested.getByRole('button', { name: 'Nested action' }),
+        );
         await nested
           .getByRole('button', { name: 'Trusted nested click' })
           .waitFor();
-        await nested.locator('#nested').click();
+        await clickProjected(nested.locator('#nested'));
         await viewer.keyboard.insertText('Nested text');
         await page
           .frameLocator('#remote')
@@ -149,18 +152,24 @@ for (const isolated of [false, true])
             .inputValue(),
           'Nested text',
         );
-        await frame.getByText('Frame next page', { exact: true }).click();
+        await clickProjected(
+          frame.getByText('Frame next page', { exact: true }),
+        );
         await frame
           .getByRole('heading', { name: 'Frame navigation complete' })
           .waitFor();
         await root
           .getByRole('heading', { name: 'Main document stays here' })
           .waitFor();
-        await frame.getByText('Return same-origin', { exact: true }).click();
+        await clickProjected(
+          frame.getByText('Return same-origin', { exact: true }),
+        );
         await frame
           .getByRole('heading', { name: 'Same-origin return' })
           .waitFor();
-        await frame.getByText('Cross-site again', { exact: true }).click();
+        await clickProjected(
+          frame.getByText('Cross-site again', { exact: true }),
+        );
         await frame
           .getByRole('heading', { name: 'Cross-site content' })
           .waitFor();
@@ -168,9 +177,9 @@ for (const isolated of [false, true])
         await frame
           .getByRole('heading', { name: 'Cross-site content' })
           .waitFor();
-        await frame
-          .getByRole('button', { name: 'Frame action', exact: true })
-          .click();
+        await clickProjected(
+          frame.getByRole('button', { name: 'Frame action', exact: true }),
+        );
         await frame
           .getByRole('button', { name: 'Trusted frame click' })
           .waitFor();

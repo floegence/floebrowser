@@ -202,3 +202,17 @@ test('file replies contain bounded opaque identities and cannot nominate source 
       valid,
     );
 });
+
+test('held-input release cannot carry a new key, pointer effect or extra authority', () => {
+  assert.equal(
+    clientMessageSchema.safeParse(command({ kind: 'release_input' })).success,
+    true,
+  );
+  for (const extra of [{ key: 'Enter' }, { node: 1 }, { allTargets: true }])
+    assert.equal(
+      clientMessageSchema.safeParse(
+        command({ kind: 'release_input', ...extra }),
+      ).success,
+      false,
+    );
+});

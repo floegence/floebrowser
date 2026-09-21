@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -200,10 +201,10 @@ test(
     });
     for (const dy of [30, -30]) {
       await viewer.evaluate(async (dy) => {
-        const doc =
-          document.querySelector<HTMLIFrameElement>(
-            '#viewport iframe',
-          )!.contentDocument!;
+        const surface = document.querySelector<HTMLElement>(
+          '.floe-input-surface',
+        )!;
+        const origin = surface.getBoundingClientRect();
         for (let n = 0; n < 80; n++) {
           const state = (window as any).latency;
           state.total += dy;
@@ -212,12 +213,12 @@ test(
             target: state.total,
             direction: Math.sign(dy),
           });
-          doc.elementFromPoint(300, 300)!.dispatchEvent(
+          surface.dispatchEvent(
             new WheelEvent('wheel', {
               bubbles: true,
               cancelable: true,
-              clientX: 300,
-              clientY: 300,
+              clientX: origin.left + 300,
+              clientY: origin.top + 300,
               deltaY: dy,
             }),
           );
@@ -234,7 +235,9 @@ test(
         { timeout: 4000 },
       );
     }
-    await viewer.frameLocator('#viewport iframe').locator('#click').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#click'),
+    );
     await source.getByText('Clicked', { exact: true }).waitFor();
     const result = await viewer.evaluate(() => {
       const state = (window as any).latency;
@@ -351,17 +354,17 @@ for (const ending of [
         );
       });
       await viewer.evaluate(() => {
-        const doc =
-          document.querySelector<HTMLIFrameElement>(
-            '#viewport iframe',
-          )!.contentDocument!;
+        const surface = document.querySelector<HTMLElement>(
+          '.floe-input-surface',
+        )!;
+        const origin = surface.getBoundingClientRect();
         for (let n = 0; n < 80; n++)
-          doc.elementFromPoint(300, 300)!.dispatchEvent(
+          surface.dispatchEvent(
             new WheelEvent('wheel', {
               bubbles: true,
               cancelable: true,
-              clientX: 300,
-              clientY: 300,
+              clientX: origin.left + 300,
+              clientY: origin.top + 300,
               deltaY: 20,
             }),
           );
@@ -379,22 +382,24 @@ for (const ending of [
       let next: Page | undefined;
       if (ending === 'barriers') {
         await viewer.evaluate(() => {
-          const doc =
-            document.querySelector<HTMLIFrameElement>(
-              '#viewport iframe',
-            )!.contentDocument!;
+          const surface = document.querySelector<HTMLElement>(
+            '.floe-input-surface',
+          )!;
+          const origin = surface.getBoundingClientRect();
           for (let n = 0; n < 10; n++)
-            doc.elementFromPoint(300, 300)!.dispatchEvent(
+            surface.dispatchEvent(
               new WheelEvent('wheel', {
                 bubbles: true,
                 cancelable: true,
-                clientX: 300,
-                clientY: 300,
+                clientX: origin.left + 300,
+                clientY: origin.top + 300,
                 deltaY: -20,
               }),
             );
         });
-        await viewer.frameLocator('#viewport iframe').locator('#click').click();
+        await clickProjected(
+          viewer.frameLocator('#viewport iframe').locator('#click'),
+        );
       } else if (ending === 'navigation') {
         await source.goto(
           'data:text/html,' +
@@ -442,11 +447,12 @@ for (const ending of [
             return s.commands.length === s.acks.length;
           });
         // An input barrier gives any wrongly retained wheel a chance to dispatch.
-        await (next ?? viewer)
-          .frameLocator('#viewport iframe')
-          .locator('p')
-          .first()
-          .click();
+        await clickProjected(
+          (next ?? viewer)
+            .frameLocator('#viewport iframe')
+            .locator('p')
+            .first(),
+        );
         assert.equal(
           await viewer.evaluate(
             () =>

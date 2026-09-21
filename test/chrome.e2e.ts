@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -128,7 +129,9 @@ test('tab clicks respond immediately, coalesce unsent selections and preserve so
       !document.querySelector<HTMLElement>('#viewport')!.inert,
     original,
   );
-  await viewer.frameLocator('#viewport iframe').locator('#count').click();
+  await clickProjected(
+    viewer.frameLocator('#viewport iframe').locator('#count'),
+  );
   await source.waitForFunction(
     () => document.querySelector('#count-value')?.textContent === '1',
   );
@@ -340,7 +343,9 @@ test('tab menus pin pages and source-frame shortcuts close and restore a fresh t
   assert.equal(service.session.currentState.tabs[0]!.pinned, true);
   const width = await viewer.locator('.tab.pinned').boundingBox();
   assert.ok(width!.width < 60);
-  await viewer.frameLocator('#viewport iframe').locator('#count').focus();
+  await clickProjected(
+    viewer.frameLocator('#viewport iframe').locator('#count'),
+  );
   await viewer.keyboard.press('Control+w');
   await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
   await viewer.locator('#status.live').waitFor();
@@ -367,7 +372,9 @@ test('tab menus pin pages and source-frame shortcuts close and restore a fresh t
     '0',
     'Restoration does not replay old input',
   );
-  await viewer.frameLocator('#viewport iframe').locator('#count').focus();
+  await clickProjected(
+    viewer.frameLocator('#viewport iframe').locator('#count'),
+  );
   await viewer.keyboard.press('Control+t');
   await viewer.waitForFunction(
     () => document.querySelectorAll('[role=tab]').length === 3,

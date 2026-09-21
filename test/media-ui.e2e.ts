@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -46,10 +47,11 @@ test(
     );
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Page action' })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Page action' }),
+    );
     await source.getByText('Clicked', { exact: true }).waitFor();
     assert.equal(
       states.filter((s) => s.status === 'unavailable').length,
@@ -120,10 +122,11 @@ test(
     await controls.click();
     await panel.waitFor({ state: 'hidden' });
     await controls.click();
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Clicked', exact: true })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Clicked', exact: true }),
+    );
     await panel.waitFor({ state: 'hidden' });
     await source
       .locator('video')
@@ -206,7 +209,7 @@ test(
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
     const frame = viewer.frameLocator('#viewport iframe');
-    await frame.locator('#play').click();
+    await clickProjected(frame.locator('#play'));
     await viewer.waitForFunction(() => {
       const video = document
         .querySelector<HTMLIFrameElement>('#viewport iframe')
@@ -224,7 +227,7 @@ test(
       false,
     );
     await viewer.evaluate(() => ((window as any).allowTestAudio = true));
-    await frame.locator('#play').click();
+    await clickProjected(frame.locator('#play'));
     await viewer.waitForFunction(
       () =>
         (window as any).audioContexts.some(
@@ -240,8 +243,8 @@ test(
     await viewer
       .getByRole('button', { name: 'Mute audio', exact: true })
       .click();
-    await frame.locator('#pause').click();
-    await frame.locator('#play').click();
+    await clickProjected(frame.locator('#pause'));
+    await clickProjected(frame.locator('#play'));
     assert.equal(
       await viewer.evaluate(() =>
         (window as any).audioGains.every(

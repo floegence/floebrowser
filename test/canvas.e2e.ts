@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -173,10 +174,9 @@ for (const context of ['2d', 'webgl2'] as const)
         };
         document.body.append(input);
       });
-      await viewer
-        .frameLocator('#viewport iframe')
-        .locator('#native-input')
-        .click();
+      await clickProjected(
+        viewer.frameLocator('#viewport iframe').locator('#native-input'),
+      );
       await viewer.keyboard.type('ax.b');
       await source.waitForFunction(
         () =>
@@ -467,10 +467,11 @@ test(
     const root = viewer.frameLocator('#viewport iframe');
     await root.locator('#tainted[data-floebrowser-unsupported]').waitFor();
     await root.locator('#offscreen[data-floebrowser-unsupported]').waitFor();
-    await root
-      .frameLocator('#remote')
-      .getByRole('button', { name: 'Source click' })
-      .click();
+    await clickProjected(
+      root
+        .frameLocator('#remote')
+        .getByRole('button', { name: 'Source click' }),
+    );
     await root
       .frameLocator('#remote')
       .getByRole('button', { name: 'Source confirmed' })
@@ -531,10 +532,11 @@ test(
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
     await source.waitForFunction(() => (window as any).encodes === 1);
-    await viewer
-      .frameLocator('#viewport iframe')
-      .getByRole('button', { name: 'Change scene' })
-      .click();
+    await clickProjected(
+      viewer
+        .frameLocator('#viewport iframe')
+        .getByRole('button', { name: 'Change scene' }),
+    );
     await source.waitForFunction(
       () => document.querySelector('button')?.textContent === 'Confirmed',
     );

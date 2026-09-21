@@ -8,6 +8,7 @@ import {
   CANVAS_ATTRIBUTE,
   STYLESHEET_LINK_ATTRIBUTE,
   styleAttributes,
+  interactionAttributes,
 } from '../shared/style.js';
 
 export const SOURCE_LINK_ATTRIBUTE = 'data-floebrowser-link';
@@ -46,6 +47,20 @@ const projectedSelectors = selectorParser((selectors) => {
     }
   });
   selectors.walkPseudos((pseudo) => {
+    const interaction = pseudo.value.slice(1).toLowerCase();
+    if (Object.hasOwn(interactionAttributes, interaction)) {
+      pseudo.replaceWith(
+        selectorParser.attribute({
+          attribute:
+            interactionAttributes[
+              interaction as keyof typeof interactionAttributes
+            ],
+          value: undefined,
+          raws: {},
+        }),
+      );
+      return;
+    }
     if (
       [':link', ':any-link', ':-webkit-any-link'].includes(
         pseudo.value.toLowerCase(),

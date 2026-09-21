@@ -5,6 +5,9 @@ import {
   CANVAS_ATTRIBUTE,
   STYLESHEET_LINK_ATTRIBUTE,
   styleAttributes,
+  interactionAttributes,
+  INPUT_PROXY_ATTRIBUTE,
+  type InteractionState,
   type SourceStylesheet,
   type SourceCanvasSize,
 } from '../shared/style.js';
@@ -30,7 +33,11 @@ function canvasPlaceholder(size?: SourceCanvasSize): string {
   // that would change selectors such as canvas[width]. Only numbers enter SVG.
   return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"></svg>`)}`;
 }
-const reservedStyleAttributes = new Set(Object.values(styleAttributes));
+const reservedStyleAttributes = new Set([
+  ...Object.values(styleAttributes),
+  ...Object.values(interactionAttributes),
+  INPUT_PROXY_ATTRIBUTE,
+]);
 
 /** Projects untrusted rrweb data into an inert, source-resource-only document. */
 export class DOMProjection {
@@ -53,6 +60,7 @@ export class DOMProjection {
     raw: Serialized = {},
     sheet?: SourceStylesheet,
     canvas?: SourceCanvasSize,
+    interaction?: InteractionState,
   ): Serialized {
     const result: Serialized = {};
     for (const [name, marker] of Object.entries(styleAttributes)) {
@@ -139,6 +147,11 @@ export class DOMProjection {
         result[key] = this.resources.reference(String(value), base);
       else result[key] = value;
     }
+    if (interaction)
+      for (const [name, marker] of Object.entries(interactionAttributes))
+        result[marker] = interaction[name as keyof InteractionState]
+          ? ''
+          : null;
     if (['video', 'audio'].includes(tag)) {
       result['data-floebrowser-media'] = tag;
       result.preload = 'none';
@@ -211,11 +224,13 @@ export class DOMProjection {
           node.floeAttributes,
           undefined,
           node.floeCanvas,
+          node.floeInteraction,
         );
         delete node.floeCanvas;
         delete node.floeAttributes;
         delete node.floeStylesheet;
         delete node.floeNamespace;
+        delete node.floeInteraction;
         for (const child of node.childNodes ?? []) this.exclude(child);
         node.childNodes = [];
         return;
@@ -253,10 +268,13 @@ export class DOMProjection {
         base,
         node.floeAttributes,
         node.floeStylesheet,
+        node.floeCanvas,
+        node.floeInteraction,
       );
       if (node.floeNamespace === 'http://www.w3.org/1998/Math/MathML')
         node.attributes[MATHML_ATTRIBUTE] = '';
       delete node.floeNamespace;
+      delete node.floeInteraction;
       if (['link', 'style'].includes(original) && node.floeStylesheet)
         node.childNodes = [];
       delete node.floeAttributes;
@@ -353,11 +371,13 @@ export class DOMProjection {
             entry.floeAttributes,
             entry.floeStylesheet,
             entry.floeCanvas,
+            entry.floeInteraction,
           );
           delete entry.floeBase;
           delete entry.floeAttributes;
           delete entry.floeStylesheet;
           delete entry.floeCanvas;
+          delete entry.floeInteraction;
         }
         for (const text of data.texts)
           if (this.tags.get(text.id) === 'style')

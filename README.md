@@ -482,8 +482,8 @@ The standalone viewer always adapts automatically and has no manual size selecto
 
 Embedding hosts can pass a `mediaControls` element in `DOMBrowserView` options to place these optional controls in their browser chrome, outside the projection container. Without that mount, the viewer adds no media UI; website controls and media forwarding still work. The host should provide the toolbar mount when users need auxiliary playback controls and availability details.
 
-Use the same FloeBrowser release on both sides. Protocol version 18 adds explicit
-source-element mute to the host-authorized media operations. It includes dialogs,
+Use the same FloeBrowser release on both sides. Protocol version 19 adds explicit held-input release to the host-authorized
+operations, including source-element mute. It includes dialogs,
 find, zoom, scoped file selection and downloads, independent observation/media
 subscriptions, source-local encoded media collection, Canvas images, tab ordering,
 viewport commands and epoch-fenced input. It is not compatible with earlier
@@ -546,11 +546,22 @@ at the fixture's source RTP negotiation and verified at the receiving worker;
 source resolution changes and paused pictures survive DOM checkpoints in each
 engine. Decoded pictures use automatic Canvas stream
 capture; Firefox does not expose `CanvasCaptureMediaStreamTrack.requestFrame()`.
-Chromium and Firefox also forward source clicks and text. WebKit suppresses even
-host-installed event listeners inside scriptless sandbox frames, so its input
-case is an explicit failing TODO. The scriptless sandbox must not be weakened to
-make this case pass. Interactive WebKit/Safari support remains blocked, and these
-development-engine tests do not qualify current stable Safari, Firefox or Edge.
+All three also forward source clicks, text, native select choices, shadow-root
+input and scaled child-frame input/scrolling. Input is received by one trusted
+host surface; projected iframe documents remain scriptless. Focused text controls
+use trusted host input proxies for the native caret and IME. Source-native
+hover, active, focus and focus-visible states are projected as inert selector
+markers, including focus-within ancestors. Caret fonts use private host aliases
+that are released with the focused control and cannot override browser chrome.
+Focused proxies are clipped to source scroll/frame boundaries and repaint at
+most once per client frame. The host maps pointer
+coordinates through frame borders and scaling and keeps source node/epoch checks.
+Losing focus releases held source input without repeating a click. Child-document
+attachments retire their prior replay mirror even when rrweb reuses a document ID
+for an initially empty frame. Client clipboard tests cover native copy gestures
+for source-selected form and nested-frame text in all three engines. These
+Playwright development-engine tests do not qualify current stable Safari,
+Firefox or Edge.
 
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 

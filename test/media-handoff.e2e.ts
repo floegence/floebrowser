@@ -1,3 +1,4 @@
+import { clickProjected, hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -63,8 +64,8 @@ test(
     await next.locator('#status.live').waitFor();
     await first.locator('#status.disconnected').waitFor();
     const video = next.frameLocator('#viewport iframe').locator('video');
-    await video.hover();
-    await video.click();
+    await hoverProjected(video);
+    await clickProjected(video);
     const deadline = Date.now() + 3000;
     while (acknowledgements.length < 3 && Date.now() < deadline)
       await new Promise((r) => setTimeout(r, 20));

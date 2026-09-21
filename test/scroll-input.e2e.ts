@@ -1,3 +1,4 @@
+import { hoverProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -87,7 +88,9 @@ test(
     const frame = viewer
       .frameLocator('#viewport iframe')
       .frameLocator('iframe');
-    await frame.locator('#row1').hover({ position: { x: 200, y: 50 } });
+    await hoverProjected(frame.locator('#row1'), {
+      position: { x: 200, y: 50 },
+    });
     await viewer.evaluate(() => ((window as any).scrollTest.hold = true));
     await scrollBurst(viewer, 120, 150);
     assert.deepEqual(
@@ -165,7 +168,9 @@ for (const change of ['replace', 'cover', 'remove'] as const) {
       await observeCarrier(viewer);
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
-      await viewer.frameLocator('#viewport iframe').locator('#row2').hover();
+      await hoverProjected(
+        viewer.frameLocator('#viewport iframe').locator('#row2'),
+      );
       await viewer.evaluate(() => ((window as any).scrollTest.hold = true));
       await source.evaluate((change) => {
         const region = document.querySelector('#region')!;
@@ -256,7 +261,9 @@ for (const layout of ['document', 'nested', 'absolute body'] as const) {
       await observeCarrier(viewer);
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
-      await viewer.frameLocator('#viewport iframe').locator('#row2').hover();
+      await hoverProjected(
+        viewer.frameLocator('#viewport iframe').locator('#row2'),
+      );
       await viewer.evaluate(() => ((window as any).scrollTest.hold = true));
       await scrollBurst(viewer, 0, 150);
       const result = await viewer.evaluate(() => {
@@ -329,10 +336,9 @@ for (const behavior of ['auto', 'contain'] as const)
       await observeCarrier(viewer);
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
-      await viewer
-        .frameLocator('#viewport iframe')
-        .locator('#region #row2')
-        .hover();
+      await hoverProjected(
+        viewer.frameLocator('#viewport iframe').locator('#region #row2'),
+      );
       await viewer.evaluate(() => ((window as any).scrollTest.hold = true));
       await scrollBurst(viewer, 0, 150);
       assert.deepEqual(

@@ -9,9 +9,13 @@ import {
   MediaPacketReader,
   type MediaFrame,
 } from '../shared/media-wire.js';
+import { InputFonts } from './input-fonts.js';
+import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
+import { replayHit, styleInputProxy } from './input-geometry.js';
 import { ReplayPresentation } from './presentation.js';
 import {
-  liveEvent,
+  liveEvents,
+  liveFrameDocuments,
   liveScroll,
   liveSelection,
   svgStyles,
@@ -77,7 +81,7 @@ type Pending = {
   started: number;
   epoch: string;
   tab: string;
-  hover: boolean;
+  quiet: boolean;
   chrome: boolean;
   documentBound: boolean;
 };
@@ -118,8 +122,13 @@ export class DOMBrowserView {
   private pageError: HTMLElement;
   private resize: ResizeObserver;
   private disposers: Array<() => void> = [];
-  private frameDisposers: Array<() => void> = [];
-  private inputDocuments = new WeakMap<Document, Element | null>();
+  private inputSurface: HTMLDivElement;
+  private inputProxy?: {
+    node: Element;
+    control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+  };
+  private compositionAuthority?: string;
+  private heldInput = false;
   private viewport = { width: 1280, height: 800 };
   private zoom = 1;
   private fileChooser: FileChooserState | null = null;
@@ -133,6 +142,8 @@ export class DOMBrowserView {
   private dragging = false;
   private inputEngaged = false;
   private sourceFocus?: FocusState;
+  private inputFonts = new InputFonts();
+  private focusFrame = 0;
   private dialogOpen = false;
 
   constructor(
@@ -150,7 +161,9 @@ export class DOMBrowserView {
     this.sink.setAttribute('autocapitalize', 'off');
     this.sink.autocomplete = 'off';
     this.sink.spellcheck = false;
-    container.append(this.surface, this.sink);
+    this.inputSurface = document.createElement('div');
+    this.inputSurface.className = 'floe-input-surface';
+    container.append(this.surface, this.inputSurface, this.sink);
     this.pageError = document.createElement('section');
     this.pageError.className = 'floe-page-error';
     this.pageError.hidden = true;
@@ -198,120 +211,254 @@ export class DOMBrowserView {
       );
     this.resize = new ResizeObserver(() => this.layout());
     this.resize.observe(container);
-    this.listen(this.sink, 'keydown', (event) =>
-      this.key(event as KeyboardEvent, 'down'),
-    );
-    this.listen(this.sink, 'keyup', (event) =>
-      this.key(event as KeyboardEvent, 'up'),
-    );
-    this.bindTextInput(this.sink);
+    this.bindInput();
     this.listen(document, 'focusin', (event) => {
-      if (!this.container.contains(event.target as Node))
+      if (!this.container.contains(event.target as Node)) {
         this.inputEngaged = false;
+        this.cancelInput();
+        this.clearProxy();
+      }
     });
-    this.listen(window, 'blur', () => {
-      this.dragging = false;
-    });
+    this.listen(window, 'blur', () => this.cancelInput());
     this.options.onStatus?.('connecting');
   }
 
-  private bindTextInput(target: EventTarget, frame = false): void {
-    this.listen(
-      target,
-      'compositionstart',
-      () => {
-        this.composing = true;
-      },
-      frame,
-    );
-    this.listen(
-      target,
-      'compositionend',
-      (event) => {
-        this.composing = false;
-        this.suppressCompositionInput = true;
-        const text = (event as CompositionEvent).data;
-        if (text) void this.dispatch({ kind: 'text', text });
-        this.sink.value = '';
-        queueMicrotask(() => {
-          this.suppressCompositionInput = false;
+  private authority(): string {
+    return `${this.tab}:${this.epoch}:${this.controlled}`;
+  }
+
+  private bindTextInput(target: EventTarget): void {
+    this.listen(target, 'compositionstart', () => {
+      this.composing = true;
+      this.compositionAuthority = this.authority();
+    });
+    this.listen(target, 'compositionend', (event) => {
+      const current = this.compositionAuthority === this.authority();
+      this.composing = false;
+      this.compositionAuthority = undefined;
+      this.suppressCompositionInput = true;
+      const text = (event as CompositionEvent).data;
+      if (current && text) void this.dispatch({ kind: 'text', text });
+      this.sink.value = '';
+      queueMicrotask(() => {
+        this.suppressCompositionInput = false;
+      });
+    });
+    this.listen(target, 'beforeinput', (event) => {
+      const input = event as InputEvent;
+      if (this.composing || input.isComposing) return;
+      input.preventDefault();
+      if (
+        !this.suppressCompositionInput &&
+        input.data &&
+        input.inputType.startsWith('insert')
+      )
+        void this.dispatch({ kind: 'text', text: input.data });
+      this.sink.value = '';
+    });
+    this.listen(target, 'paste', (event) => {
+      event.preventDefault();
+      const text = (event as ClipboardEvent).clipboardData?.getData(
+        'text/plain',
+      );
+      if (text) void this.dispatch({ kind: 'text', text });
+    });
+    this.listen(target, 'copy', (event) => {
+      event.preventDefault();
+      if (!this.ready || !this.controlled) return;
+      const clipboard = (event as ClipboardEvent).clipboardData;
+      if (!clipboard) return;
+      const selected = this.selectedText();
+      if (selected !== undefined) clipboard.setData('text/plain', selected);
+    });
+  }
+
+  private selectedText(): string | undefined {
+    const focused =
+      this.sourceFocus &&
+      (this.replayer?.getMirror().getNode(this.sourceFocus.node) as
+        HTMLInputElement | HTMLTextAreaElement | undefined);
+    if (
+      focused?.isConnected &&
+      ['INPUT', 'TEXTAREA'].includes(focused.tagName)
+    ) {
+      if (focused.type === 'password') return;
+      const { start, end } = this.sourceFocus!;
+      if (start !== null && end !== null)
+        return focused.value.slice(start, end);
+    }
+    const visit = (doc?: Document | null): string | undefined => {
+      if (!doc) return;
+      const selection = doc.getSelection();
+      if (selection && !selection.isCollapsed) return selection.toString();
+      for (const frame of doc.querySelectorAll('iframe,frame')) {
+        const text = visit((frame as HTMLIFrameElement).contentDocument);
+        if (text !== undefined) return text;
+      }
+    };
+    return visit(this.replayer?.iframe.contentDocument);
+  }
+
+  private clearProxy(): void {
+    this.inputFonts.clear();
+    this.inputProxy?.node.removeAttribute(INPUT_PROXY_ATTRIBUTE);
+    this.inputProxy?.control.remove();
+    this.inputProxy = undefined;
+  }
+
+  private proxyFor(
+    element: Element,
+  ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | undefined {
+    if (this.inputProxy?.node === element) return this.inputProxy.control;
+    this.clearProxy();
+    const doc = this.container.ownerDocument;
+    let control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    if (element.tagName === 'SELECT') {
+      const source = element as HTMLSelectElement;
+      control = doc.createElement('select');
+      control.multiple = source.multiple;
+      control.size = source.size;
+      control.disabled = source.disabled;
+      const options = (source: Element, target: Element) => {
+        for (const child of source.children) {
+          if (child.tagName === 'OPTGROUP') {
+            const group = doc.createElement('optgroup');
+            group.label = (child as HTMLOptGroupElement).label;
+            group.disabled = (child as HTMLOptGroupElement).disabled;
+            options(child, group);
+            target.append(group);
+          } else if (child.tagName === 'OPTION') {
+            const original = child as HTMLOptionElement;
+            const option = doc.createElement('option');
+            option.textContent = original.label;
+            option.value = original.value;
+            option.disabled = original.disabled;
+            option.selected = original.selected;
+            target.append(option);
+          }
+        }
+      };
+      options(source, control);
+      const authority = this.authority();
+      const node = this.replayer!.getMirror().getId(element);
+      control.addEventListener('change', () => {
+        if (authority !== this.authority() || !element.isConnected) return;
+        void this.dispatch({
+          kind: 'select',
+          node,
+          values: Array.from(
+            (control as HTMLSelectElement).selectedOptions,
+          ).map((option) => option.value),
         });
-      },
-      frame,
+      });
+    } else if (element.tagName === 'TEXTAREA') {
+      control = doc.createElement('textarea');
+      control.wrap = (element as HTMLTextAreaElement).wrap;
+    } else if (
+      element.tagName === 'INPUT' &&
+      /^(text|search|url|tel|email|password|number)$/.test(
+        (element as HTMLInputElement).type,
+      )
+    ) {
+      control = doc.createElement('input');
+      control.type = (element as HTMLInputElement).type;
+    } else return;
+    control.className = 'floe-input-proxy';
+    control.setAttribute(
+      'aria-label',
+      element.getAttribute('aria-label') ||
+        Array.from((element as HTMLInputElement).labels ?? [])
+          .map((label) => label.textContent?.trim())
+          .filter(Boolean)
+          .join(' ') ||
+        this.text('page.input'),
     );
-    this.listen(
-      target,
-      'beforeinput',
-      (event) => {
-        const input = event as InputEvent;
-        if (this.composing || input.isComposing) return;
-        input.preventDefault();
-        if (
-          !this.suppressCompositionInput &&
-          input.data &&
-          input.inputType.startsWith('insert')
-        )
-          void this.dispatch({ kind: 'text', text: input.data });
-        this.sink.value = '';
-      },
-      frame,
-    );
-    this.listen(
-      target,
-      'paste',
-      (event) => {
-        event.preventDefault();
-        const text = (event as ClipboardEvent).clipboardData?.getData(
-          'text/plain',
-        );
-        if (text) void this.dispatch({ kind: 'text', text });
-      },
-      frame,
-    );
+    if (control.tagName !== 'SELECT') {
+      control.autocomplete = 'off';
+      control.spellcheck = false;
+      (control as HTMLInputElement).placeholder = (
+        element as HTMLInputElement
+      ).placeholder;
+      control.setAttribute('autocapitalize', 'off');
+      (control as HTMLInputElement).readOnly = (
+        element as HTMLInputElement
+      ).readOnly;
+    }
+    this.inputSurface.append(control);
+    this.inputProxy = { node: element, control };
+    styleInputProxy(control, element as HTMLElement, this.container);
+    this.inputFonts.apply(control, element);
+    return control;
   }
 
   private applyFocus(): void {
+    if (this.focusFrame) return;
+    this.focusFrame = requestAnimationFrame(() => {
+      this.focusFrame = 0;
+      this.syncFocus();
+    });
+  }
+
+  private syncFocus(): void {
     if (
       !this.inputEngaged ||
       this.composing ||
       !this.sourceFocus ||
-      !this.replayer
+      !this.replayer ||
+      !this.ready
     )
       return;
-    const element = this.replayer.getMirror().getNode(this.sourceFocus.node) as
-      HTMLInputElement | HTMLTextAreaElement | null;
-    if (
-      !element?.isConnected ||
-      !['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)
-    )
+    const element = this.replayer
+      .getMirror()
+      .getNode(this.sourceFocus.node) as HTMLElement | null;
+    if (!element?.isConnected) {
+      this.clearProxy();
+      this.sink.focus({ preventScroll: true });
       return;
-    element.focus({ preventScroll: true });
-    if (
-      this.sourceFocus.start !== null &&
-      this.sourceFocus.end !== null &&
-      'setSelectionRange' in element
-    ) {
-      try {
-        element.setSelectionRange(
-          this.sourceFocus.start,
-          this.sourceFocus.end,
-          this.sourceFocus.direction ?? 'none',
-        );
-      } catch {
-        /* Non-text controls do not expose a selection range. */
-      }
     }
+    // A native picker opened from hover must not be replaced by an unrelated
+    // delayed focus update while the user chooses an option.
+    if (
+      this.inputProxy?.control.tagName === 'SELECT' &&
+      this.inputProxy.node !== element
+    )
+      return;
+    const proxy = this.proxyFor(element);
+    if (!proxy) {
+      this.sink.focus({ preventScroll: true });
+      return;
+    }
+    styleInputProxy(proxy, element, this.container);
+    this.inputFonts.apply(proxy, element);
+    if (proxy.tagName !== 'SELECT') {
+      const text = proxy as HTMLInputElement | HTMLTextAreaElement;
+      const source = element as HTMLInputElement | HTMLTextAreaElement;
+      text.value = source.value;
+      if (this.sourceFocus.start !== null && this.sourceFocus.end !== null) {
+        try {
+          text.setSelectionRange(
+            this.sourceFocus.start,
+            this.sourceFocus.end,
+            this.sourceFocus.direction ?? 'none',
+          );
+        } catch {
+          /* Non-text controls do not expose a selection range. */
+        }
+      }
+      text.scrollLeft = source.scrollLeft;
+      text.scrollTop = source.scrollTop;
+    }
+    proxy.focus({ preventScroll: true });
   }
 
   private listen(
     target: EventTarget,
     name: string,
     listener: EventListener,
-    frame = false,
     options?: AddEventListenerOptions,
   ): void {
     target.addEventListener(name, listener, options);
-    (frame ? this.frameDisposers : this.disposers).push(() =>
+    this.disposers.push(() =>
       target.removeEventListener(name, listener, options),
     );
   }
@@ -398,6 +545,8 @@ export class DOMBrowserView {
           this.options.onFileChooser?.(null);
           this.queuedWheel = undefined;
           this.inputEngaged = false;
+          this.cancelInput();
+          this.clearProxy();
         }
         this.options.onControl?.(message.active);
         this.layout();
@@ -564,6 +713,7 @@ export class DOMBrowserView {
         mouseTail: false,
         triggerFocus: false,
         plugins: [
+          liveFrameDocuments,
           liveScroll,
           liveSelection,
           svgStyles,
@@ -571,12 +721,11 @@ export class DOMBrowserView {
           {
             onBuild: (node) => {
               if ('getRootNode' in node) presentation.build(node as Node);
-              if (node.nodeName === 'HTML')
-                this.bindFrameDocuments(node.ownerDocument as Document);
             },
           },
         ],
         insertStyleRules: [
+          `[${INPUT_PROXY_ATTRIBUTE}]{opacity:0!important}`,
           ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
           ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
           'a,button,select,input[type=checkbox],input[type=radio]{cursor:pointer}',
@@ -587,12 +736,12 @@ export class DOMBrowserView {
       });
       this.replayer.on(ReplayerEvents.EventCast, (raw) => {
         const event = raw as eventWithTime;
+        this.inputFonts.event(event, this.replayer?.iframe.contentDocument);
         if (
           event.type === EventType.FullSnapshot ||
           (event.type === EventType.IncrementalSnapshot &&
             event.data.source === IncrementalSource.Mutation)
         ) {
-          this.bindFrameDocuments();
           this.applyFocus();
         } else if (
           event.type === EventType.IncrementalSnapshot &&
@@ -603,7 +752,7 @@ export class DOMBrowserView {
       });
       this.replayer.startLive(now);
       for (const event of message.events)
-        this.replayer.addEvent(liveEvent(event, now));
+        for (const next of liveEvents(event, now)) this.replayer.addEvent(next);
       return;
     }
     if (message.type === 'events') {
@@ -619,7 +768,7 @@ export class DOMBrowserView {
       this.sequence = message.sequence;
       const now = Date.now();
       for (const event of message.events)
-        this.replayer.addEvent(liveEvent(event, now));
+        for (const next of liveEvents(event, now)) this.replayer.addEvent(next);
       this.eventBytes += JSON.stringify(message.events).length;
       if (this.eventBytes > 8 * 1024 * 1024 || this.sequence > 4000)
         this.resync();
@@ -634,16 +783,19 @@ export class DOMBrowserView {
       this.options.onAction?.(Math.round(performance.now() - pending.started));
       if (!message.ok) {
         if (!pending.chrome && pending.tab !== this.tab) return;
-        // Hover has no confirmed user effect. Likewise, an old document's
+        // Hover and input release have no business effect to repeat. An old document's
         // late failure must not interrupt the page that replaced it.
         if (
-          pending.hover ||
+          pending.quiet ||
           (pending.documentBound && pending.epoch !== this.epoch)
         )
           return;
         if (message.code === 'navigation_failed' && !this.pageError.hidden)
           return;
         if (message.code === 'stale_view') {
+          // A loading or rebuilding view is already fenced and awaiting source
+          // state. A rejected old gesture cannot trigger another refresh loop.
+          if (!this.ready) return;
           // Hover can overtake a changing DOM without a user action failing.
           // A rejected action refreshes only its current view, never its input.
           if (
@@ -740,6 +892,7 @@ export class DOMBrowserView {
         action.kind !== 'dialog_reply') ||
       (!this.ready &&
         ![
+          'release_input',
           'navigate',
           'back',
           'forward',
@@ -774,11 +927,13 @@ export class DOMBrowserView {
     const id = ++this.nextID;
     const tab = this.tab;
     const epoch = this.epoch;
-    const hover =
-      action.kind === 'pointer' &&
-      action.phase === 'move' &&
-      action.buttons === 0;
+    const quiet =
+      action.kind === 'release_input' ||
+      (action.kind === 'pointer' &&
+        action.phase === 'move' &&
+        action.buttons === 0);
     const documentBound = [
+      'release_input',
       'pointer',
       'wheel',
       'key',
@@ -792,7 +947,7 @@ export class DOMBrowserView {
         this.pending.delete(id);
         resolve(false);
         if (
-          !hover &&
+          !quiet &&
           (!documentBound || epoch === this.epoch) &&
           (chrome || this.tab === tab)
         )
@@ -810,7 +965,7 @@ export class DOMBrowserView {
         tab: this.tab,
         chrome,
         documentBound,
-        hover,
+        quiet,
       });
       try {
         this.connection.send({
@@ -953,122 +1108,135 @@ export class DOMBrowserView {
     this.scheduleViewport();
   }
 
-  private point(
-    event: MouseEvent,
-  ): { node: number; x: number; y: number } | undefined {
-    const target = event
-      .composedPath()
-      .find((item) => (item as Node)?.nodeType === 1) as Element | undefined;
-    if (!target || target.closest('[data-floebrowser-unsupported]')) return;
-    const node = this.replayer!.getMirror().getId(target);
-    const rect = target.getBoundingClientRect();
+  private hit(event: MouseEvent) {
+    return this.replayer && this.ready
+      ? replayHit(this.replayer.iframe, event.clientX, event.clientY)
+      : undefined;
+  }
+
+  private point(hit: NonNullable<ReturnType<typeof replayHit>>) {
+    const node = this.replayer!.getMirror().getId(hit.target);
+    const rect = hit.target.getBoundingClientRect();
     if (node < 1 || !rect.width || !rect.height) return;
     return {
       node,
-      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+      x: Math.max(0, Math.min(1, (hit.x - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (hit.y - rect.top) / rect.height)),
     };
   }
 
   private installInput(): void {
-    this.clearFrame();
-    const player = this.replayer!;
-    player.enableInteract();
-    player.iframe.setAttribute('scrolling', 'no');
-    this.bindFrameDocuments();
+    this.replayer!.enableInteract();
+    this.replayer!.iframe.setAttribute('scrolling', 'no');
+    this.replayer!.iframe.setAttribute('tabindex', '-1');
+    // WebKit suppresses listeners even when installed by the host into an inert
+    // document. All engines use this trusted surface; the iframe stays scriptless.
+    this.replayer!.iframe.style.pointerEvents = 'none';
   }
 
-  private bindFrameDocuments(
-    frame = this.replayer?.iframe.contentDocument,
-  ): void {
-    if (!frame) return;
-    if (
-      !this.inputDocuments.has(frame) ||
-      this.inputDocuments.get(frame) !== frame.documentElement
-    ) {
-      this.inputDocuments.set(frame, frame.documentElement);
-      this.bindDocumentInput(frame);
+  private cancelInput(): void {
+    this.compositionAuthority = undefined;
+    this.composing = false;
+    if (this.heldInput) void this.dispatch({ kind: 'release_input' });
+    this.heldInput = false;
+    this.dragging = false;
+  }
+
+  private bindInput(): void {
+    for (const target of [this.inputSurface, this.sink]) {
+      this.bindTextInput(target);
+      this.listen(target, 'keydown', (event) =>
+        this.key(event as KeyboardEvent, 'down'),
+      );
+      this.listen(target, 'keyup', (event) =>
+        this.key(event as KeyboardEvent, 'up'),
+      );
     }
-    for (const child of frame.querySelectorAll('iframe,frame'))
-      this.bindFrameDocuments((child as HTMLIFrameElement).contentDocument);
-  }
-
-  private bindDocumentInput(frame: Document): void {
-    const player = this.replayer!;
-    this.bindTextInput(frame, true);
-    this.listen(
-      frame,
-      'mousedown',
-      (raw) => {
-        this.media.interact(raw);
-        const event = raw as PointerEvent;
-        if (!this.controlled) {
-          if ((event.target as Element).closest('select'))
-            event.preventDefault();
-          return;
-        }
-        this.inputEngaged = true;
-        this.sourceFocus = undefined;
-        const target = event.target as Element;
-        if (target.closest('select')) return;
-        const point = this.point(event);
-        if (!point) return;
-        if (
-          target.closest(
-            '[data-floebrowser-editable],[data-floebrowser-canvas]',
-          )
-        )
+    this.listen(this.inputSurface, 'mousedown', (raw) => {
+      this.media.interact(raw);
+      const event = raw as MouseEvent;
+      if (!this.controlled || !this.ready) {
+        event.preventDefault();
+        return;
+      }
+      const hit = this.hit(event);
+      if (!hit) {
+        event.preventDefault();
+        return;
+      }
+      this.inputEngaged = true;
+      const select = hit.target.closest('select');
+      if (select) {
+        const proxy = this.proxyFor(select) as HTMLSelectElement;
+        if (event.target !== proxy) {
           event.preventDefault();
-        this.dragging = true;
-        void this.dispatch({
-          kind: 'pointer',
-          phase: 'down',
-          point,
-          button: mouseButton(event.button),
-          buttons: event.buttons,
-          modifiers: modifiers(event),
-          clicks: Math.max(1, Math.min(3, event.detail || 1)),
-        });
-      },
-      true,
-    );
-    this.listen(
-      frame,
-      'mouseup',
-      (raw) => {
-        const event = raw as PointerEvent;
-        if (!this.controlled) return;
-        if ((event.target as Element).closest('select')) return;
-        const point = this.point(event);
-        this.dragging = false;
-        if (point)
-          void this.dispatch({
-            kind: 'pointer',
-            phase: 'up',
-            point,
-            button: mouseButton(event.button),
-            buttons: event.buttons,
-            modifiers: modifiers(event),
-            clicks: Math.max(1, Math.min(3, event.detail || 1)),
-          });
-        if (
-          frame.getSelection()?.isCollapsed !== false &&
-          !(event.target as Element).closest('input,textarea,select')
-        )
-          this.sink.focus({ preventScroll: true });
-      },
-      true,
-    );
-    this.listen(
-      frame,
-      'mousemove',
-      (raw) => {
-        const event = raw as PointerEvent;
-        if (!this.controlled) return;
-        if (!this.dragging && performance.now() - this.lastMove < 40) return;
-        this.lastMove = performance.now();
-        const point = this.point(event);
-        if (!point) return;
+          proxy.focus({ preventScroll: true });
+          if (typeof proxy.showPicker === 'function') proxy.showPicker();
+        }
+        return;
+      }
+      event.preventDefault();
+      const point = this.point(hit);
+      if (!point) return;
+      this.sourceFocus = undefined;
+      this.clearProxy();
+      this.sink.focus({ preventScroll: true });
+      this.dragging = this.heldInput = true;
+      void this.dispatch({
+        kind: 'pointer',
+        phase: 'down',
+        point,
+        button: mouseButton(event.button),
+        buttons: event.buttons,
+        modifiers: modifiers(event),
+        clicks: Math.max(1, Math.min(3, event.detail || 1)),
+      });
+    });
+    this.listen(window, 'mouseup', (raw) => {
+      if (!this.dragging) return;
+      const event = raw as MouseEvent;
+      const hit = this.hit(event),
+        point = hit && this.point(hit);
+      if (!point) {
+        this.cancelInput();
+        return;
+      }
+      this.dragging = false;
+      void this.dispatch({
+        kind: 'pointer',
+        phase: 'up',
+        point,
+        button: mouseButton(event.button),
+        buttons: event.buttons,
+        modifiers: modifiers(event),
+        clicks: Math.max(1, Math.min(3, event.detail || 1)),
+      });
+    });
+    this.listen(window, 'mousemove', (raw) => {
+      const event = raw as MouseEvent;
+      if (
+        !this.controlled ||
+        (!this.dragging && !this.inputSurface.contains(event.target as Node))
+      )
+        return;
+      const hit = this.hit(event);
+      if (!hit) return;
+      if (!this.dragging) {
+        const cursor = hit.target.ownerDocument.defaultView!.getComputedStyle(
+          hit.target,
+        ).cursor;
+        this.inputSurface.style.cursor = /^[a-z-]+$/.test(cursor)
+          ? cursor
+          : 'auto';
+        const select = hit.target.closest('select');
+        if (select) this.proxyFor(select);
+        else if (this.inputProxy?.control.tagName === 'SELECT')
+          this.clearProxy();
+      }
+      if (!this.dragging && performance.now() - this.lastMove < 40) return;
+      this.lastMove = performance.now();
+      const point = this.point(hit);
+      if (point)
         void this.dispatch({
           kind: 'pointer',
           phase: 'move',
@@ -1078,40 +1246,28 @@ export class DOMBrowserView {
           modifiers: modifiers(event),
           clicks: 1,
         });
-      },
-      true,
+    });
+    this.listen(this.inputSurface, 'contextmenu', (event) =>
+      event.preventDefault(),
     );
     this.listen(
-      frame,
-      'click',
-      (event) => {
-        if (!this.controlled || !(event.target as Element).closest('select'))
-          event.preventDefault();
-      },
-      true,
-    );
-    this.listen(frame, 'submit', (event) => event.preventDefault(), true);
-    this.listen(frame, 'contextmenu', (event) => event.preventDefault(), true);
-    this.listen(
-      frame,
+      this.inputSurface,
       'wheel',
       (raw) => {
         raw.preventDefault();
+        if (!this.controlled) return;
         const event = raw as WheelEvent;
-        const target = event
-          .composedPath()
-          .find((item) => (item as Node)?.nodeType === 1) as
-          Element | undefined;
-        if (!target) return;
-        const mapped = mapWheelPoint(target, {
+        const hit = this.hit(event);
+        if (!hit) return;
+        const mapped = mapWheelPoint(hit.target, {
           space: 'client',
-          x: event.clientX,
-          y: event.clientY,
+          x: hit.x,
+          y: hit.y,
           dx: event.deltaX,
           dy: event.deltaY,
         });
         if (!mapped?.node) return;
-        const node = player.getMirror().getId(mapped.node);
+        const node = this.replayer!.getMirror().getId(mapped.node);
         if (node < 1) return;
         const unit =
           event.deltaMode === 1
@@ -1127,36 +1283,7 @@ export class DOMBrowserView {
           modifiers: modifiers(event),
         });
       },
-      true,
       { passive: false },
-    );
-    this.listen(
-      frame,
-      'keydown',
-      (event) => this.key(event as KeyboardEvent, 'down'),
-      true,
-    );
-    this.listen(
-      frame,
-      'keyup',
-      (event) => this.key(event as KeyboardEvent, 'up'),
-      true,
-    );
-    this.listen(
-      frame,
-      'change',
-      (event) => {
-        const select = event.target as HTMLSelectElement;
-        if (select.tagName === 'SELECT')
-          void this.dispatch({
-            kind: 'select',
-            node: player.getMirror().getId(select),
-            values: Array.from(select.selectedOptions).map(
-              (option) => option.value,
-            ),
-          });
-      },
-      true,
     );
   }
 
@@ -1180,26 +1307,15 @@ export class DOMBrowserView {
       }
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
-      const target = event
-        .composedPath()
-        .find((item) => (item as Node)?.nodeType === 1) as Element | undefined;
-      const document = target?.ownerDocument;
-      // Form selections are not exposed by Document.getSelection, and a child
-      // frame owns its own selection. Let the client's native copy operation
-      // use the visible selection without touching the source OS clipboard.
-      if (
-        document?.getSelection()?.isCollapsed === false ||
-        target?.tagName === 'TEXTAREA' ||
-        (target?.tagName === 'INPUT' &&
-          ['text', 'search', 'url', 'tel', 'email', 'number'].includes(
-            (target as HTMLInputElement).type,
-          ))
-      )
-        return;
-    }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v')
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      ['c', 'v'].includes(event.key.toLowerCase())
+    )
       return;
+    // Native select UI belongs to the host. Its change is sent through the same
+    // epoch-fenced source action as pointer-based selection.
+    if ((event.target as Element).tagName === 'SELECT') return;
+    this.heldInput = true;
     event.preventDefault();
     void this.dispatch({
       kind: 'key',
@@ -1236,8 +1352,10 @@ export class DOMBrowserView {
     this.pending.clear();
   }
   private clearFrame(): void {
-    this.inputDocuments = new WeakMap();
-    for (const dispose of this.frameDisposers.splice(0)) dispose();
+    cancelAnimationFrame(this.focusFrame);
+    this.focusFrame = 0;
+    this.cancelInput();
+    this.clearProxy();
   }
   destroy(): void {
     if (this.destroyed) return;

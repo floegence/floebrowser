@@ -86,6 +86,12 @@ test('raw selector values remain inert and source-supplied projection markers ar
               'data-floebrowser-stylesheet-link': '',
               'data-floebrowser-editable': 'true',
               'data-floebrowser-mathml': '',
+              'data-floebrowser-focus': '',
+              'data-floebrowser-hover': '',
+              'data-floebrowser-active': '',
+              'data-floebrowser-focus-visible': '',
+              'data-floebrowser-focus-within': '',
+              'data-floebrowser-input-proxy': '',
             },
             childNodes: [],
           },
@@ -149,4 +155,22 @@ test('whole-sheet replacements and declaration updates use their source frame ba
     event.data.set.value.includes(store.reference('../image.svg', base)),
   );
   assert.equal(event.data.floeBase, undefined);
+});
+
+test('source interaction selectors preserve pseudo specificity without rewriting strings or escaped classes', (t) => {
+  const store = resources(t);
+  const css = store.css(
+    String.raw`section:focus-within input:focus-visible, button:hover:active, :not(:focus), .focus\:hover[data-label=":hover"] {color:red}`,
+    'https://source.test/',
+  );
+  assert.match(
+    css,
+    /section\[data-floebrowser-focus-within\] input\[data-floebrowser-focus-visible\]/,
+  );
+  assert.match(
+    css,
+    /button\[data-floebrowser-hover\]\[data-floebrowser-active\]/,
+  );
+  assert.match(css, /:not\(\[data-floebrowser-focus\]\)/);
+  assert.ok(css.includes(String.raw`.focus\:hover[data-label=":hover"]`));
 });

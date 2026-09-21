@@ -466,11 +466,42 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     };
     this.transport.on('Page.navigatedWithinDocument', withinDocument);
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let expire!: () => void;
+    const deadline = new Promise<never>((_, reject) => {
+      expire = () => reject(new Error('Source navigation timed out'));
+    });
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(expire, 20000);
+    };
+    let decision: Promise<boolean> | undefined;
+    let answer: ((accepted: boolean) => void) | undefined;
+    const opening = ({ type }: { type: string }) => {
+      if (type !== 'beforeunload') return;
+      clearTimeout(timer);
+      decision = new Promise<boolean>((resolve) => {
+        answer = resolve;
+      });
+    };
+    const answered = ({ result }: { result: boolean }) => {
+      if (!answer) return;
+      answer(result);
+      answer = undefined;
+      arm();
+    };
+    this.transport.on('Page.javascriptDialogOpening', opening);
+    this.transport.on('Page.javascriptDialogClosed', answered);
+    arm();
     try {
       const work = (async () => {
         const result = await this.transport.send(method, parameters);
         if (result.isDownload) return;
-        if (result.errorText) throw new Error('Source navigation failed');
+        if (result.errorText) {
+          // Chromium can return ERR_ABORTED before delivering the dialog's
+          // closed event. Only a confirmed decision to stay cancels the failure.
+          if (decision && !(await decision)) return;
+          throw new Error('Source navigation failed');
+        }
         if (method === 'Page.navigate') {
           if (!result.loaderId) return; // Chromium confirmed a same-document navigation.
           targetLoader = result.loaderId;
@@ -478,20 +509,13 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
         }
         await loaded;
       })();
-      await Promise.race([
-        work,
-        cancelled,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('Source navigation timed out')),
-            20000,
-          );
-        }),
-      ]);
+      await Promise.race([work, cancelled, deadline]);
     } finally {
       this.navigations.delete(cancel);
       clearTimeout(timer);
       clearTimeout(settleTimer);
+      this.transport.off('Page.javascriptDialogOpening', opening);
+      this.transport.off('Page.javascriptDialogClosed', answered);
       this.transport.off('Page.lifecycleEvent', lifecycle);
       this.transport.off('Page.frameNavigated', committed);
       this.transport.off('Page.navigatedWithinDocument', withinDocument);

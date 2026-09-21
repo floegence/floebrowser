@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -253,26 +254,24 @@ test(
     );
     const child = projection.frameLocator('iframe');
     stage = 'child input';
-    await child
-      .getByRole('button', { name: 'Child action', exact: true })
-      .click();
+    await clickProjected(
+      child.getByRole('button', { name: 'Child action', exact: true }),
+    );
     await child
       .getByRole('button', { name: 'Source action confirmed', exact: true })
       .waitFor();
     stage = 'child text';
-    await child
-      .getByRole('textbox', { name: 'Child input', exact: true })
-      .click();
-    await child
-      .getByRole('textbox', { name: 'Child input', exact: true })
-      .fill('Remote extension text');
+    await clickProjected(
+      child.getByRole('textbox', { name: 'Child input', exact: true }),
+    );
+    await viewer.keyboard.type('Remote extension text');
     await sourcePage
       .frame({ url: childURL })!
       .waitForFunction(
         () =>
           document.querySelector('input')!.value === 'Remote extension text',
       );
-    await projection.locator('#upload').click();
+    await clickProjected(projection.locator('#upload'));
     stage = 'upload';
     const chooser = viewer.getByRole('dialog', {
       name: 'Choose files for this website',
@@ -310,17 +309,17 @@ test(
       .evaluate((node: HTMLIFrameElement, url) => {
         node.src = url;
       }, childURL + '/replacement');
-    await child
-      .getByRole('button', { name: 'Child action', exact: true })
-      .click();
+    await clickProjected(
+      child.getByRole('button', { name: 'Child action', exact: true }),
+    );
     await child
       .getByRole('button', { name: 'Source action confirmed', exact: true })
       .waitFor();
     stage = 'navigation';
     await sourcePage.goto(origin + '/next');
-    await child
-      .getByRole('button', { name: 'Child action', exact: true })
-      .click();
+    await clickProjected(
+      child.getByRole('button', { name: 'Child action', exact: true }),
+    );
     await child
       .getByRole('button', { name: 'Source action confirmed', exact: true })
       .waitFor();

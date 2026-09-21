@@ -1,3 +1,4 @@
+import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -52,7 +53,9 @@ test(
     await source.waitForFunction(
       () => !document.querySelector('video')!.paused,
     );
-    await viewer.frameLocator('#viewport iframe').locator('#count').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#count'),
+    );
     await source.waitForFunction(() => (window as any).clicks === 1, null, {
       timeout: 1500,
     });
@@ -81,7 +84,9 @@ test(
         exact: true,
       })
       .waitFor({ timeout: 2000 });
-    await viewer.frameLocator('#viewport iframe').locator('#count').click();
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('#count'),
+    );
     await source.waitForFunction(() => (window as any).clicks === 2, null, {
       timeout: 1500,
     });

@@ -10,6 +10,51 @@ import {
 
 const scrollPlugin = 'floebrowser:live-scroll';
 const selectionPlugin = 'floebrowser:live-selection';
+const frameDocumentPlugin = 'floebrowser:frame-document';
+
+/** A child can attach first as an empty document and then as its complete
+ * snapshot with the same rrweb id. Retire its old mirror before rebuilding;
+ * rrweb otherwise reuses the matching Document and skips its new children. */
+export function liveEvents(
+  event: eventWithTime,
+  timestamp: number,
+): eventWithTime[] {
+  if (
+    event.type === EventType.IncrementalSnapshot &&
+    event.data.source === IncrementalSource.Mutation &&
+    event.data.isAttachIframe
+  )
+    return [
+      {
+        type: EventType.Plugin,
+        timestamp,
+        data: {
+          plugin: frameDocumentPlugin,
+          payload: event.data.adds.map((addition) => addition.parentId),
+        },
+      },
+      liveEvent(event, timestamp),
+    ];
+  return [liveEvent(event, timestamp)];
+}
+
+export const liveFrameDocuments: NonNullable<playerConfig['plugins']>[number] =
+  {
+    handler(event, _isSync, { replayer }) {
+      if (
+        event.type !== EventType.Plugin ||
+        event.data.plugin !== frameDocumentPlugin
+      )
+        return;
+      const mirror = replayer.getMirror();
+      for (const id of event.data.payload as number[]) {
+        const frame = mirror.getNode(id) as HTMLIFrameElement | null;
+        if (!frame || !['IFRAME', 'FRAME'].includes(frame.nodeName)) continue;
+        const doc = frame.contentDocument;
+        if (doc) mirror.removeNodeFromMap(doc);
+      }
+    },
+  };
 
 /** Keep scroll positions in replay order, without rrweb's second animation. */
 export function liveEvent(

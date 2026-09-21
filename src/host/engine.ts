@@ -39,6 +39,7 @@ import { ResourceStore } from './resources.js';
 import { FrameBridge } from './frames.js';
 import { SourceFind } from './find.js';
 import { DownloadTransfers } from './downloads.js';
+import { interactionAttributes } from '../shared/style.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
 import {
@@ -653,6 +654,33 @@ export class BrowserProjection {
             removes: [],
             texts: [],
             attributes: [{ id, attributes: {}, floeStylesheet: stylesheet }],
+          },
+        } as unknown as eventWithTime);
+      return;
+    }
+    if (
+      event.type === EventType.Custom &&
+      event.data.tag === 'floebrowser:interaction'
+    ) {
+      const { id, state } = event.data.payload as any;
+      if (
+        Number.isInteger(id) &&
+        id > 0 &&
+        state &&
+        Object.keys(state).length === 5 &&
+        Object.keys(interactionAttributes).every(
+          (name) => typeof state[name] === 'boolean',
+        )
+      )
+        this.recorded({
+          type: 3,
+          timestamp: event.timestamp,
+          data: {
+            source: 0,
+            adds: [],
+            removes: [],
+            texts: [],
+            attributes: [{ id, attributes: {}, floeInteraction: state }],
           },
         } as unknown as eventWithTime);
       return;
@@ -1530,6 +1558,10 @@ export class BrowserProjection {
         modifiers: action.modifiers,
       });
       if (action.phase === 'up') this.heldButtons.delete(action.button);
+      return;
+    }
+    if (action.kind === 'release_input') {
+      await this.releaseInput();
       return;
     }
     if (action.kind === 'text') {

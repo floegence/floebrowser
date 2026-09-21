@@ -2,6 +2,18 @@
 export const STYLESHEET_LINK_ATTRIBUTE = 'data-floebrowser-stylesheet-link';
 export const CANVAS_ATTRIBUTE = 'data-floebrowser-canvas';
 export const MATHML_ATTRIBUTE = 'data-floebrowser-mathml';
+export const INPUT_PROXY_ATTRIBUTE = 'data-floebrowser-input-proxy';
+export const interactionAttributes = {
+  hover: 'data-floebrowser-hover',
+  active: 'data-floebrowser-active',
+  focus: 'data-floebrowser-focus',
+  'focus-visible': 'data-floebrowser-focus-visible',
+  'focus-within': 'data-floebrowser-focus-within',
+} as const;
+export type InteractionState = Record<
+  keyof typeof interactionAttributes,
+  boolean
+>;
 export const styleAttributes: Record<string, string> = {
   href: 'data-floebrowser-href',
   src: 'data-floebrowser-src',

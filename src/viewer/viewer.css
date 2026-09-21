@@ -24,6 +24,18 @@
   display: block;
   background: #fff;
 }
+.floe-input-surface {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+.floe-input-proxy {
+  position: absolute;
+  box-sizing: border-box;
+  transform-origin: top left;
+  margin: 0;
+  resize: none;
+}
 .floe-input-sink {
   position: absolute !important;
   width: 1px !important;
