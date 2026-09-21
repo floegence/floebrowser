@@ -46,6 +46,8 @@ export interface SourcePage {
   navigate(url: string): Promise<void>;
   traverse(direction: -1 | 1): Promise<void>;
   reload(): Promise<void>;
+  /** Cancel pending navigation/loading; must not wait behind that navigation. */
+  stop(): Promise<void>;
   bringToFront(): Promise<void>;
   isClosed(): boolean;
   /** Explicit host policy, not disposal of a projection. */

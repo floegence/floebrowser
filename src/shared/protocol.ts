@@ -81,7 +81,7 @@ export const actionSchema = z.discriminatedUnion('kind', [
         ),
     })
     .strict(),
-  z.object({ kind: z.enum(['back', 'forward', 'reload']) }).strict(),
+  z.object({ kind: z.enum(['back', 'forward', 'reload', 'stop']) }).strict(),
   z
     .object({
       kind: z.literal('media'),
@@ -149,6 +149,7 @@ export type BrowserState = {
   url: string;
   title: string;
   status: 'loading' | 'ready' | 'error' | 'closed';
+  loading: boolean;
   width: number;
   height: number;
   canGoBack: boolean;
@@ -156,7 +157,13 @@ export type BrowserState = {
 };
 export type TabState = {
   active: string;
-  tabs: Array<{ id: string; title: string; url: string; pinned?: boolean }>;
+  tabs: Array<{
+    id: string;
+    title: string;
+    url: string;
+    pinned?: boolean;
+    loading?: boolean;
+  }>;
 };
 export const mediaStateSchema = z
   .object({

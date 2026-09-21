@@ -328,9 +328,9 @@ test('a failed tab admission rejects input promptly and allows another tab to ta
     });
     assert.ok(
       messages.some(
-        (m) => m.type === 'ack' && m.id === 2 && m.code === 'action_failed',
+        (m) => m.type === 'ack' && m.id === 2 && m.code === 'not_allowed',
       ),
-      'Commands without an admitted controller must be acknowledged as rejected',
+      'Commands without an admitted controller must be rejected by the host grant',
     );
     await controller.receive({
       type: 'command',

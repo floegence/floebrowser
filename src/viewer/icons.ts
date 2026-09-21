@@ -1,4 +1,5 @@
 const paths = {
+  reload: '<path d="M19 11a7 7 0 1 0-1 5M19 4v7h-7"/>',
   play: '<path d="m8 5 10 7-10 7Z" fill="currentColor" stroke="none"/>',
   pause: '<path d="M8 6v12M16 6v12" stroke-width="3"/>',
   sound:

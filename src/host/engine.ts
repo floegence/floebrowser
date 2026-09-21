@@ -156,6 +156,7 @@ export class BrowserProjection {
       url: page.url(),
       title: '',
       status: 'loading',
+      loading: false,
       canGoBack: false,
       canGoForward: false,
       ...viewport,
@@ -215,6 +216,12 @@ export class BrowserProjection {
       await this.cdp.send('Page.getFrameTree')
     ).frameTree.frame.id;
     this.contextID = this.page.mainFrame().contextID;
+    this.listen(this.cdp, 'Page.frameStartedLoading', ({ frameId }) => {
+      if (frameId === this.mainFrameID) this.updateState({ loading: true });
+    });
+    this.listen(this.cdp, 'Page.frameStoppedLoading', ({ frameId }) => {
+      if (frameId === this.mainFrameID) this.updateState({ loading: false });
+    });
     this.listen(this.cdp, 'Runtime.executionContextCreated', ({ context }) => {
       if (
         context.auxData?.isDefault &&
@@ -401,6 +408,10 @@ export class BrowserProjection {
   }
 
   private recorded(event: eventWithTime): void {
+    // A Chromium network-error document is browser UI, not website content.
+    // Its recorder checkpoint must never turn a failed navigation into a ready
+    // projection or replace the failed address with chrome-error://chromewebdata.
+    if (this.page.url().startsWith('chrome-error:')) return;
     if (event.type === EventType.Meta) {
       this.metadata = event;
       return;
@@ -649,7 +660,10 @@ export class BrowserProjection {
         watcher.visible = visible;
         if (!this.domWatched) this.epoch = '';
         if (!visible) await watcher.control?.close();
-        if (visible) await this.snapshot();
+        if (visible) {
+          watcher.send({ type: 'state', state: this.currentState });
+          await this.snapshot();
+        }
         await this.setMedia(this.mediaWatched);
         if (visible)
           for (const capture of this.captures.values())
@@ -1049,7 +1063,7 @@ export class BrowserProjection {
       return Promise.resolve();
     }
     viewer.pending++;
-    this.queue = this.queue.then(async () => {
+    const work = async () => {
       try {
         if (!viewer.active || this.viewer !== viewer) return;
         const independent = documentIndependent(message.action);
@@ -1085,7 +1099,15 @@ export class BrowserProjection {
       } finally {
         viewer.pending--;
       }
-    });
+    };
+    if (message.action.kind === 'stop') {
+      // A cancellation interrupts the awaited navigation, not the input order.
+      // Later effects still wait for both the old work and this cancellation.
+      const cancellation = work();
+      this.queue = Promise.all([this.queue, cancellation]).then(() => {});
+      return cancellation;
+    }
+    this.queue = this.queue.then(work);
     return this.queue;
   }
 
@@ -1185,6 +1207,12 @@ export class BrowserProjection {
       return;
     }
     if (action.kind.startsWith('tab_')) throw new CommandError('unsupported');
+    if (action.kind === 'stop') {
+      await this.page.stop();
+      this.updateState({ loading: false });
+      void this.refreshState();
+      return;
+    }
     if (action.kind === 'navigate') {
       await this.page.navigate(action.url);
       return;
@@ -1479,7 +1507,7 @@ class CommandError extends Error {
   }
 }
 function documentIndependent(action: Action): boolean {
-  return ['navigate', 'back', 'forward', 'reload', 'viewport'].includes(
+  return ['navigate', 'back', 'forward', 'reload', 'stop', 'viewport'].includes(
     action.kind,
   );
 }

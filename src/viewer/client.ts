@@ -672,6 +672,7 @@ export class DOMBrowserView {
           'back',
           'forward',
           'reload',
+          'stop',
           'viewport',
           'tab_new',
           'tab_restore',

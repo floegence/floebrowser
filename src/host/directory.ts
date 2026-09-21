@@ -1,6 +1,11 @@
 import type { SourcePage } from './source.js';
 
-export type SourceTab = { page: SourcePage; title?: string; pinned?: boolean };
+export type SourceTab = {
+  page: SourcePage;
+  title?: string;
+  pinned?: boolean;
+  loading?: boolean;
+};
 export type DirectoryChange = { activate?: string };
 
 /** Authoritative host-granted page directory. Mutations must publish the resulting

@@ -25,6 +25,7 @@ export interface ProjectionServerOptions {
   port?: number;
   authorize: AttachOptions['authorize'];
   mediaBridge?: SourceMediaBridge;
+  onState?: AttachOptions['onState'];
 }
 
 /** Optional loopback demo carrier. Redeven can mount BrowserProjection on its own transport. */
@@ -37,6 +38,7 @@ export async function createProjectionServer(
     options.mediaBridge ?? new NativeMediaBridge(mediaExecutable());
   const session = await BrowserSession.attach(page, {
     authorize: options.authorize,
+    onState: options.onState,
     mediaBridge,
     onMediaFrame: (frame) => active?.sender?.push(frame),
     onMediaRetired: (scope) =>

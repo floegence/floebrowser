@@ -80,6 +80,7 @@ export function mountBrowser(
   let editTabs = true;
   let ready = false;
   let changingTab = false;
+  let loading = false;
   let canGoBack = false;
   let canGoForward = false;
   let offerTakeover = false;
@@ -138,6 +139,15 @@ export function mountBrowser(
     const selected = desiredTab();
     const pending = switching();
     stage.classList.toggle('switching', connected && pending);
+    stage.classList.toggle('loading', connected && loading);
+    element('reload').title = text(
+      loading ? 'navigation.stop' : 'navigation.reload',
+    );
+    element('reload').setAttribute(
+      'aria-label',
+      text(loading ? 'navigation.stop' : 'navigation.reloadPage'),
+    );
+    setIcon(element('reload'), loading ? 'close' : 'reload');
     viewport.inert = !connected || !ready || pending;
     for (const [id, item] of rows) {
       item.row.classList.toggle('active', id === selected);
@@ -156,7 +166,7 @@ export function mountBrowser(
     address.disabled = !connected;
     address.readOnly = !controlling && !pending;
     element<HTMLButtonElement>('address-go').disabled =
-      !connected || !controlling;
+      !connected || (!controlling && !pending);
     element('take-control').hidden =
       !connected || !tabState.active || controlling || !options.onTakeControl;
     element<HTMLButtonElement>('take-control').disabled = takingControl;
@@ -212,6 +222,15 @@ export function mountBrowser(
     const url = target?.url ?? sourceURL;
     address.value = url === 'about:blank' ? '' : url;
   }
+  function newTab(): void {
+    if (!connected || !editTabs) return;
+    void command({ kind: 'tab_new' });
+    address.value = '';
+    addressEditing = true;
+    // Focus belongs to the user's new-tab intent. A later admission reply
+    // must not steal it back after they have submitted an address or clicked.
+    focusAddress();
+  }
   function closingTab(id: string): boolean {
     return [current, ...commands].some(
       (command) =>
@@ -249,6 +268,8 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
+    if (previous !== state.active)
+      loading = !!state.tabs.find((tab) => tab.id === state.active)?.loading;
     const scopeChanged =
       JSON.stringify(state.tabs.map((tab) => [tab.id, tab.url])) !==
       JSON.stringify(tabState.tabs.map((tab) => [tab.id, tab.url]));
@@ -380,6 +401,7 @@ export function mountBrowser(
         const changedTab = sourceID !== state.id;
         sourceID = state.id;
         sourceURL = state.url;
+        loading = state.loading;
         canGoBack = state.canGoBack;
         canGoForward = state.canGoForward;
         if (
@@ -594,6 +616,7 @@ export function mountBrowser(
     if (composing || event.isComposing) return;
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       setAddress();
       address.select();
       hideSuggestions();
@@ -630,12 +653,10 @@ export function mountBrowser(
       choose(matches[selectedSuggestion]!);
     else if (address.value.trim()) navigate(address.value);
   });
-  element('new-tab').addEventListener('click', async () => {
-    if (await command({ kind: 'tab_new' })) focusAddress();
-  });
+  element('new-tab').addEventListener('click', newTab);
   for (const kind of ['back', 'forward', 'reload'] as const)
     element(kind).addEventListener('click', () => {
-      void command({ kind });
+      void command({ kind: kind === 'reload' && loading ? 'stop' : kind });
     });
   element('take-control').addEventListener('click', async () => {
     if (takingControl || !tabState.active) return;
@@ -661,6 +682,11 @@ export function mountBrowser(
     ? '⌘ L'
     : 'Ctrl L';
   function shortcut(event: KeyboardEvent, phase: 'down' | 'up'): boolean {
+    if (event.key === 'Escape' && !event.isComposing && loading) {
+      if (phase === 'down') void command({ kind: 'stop' });
+      event.preventDefault();
+      return true;
+    }
     if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey)
       return false;
     const key = event.key.toLowerCase();
@@ -670,13 +696,10 @@ export function mountBrowser(
     if (event.repeat) return true;
     if (key === 'l') focusAddress();
     else if (key === 'r') void command({ kind: 'reload' });
-    else if (key === 't')
-      void command({ kind: event.shiftKey ? 'tab_restore' : 'tab_new' }).then(
-        (ok) => {
-          if (ok && !event.shiftKey) focusAddress();
-        },
-      );
-    else if (key === 'w' && desiredTab()) void closeTab(desiredTab());
+    else if (key === 't') {
+      if (event.shiftKey) void command({ kind: 'tab_restore' });
+      else newTab();
+    } else if (key === 'w' && desiredTab()) void closeTab(desiredTab());
     else if (key === 'tab' && tabState.tabs.length) {
       const index = tabState.tabs.findIndex((tab) => tab.id === desiredTab());
       const next =
@@ -748,6 +771,7 @@ export function mountBrowser(
   tabMenu.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       tabMenu.hidePopover();
       rows.get(menuTab)?.select.focus();
       return;

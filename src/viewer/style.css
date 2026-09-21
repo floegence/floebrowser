@@ -312,7 +312,8 @@
 .floe-browser .stage.switching [data-floe-ui='welcome'] {
   visibility: hidden;
 }
-.floe-browser .stage.switching::after {
+.floe-browser .stage.switching::after,
+.floe-browser .stage.loading::after {
   content: '';
   position: absolute;
   top: 0;

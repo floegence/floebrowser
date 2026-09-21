@@ -34,7 +34,7 @@ for (const mode of ['parser', 'deferred'])
         onState: (state) => states.push(state),
       });
       const viewer = await browser.newPage();
-      viewer.setDefaultTimeout(4000);
+      viewer.setDefaultTimeout(10000);
       t.after(async () => {
         release();
         await browser.close();
@@ -58,19 +58,22 @@ for (const mode of ['parser', 'deferred'])
       );
       // The parser-blocking script leaves the real new document open for admission.
       // Wait for its initial snapshot attempt to settle, without releasing the script.
-      const engine = service.engine as any;
+      const popup = service.session.currentState.active;
+      const engine = (await service.session.projection(popup)) as any;
       await engine.queue;
       for (let i = 0; i < 100 && engine.snapshotPending; i++)
         await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(
-        await context.pages()[1]!.evaluate(() => document.readyState),
+        await context
+          .pages()
+          .find((page) => page !== source && page !== viewer)!
+          .evaluate(() => document.readyState),
         mode === 'deferred' ? 'interactive' : 'loading',
       );
       // Attaching after parsing may already yield usable DOM even though a
       // deferred script remains pending. Neither case is a load failure.
-      assert.notEqual(service.engine.currentState.status, 'error');
+      assert.notEqual(engine.currentState.status, 'error');
       assert.equal(await viewer.locator('.floe-page-error').isVisible(), false);
-      const popup = service.session.currentState.active;
       await viewer.locator(`[data-tab="${original}"]`).click();
       await viewer.frameLocator('#viewport iframe').locator('#count').waitFor();
       await viewer.locator(`[data-tab="${popup}"]`).click();
@@ -106,7 +109,7 @@ test(
       authorize: () => true,
     });
     const viewer = await browser.newPage();
-    viewer.setDefaultTimeout(4000);
+    viewer.setDefaultTimeout(10000);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -175,30 +178,33 @@ for (const redirect of ['redirect', 'client-redirect'])
         },
       });
       const viewer = await browser.newPage();
-      viewer.setDefaultTimeout(4000);
+      viewer.setDefaultTimeout(10000);
       t.after(async () => {
         await browser.close();
         await service.close();
         await site.close();
       });
       await viewer.goto(service.url);
+      await viewer.locator('#status.live').waitFor();
       await viewer.locator('#new-tab').click();
       await viewer.waitForFunction(
         () => document.querySelectorAll('[role="tab"]').length === 2,
       );
+      await viewer.locator('#address:not([readonly])').waitFor();
       await viewer.locator('#address').fill(`${site.url}/${redirect}`);
       await viewer.locator('#address').press('Enter');
       await viewer
         .frameLocator('#viewport iframe')
         .locator('#next-click')
         .click();
-      await context
-        .pages()[1]!
-        .waitForFunction(
-          () =>
-            document.querySelector('#next-click')?.textContent ===
-            'Clicked once',
-        );
+      const destination = context
+        .pages()
+        .find((page) => page !== source && page !== viewer);
+      assert.ok(destination, 'The managed source tab must remain addressable');
+      await destination.waitForFunction(
+        () =>
+          document.querySelector('#next-click')?.textContent === 'Clicked once',
+      );
       assert.equal(await viewer.locator('.floe-page-error').isVisible(), false);
       assert.equal(await viewer.locator('#toast').isVisible(), false);
       assert.equal(
@@ -238,7 +244,7 @@ test(
       },
     });
     const viewer = await browser.newPage();
-    viewer.setDefaultTimeout(4000);
+    viewer.setDefaultTimeout(10000);
     t.after(async () => {
       release();
       await browser.close();

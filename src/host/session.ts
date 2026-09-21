@@ -202,13 +202,14 @@ export class BrowserSession {
   private state(viewer?: Viewer): TabState {
     return {
       active: viewer?.selected ?? this.resumeTab,
-      tabs: this.entries(viewer).map(({ page, title, pinned }) => {
+      tabs: this.entries(viewer).map(({ page, title, pinned, loading }) => {
         const state = this.tabs.get(page.id)?.engine.currentState;
         return {
           id: page.id,
           title: state?.title || title || '',
           url: state?.url || page.url(),
           pinned: !!pinned,
+          loading: state?.loading ?? !!loading,
         };
       }),
     };
@@ -315,7 +316,11 @@ export class BrowserSession {
       return false;
     }
     viewer.controller = controller;
-    void tab.page.bringToFront().catch(() => {});
+    // Chromium can retry an error document when its target is foregrounded.
+    // Selecting or reconnecting that view must preserve the failure until the
+    // user explicitly navigates or reloads, for embedded and standalone views.
+    if (tab.engine.currentState.status !== 'error')
+      void tab.page.bringToFront().catch(() => {});
     return true;
   }
   private async select(viewer: Viewer, id: string): Promise<void> {

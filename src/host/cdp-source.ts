@@ -38,6 +38,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   private mainID = '';
   private size: SourceViewport | null;
   private closed = false;
+  private navigations = new Set<() => void>();
   private disposed = false;
   private constructor(private options: CDPSourceOptions) {
     super();
@@ -84,6 +85,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       const current = this.frame(frame.id, transport);
       current.transport = transport;
       current.address = frame.url;
+      current.loaderID = frame.loaderId ?? current.loaderID;
       if (frame.parentId) current.parentID = frame.parentId;
       if (transport === this.transport && !frame.parentId)
         this.mainID = frame.id;
@@ -154,6 +156,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     this.sessionMap.set(transport, entry);
     entry.ready = (async () => {
       await transport.send('Page.enable');
+      await transport.send('Page.setLifecycleEventsEnabled', { enabled: true });
       const { frameTree } = await transport.send('Page.getFrameTree');
       const visit = (tree: any) => {
         navigate(tree.frame);
@@ -245,23 +248,82 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   reload(): Promise<void> {
     return this.navigation('Page.reload');
   }
+  async stop(): Promise<void> {
+    // Cancellation is control traffic: it must reach Chromium while navigate()
+    // is still waiting for a response or a document commit.
+    for (const cancel of this.navigations) cancel();
+    await this.transport.send('Page.stopLoading');
+  }
   private async navigation(method: string, parameters?: any): Promise<void> {
-    let ready!: () => void;
+    let ready!: () => void, cancel!: () => void;
     const loaded = new Promise<void>((resolve) => {
       ready = resolve;
     });
-    const sameDocument = ({ frameId }: { frameId: string }) => {
-      if (frameId === this.mainID) ready();
+    const cancelled = new Promise<void>((resolve) => {
+      cancel = resolve;
+    });
+    this.navigations.add(cancel);
+    const initialLoader = this.frameMap.get(this.mainID)?.loaderID;
+    let targetLoader: string | undefined;
+    const loadedIDs = new Set<string>();
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleReady = () => {
+      clearTimeout(settleTimer);
+      // A document can synchronously replace itself from an inline script. Do
+      // not expose the first intermediate snapshot as a completed navigation.
+      settleTimer = setTimeout(() => ready(), 25);
     };
-    this.transport.on('Page.domContentEventFired', ready);
-    this.transport.on('Page.navigatedWithinDocument', sameDocument);
+    const lifecycle = ({
+      frameId,
+      loaderId,
+      name,
+    }: {
+      frameId: string;
+      loaderId: string;
+      name: string;
+    }) => {
+      if (frameId !== this.mainID || name !== 'DOMContentLoaded') return;
+      loadedIDs.add(loaderId);
+      if (loaderId === targetLoader) scheduleReady();
+    };
+    const committed = ({
+      frame,
+    }: {
+      frame: { id: string; loaderId: string };
+    }) => {
+      if (frame.id !== this.mainID || frame.loaderId === initialLoader) return;
+      // Redirects and client-side replacements can commit a newer loader after
+      // Page.navigate has already returned. Follow the last committed loader
+      // for every navigation method.
+      targetLoader = frame.loaderId;
+      clearTimeout(settleTimer);
+      if (loadedIDs.has(targetLoader)) scheduleReady();
+    };
+    this.transport.on('Page.lifecycleEvent', lifecycle);
+    this.transport.on('Page.frameNavigated', committed);
+    const withinDocument = ({ frameId }: { frameId: string }) => {
+      // History traversal can select a hash entry without creating a loader.
+      // Page.navigate reports the same-document case explicitly, while
+      // Page.navigateToHistoryEntry only emits this event.
+      if (method !== 'Page.navigate' && frameId === this.mainID) ready();
+    };
+    this.transport.on('Page.navigatedWithinDocument', withinDocument);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await this.transport.send(method, parameters);
-      if (result.isDownload) return;
-      if (result.errorText) throw new Error('Source navigation failed');
+      const work = (async () => {
+        const result = await this.transport.send(method, parameters);
+        if (result.isDownload) return;
+        if (result.errorText) throw new Error('Source navigation failed');
+        if (method === 'Page.navigate') {
+          if (!result.loaderId) return; // Chromium confirmed a same-document navigation.
+          targetLoader = result.loaderId;
+          if (loadedIDs.has(result.loaderId)) scheduleReady();
+        }
+        await loaded;
+      })();
       await Promise.race([
-        loaded,
+        work,
+        cancelled,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error('Source navigation timed out')),
@@ -270,9 +332,12 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
         }),
       ]);
     } finally {
+      this.navigations.delete(cancel);
       clearTimeout(timer);
-      this.transport.off('Page.domContentEventFired', ready);
-      this.transport.off('Page.navigatedWithinDocument', sameDocument);
+      clearTimeout(settleTimer);
+      this.transport.off('Page.lifecycleEvent', lifecycle);
+      this.transport.off('Page.frameNavigated', committed);
+      this.transport.off('Page.navigatedWithinDocument', withinDocument);
     }
   }
   bringToFront(): Promise<void> {
@@ -318,6 +383,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
 class CDPFrame implements SourceFrame {
   contextID = 0;
   address = 'about:blank';
+  loaderID = '';
   parentID = '';
   constructor(
     private page: CDPSourcePage,

@@ -13,6 +13,7 @@ export const englishMessages = {
   'navigation.label': 'Browser navigation',
   'navigation.back': 'Back',
   'navigation.forward': 'Forward',
+  'navigation.stop': 'Stop loading',
   'navigation.reload': 'Reload',
   'navigation.reloadPage': 'Reload source page',
   'address.label': 'Website address',

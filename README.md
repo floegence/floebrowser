@@ -186,6 +186,17 @@ remote input message can manufacture this grant.
 
 The standalone `BrowserSession.connect` returns a `SessionConnection` that controls its observation's media lifetime independently. The carrier admits DOM and control first, enables media only after its separate authorized socket connects, and suspends capture when that socket closes. A media failure cannot revoke browser input. The session retains visited tabs' authorized background audio observations across selection, without sending background DOM or pictures. Media states name their source target, and the viewer keys playback by target and stream, independently of DOM epochs. The media panel offers **Open tab** for a background source; locating it does not start playback. Closing its source tab or the viewing session retires its decoders. `BrowserProjection.connect` remains the convenience API for hosts that grant viewing and input together.
 
+Source loading is distinct from DOM readiness. The reload control becomes
+**Stop loading** while Chromium reports a load, and Escape from the page stops
+it. Stop is an authorized cancellation: it can interrupt the pending navigation
+wait while later input remains ordered behind both operations. Intentional
+cancellation preserves the current document and does not display a navigation
+failure. A navigation deadline includes waiting for the initial CDP response,
+not only the eventual document event.
+Chromium network-error documents are not replayed as website DOM. Selecting or
+reconnecting a failed tab keeps the original failed address and error state;
+only explicit navigation or reload requests the site again.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:
