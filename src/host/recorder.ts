@@ -33,6 +33,14 @@ export function installRecorder(binding: string, key: string): void {
   const frameIDs = new Set<number>();
   const styleBases = new Map<number, string>();
   const styleSheets = new Map<number, WeakRef<CSSStyleSheet>>();
+  // Keep authored syntax only while it represents the live stylesheet. CSSOM
+  // edits do not update a style element's text and must survive reconstruction.
+  const authoredStyles = new WeakMap<
+    Element,
+    { text: string; serialized: string }
+  >();
+  const serializeSheet = (sheet: CSSStyleSheet) =>
+    Array.from(sheet.cssRules, (rule) => rule.cssText).join('\n');
   let styleIDs = new WeakMap<CSSStyleSheet, number>();
   let lastTitle = document.title;
   let mediaActive = false;
@@ -56,10 +64,30 @@ export function installRecorder(binding: string, key: string): void {
   ): SourceStylesheet => {
     let text: string | null = captured ?? null;
     try {
-      if (text === null && element.sheet)
-        text = Array.from(element.sheet.cssRules, (rule) => rule.cssText).join(
-          '\n',
-        );
+      if (element.sheet) {
+        const serialized = serializeSheet(element.sheet);
+        if (element.localName === 'style') {
+          const authored = element.textContent ?? '';
+          let cached = authoredStyles.get(element);
+          if (!cached || cached.text !== authored) {
+            // An inert document has no browsing context or resource loader. It
+            // parses imports too, unlike a constructed CSSStyleSheet. Compare
+            // CSSOM forms, but transmit the authored shorthand when equivalent:
+            // Chromium serializes pending var() shorthand longhands as empty.
+            const inert =
+              element.ownerDocument.implementation.createHTMLDocument();
+            const style = inert.createElement('style');
+            style.textContent = authored;
+            inert.head.append(style);
+            cached = {
+              text: authored,
+              serialized: serializeSheet(style.sheet!),
+            };
+            authoredStyles.set(element, cached);
+          }
+          text = cached.serialized === serialized ? cached.text : serialized;
+        } else if (text === null) text = serialized;
+      }
     } catch {
       /* Cross-origin sheets use captured source responses. */
     }

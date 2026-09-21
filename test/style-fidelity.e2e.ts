@@ -601,24 +601,18 @@ test('MathML retains native layout and node identities across live edits and rec
   await eventually(verify);
 });
 
-test(
-  'custom-property border shorthands survive later longhand overrides',
-  {
-    todo: 'Chromium CSSOM drops pending shorthand values; requires authored stylesheet recovery',
-  },
-  async (t) => {
-    const { source, root } = await setup(
-      t,
-      `<style>:root{--line:1px}#panel{width:200px;border:var(--line) solid;border-color:red}</style><div id="panel">Border</div>`,
-    );
-    await eventually(async () =>
-      assert.deepEqual(
-        await root.locator('#panel').evaluate(appearance),
-        await source.locator('#panel').evaluate(appearance),
-      ),
-    );
-  },
-);
+test('custom-property border shorthands survive later longhand overrides', async (t) => {
+  const { source, root } = await setup(
+    t,
+    `<style>:root{--line:1px}#panel{width:200px;border:var(--line) solid;border-color:red}</style><div id="panel">Border</div>`,
+  );
+  await eventually(async () =>
+    assert.deepEqual(
+      await root.locator('#panel').evaluate(appearance),
+      await source.locator('#panel').evaluate(appearance),
+    ),
+  );
+});
 
 test('live entry animations reveal content and preserve explicitly paused source animations', async (t) => {
   const { source, viewer, root } = await setup(
