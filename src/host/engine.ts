@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
-import type { Page, CDPSession } from 'playwright';
+import type { Page } from 'playwright';
+import type { SourcePage, SourceTransport } from './source.js';
+import { PlaywrightSourceBrowser } from './playwright-source.js';
 import {
   clientMessageSchema,
   sourceMediaPacketSchema,
@@ -24,7 +26,7 @@ import { mapWheelPoint } from '../shared/wheel.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
 import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
 
-const attachedPages = new WeakSet<Page>();
+const attachedPages = new WeakSet<object>();
 
 export interface AttachOptions {
   /** Source-host-only element collector; the host owns this shared bridge. */
@@ -41,7 +43,7 @@ export interface AttachOptions {
   /** Resolves an opaque resource ID through the host's authorized carrier. */
   resourceURL?: (id: string, tab: string) => string;
   onState?: (state: BrowserState) => void;
-  onPopup?: (page: Page) => void;
+  onPopup?: (page: SourcePage) => void;
 }
 export interface Controller {
   receive(message: ClientMessage): Promise<void>;
@@ -85,7 +87,8 @@ type Viewer = {
 
 /** One source page and input queue, with independently authorized observers. */
 export class BrowserProjection {
-  readonly id = randomBytes(18).toString('base64url');
+  readonly id: string;
+  private ownedSource?: PlaywrightSourceBrowser;
   readonly resources: ResourceStore;
   private projection: DOMProjection;
   private frames!: FrameBridge;
@@ -125,10 +128,11 @@ export class BrowserProjection {
   private disposers: Array<() => void> = [];
 
   private constructor(
-    private page: Page,
-    private cdp: CDPSession,
+    private page: SourcePage,
+    private cdp: SourceTransport,
     private options: AttachOptions,
   ) {
+    this.id = page.id;
     this.resources = new ResourceStore(
       cdp,
       (message) => this.send({ type: 'notice', message }),
@@ -150,23 +154,35 @@ export class BrowserProjection {
   }
 
   static async attach(
-    page: Page,
+    page: Page | SourcePage,
     options: AttachOptions,
   ): Promise<BrowserProjection> {
     if (attachedPages.has(page))
       throw new Error('This page already has a FloeBrowser projection.');
     attachedPages.add(page);
     let engine: BrowserProjection | undefined;
+    let owner: PlaywrightSourceBrowser | undefined;
     try {
-      const cdp = await page.context().newCDPSession(page);
-      engine = new BrowserProjection(page, cdp, options);
+      owner = 'transport' in page ? undefined : new PlaywrightSourceBrowser();
+      const source = 'transport' in page ? page : await owner!.adopt(page);
+      if (source !== page && attachedPages.has(source))
+        throw new Error('This page already has a FloeBrowser projection.');
+      attachedPages.add(source);
+      engine = new BrowserProjection(source, source.transport, options);
+      engine.ownedSource = owner;
+      engine.disposers.push(() => attachedPages.delete(page));
       await engine.initialize();
       return engine;
     } catch (error) {
       await engine?.close();
+      await owner?.dispose();
       attachedPages.delete(page);
       throw error;
     }
+  }
+
+  get source(): SourcePage {
+    return this.page;
   }
 
   get hasController(): boolean {
@@ -189,6 +205,7 @@ export class BrowserProjection {
     this.mainFrameID = (
       await this.cdp.send('Page.getFrameTree')
     ).frameTree.frame.id;
+    this.contextID = this.page.mainFrame().contextID;
     this.listen(this.cdp, 'Runtime.executionContextCreated', ({ context }) => {
       if (
         context.auxData?.isDefault &&
@@ -259,7 +276,7 @@ export class BrowserProjection {
       this.clearMedia();
       this.updateState({ status: 'error' });
     });
-    this.listen(this.page, 'popup', (page: Page) =>
+    this.listen(this.page, 'popup', (page: SourcePage) =>
       this.options.onPopup
         ? this.options.onPopup(page)
         : this.send({
@@ -1086,25 +1103,19 @@ export class BrowserProjection {
     }
     if (action.kind.startsWith('tab_')) throw new CommandError('unsupported');
     if (action.kind === 'navigate') {
-      await this.page.goto(action.url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 20000,
-      });
+      await this.page.navigate(action.url);
       return;
     }
     if (action.kind === 'back') {
-      await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: 20000 });
+      await this.page.traverse(-1);
       return;
     }
     if (action.kind === 'forward') {
-      await this.page.goForward({
-        waitUntil: 'domcontentloaded',
-        timeout: 20000,
-      });
+      await this.page.traverse(1);
       return;
     }
     if (action.kind === 'reload') {
-      await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+      await this.page.reload();
       return;
     }
     if (action.kind === 'pointer' || action.kind === 'wheel') {
@@ -1366,7 +1377,7 @@ export class BrowserProjection {
     await this.cdp
       .send('Runtime.removeBinding', { name: this.binding })
       .catch(() => {});
-    await this.cdp.detach().catch(() => {});
+    await this.ownedSource?.dispose();
     this.resources.close();
     attachedPages.delete(this.page);
   }

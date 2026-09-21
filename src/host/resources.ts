@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { CDPSession } from 'playwright';
+import type { SourceTransport } from './source.js';
 import parseCSS from 'postcss-safe-parser';
 import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
@@ -109,15 +109,16 @@ export class ResourceStore {
   private requests = new Map<string, ResponseMetadata>();
   private inFlight = 0;
   private nextSession = 0;
-  private disposers = new Set<() => void>();
+  private disposers = new Map<SourceTransport, () => void>();
 
   constructor(
-    private cdp: CDPSession,
+    private cdp: SourceTransport,
     private notice: (message: string) => void = () => {},
     private resourceURL: (id: string) => string = (id) => `/_floe/assets/${id}`,
   ) {}
 
   async start(cdp = this.cdp): Promise<void> {
+    if (this.closed || this.disposers.has(cdp)) return;
     const prefix = `${++this.nextSession}:`;
     let disposed = false;
     let generation = 0;
@@ -197,10 +198,10 @@ export class ResourceStore {
       cdp.off('close', dispose);
       for (const id of this.requests.keys())
         if (id.startsWith(prefix)) this.requests.delete(id);
-      this.disposers.delete(dispose);
+      this.disposers.delete(cdp);
     };
-    this.disposers.add(dispose);
-    cdp.once('close', dispose);
+    this.disposers.set(cdp, dispose);
+    cdp.on('close', dispose);
     try {
       await cdp.send('Network.enable', {
         maxTotalBufferSize: MAX_TOTAL_BYTES,
@@ -218,7 +219,7 @@ export class ResourceStore {
   }
 
   private async captureLoaded(
-    cdp: CDPSession,
+    cdp: SourceTransport,
     obsolete: () => boolean,
   ): Promise<void> {
     const { frameTree } = await cdp.send('Page.getResourceTree');
@@ -381,7 +382,7 @@ export class ResourceStore {
   private async capture(
     requestID: string,
     response: ResponseMetadata,
-    cdp: CDPSession,
+    cdp: SourceTransport,
   ): Promise<void> {
     const url = new URL(response.url);
     url.hash = '';
@@ -473,9 +474,13 @@ export class ResourceStore {
     };
   }
 
+  stop(transport: SourceTransport): void {
+    this.disposers.get(transport)?.();
+  }
+
   close(): void {
     this.closed = true;
-    for (const dispose of this.disposers) dispose();
+    for (const dispose of this.disposers.values()) dispose();
     this.requests.clear();
     for (const resource of this.byURL.values())
       for (const resolve of resource.waiters) resolve();

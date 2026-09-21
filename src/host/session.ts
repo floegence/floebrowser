@@ -1,4 +1,6 @@
 import type { Page } from 'playwright';
+import type { SourcePage } from './source.js';
+import { PlaywrightSourceBrowser } from './playwright-source.js';
 import {
   BrowserProjection,
   type AttachOptions,
@@ -13,7 +15,7 @@ import {
   type TabState,
 } from '../shared/protocol.js';
 
-type Tab = { page: Page; engine: BrowserProjection };
+type Tab = { page: SourcePage; engine: BrowserProjection };
 type Viewer = {
   active: boolean;
   send: (message: ServerMessage) => void;
@@ -31,23 +33,33 @@ export interface SessionConnection extends Controller {
 /** Owns one initial page, its popups and explicitly created tabs; never adopts unrelated pages. */
 export class BrowserSession {
   private tabs = new Map<string, Tab>();
-  private adding = new Map<Page, Promise<Tab>>();
+  private adding = new Map<SourcePage, Promise<Tab>>();
   private selected = '';
   private selectionRevision = 0;
   private viewer?: Viewer;
   private queue = Promise.resolve();
   private closing?: Promise<void>;
   private constructor(
-    private initial: Page,
+    private initial: SourcePage,
     private options: AttachOptions,
+    private owner?: PlaywrightSourceBrowser,
   ) {}
 
   static async attach(
-    page: Page,
+    page: Page | SourcePage,
     options: AttachOptions,
   ): Promise<BrowserSession> {
-    const session = new BrowserSession(page, options);
-    const tab = await session.add(page);
+    const owner =
+      'transport' in page ? undefined : new PlaywrightSourceBrowser();
+    const source = 'transport' in page ? page : await owner!.adopt(page);
+    const session = new BrowserSession(source, options, owner);
+    let tab: Tab;
+    try {
+      tab = await session.add(source);
+    } catch (error) {
+      await owner?.dispose();
+      throw error;
+    }
     session.selected = tab.engine.id;
     return session;
   }
@@ -77,7 +89,7 @@ export class BrowserSession {
     this.queue = result.catch(() => {});
     return result;
   }
-  private add(page: Page): Promise<Tab> {
+  private add(page: SourcePage): Promise<Tab> {
     if (this.closing) return Promise.reject(new Error('Session closed'));
     const existing = [...this.tabs.values()].find((tab) => tab.page === page);
     if (existing) return Promise.resolve(existing);
@@ -196,7 +208,7 @@ export class BrowserSession {
       const next = ids[index + 1] ?? ids[index - 1];
       if (next) await this.select(next);
       else {
-        const fresh = await this.add(await this.initial.context().newPage());
+        const fresh = await this.add(await this.initial.createPage());
         await this.select(fresh.engine.id);
       }
     }
@@ -303,7 +315,7 @@ export class BrowserSession {
       if (!viewer.active || message.tab !== this.selected) return;
       operation = (async () => {
         if (action.kind === 'tab_new') {
-          const tab = await this.add(await this.initial.context().newPage());
+          const tab = await this.add(await this.initial.createPage());
           if (viewer.active && revision === this.selectionRevision)
             await this.select(tab.engine.id);
         } else if (action.kind === 'tab_move') {
@@ -370,6 +382,7 @@ export class BrowserSession {
         [...this.tabs.values()].map(({ engine }) => engine.close()),
       );
       this.tabs.clear();
+      await this.owner?.dispose();
     })());
   }
 }

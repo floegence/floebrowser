@@ -102,7 +102,7 @@ The standalone loopback server creates a second private WebSocket for encoded me
 
 ## Source Canvas graphics
 
-Canvas 2D and WebGL/WebGL2 images reach the source-local collector through an element data channel, then use the authorized binary carrier. The source observes native render completion and retains only the current bitmap of up to eight visible canvases per document, downscaled to a maximum 1280-pixel edge. This bounded source-local cache is necessary because WebGL normally discards its drawing buffer after presentation. It is not a recording, is never persisted, and cannot send data without the current controller. Native drawing methods keep their arguments, return values and exceptions; source context options and render scheduling are not changed. Website Canvas commands and JavaScript never execute in the viewer; rrweb Canvas recording and unsafe Canvas replay remain disabled.
+Canvas 2D and WebGL/WebGL2 images reach the source-local collector through an element data channel, then use the authorized binary carrier. The source observes native render completion and retains only the current bitmap of up to eight visible canvases per document, downscaled to a maximum 1280-pixel edge. This bounded source-local cache is necessary because WebGL normally discards its drawing buffer after presentation. It is not a recording, is never persisted, and cannot send data without an authorized media observation. Native drawing methods keep their arguments, return values and exceptions; source context options and render scheduling are not changed. Website Canvas commands and JavaScript never execute in the viewer; rrweb Canvas recording and unsafe Canvas replay remain disabled.
 
 Only the selected controlled tab encodes and forwards Canvas frames. Each sender has one encoder operation and one bounded frame in transport, with an approximately 24-fps ceiling. WebP preserves alpha. Images use 16-KiB chunks on an unordered channel with no packet retransmission; the receiver discards incomplete older frames when newer ones arrive. Each encoded image is capped at 1 MiB. An unchanged current frame is offered once per second so packet loss does not permanently blank a static scene. Pixels never enter the DOM/control carrier. Canvas uses the same target, subscription, node and stream fences as audio/video; endpoints close, new encoding stops, and pending encoded results are discarded on revocation, tab switch and removal. Source-local current state can update as the source website renders, including while another tab is selected, and is released on document removal or engine detach.
 
@@ -170,6 +170,51 @@ const server = await createProjectionServer(page, {
 console.log(server.url);
 // Later: await server.close(); The source page is not closed.
 ```
+
+## Share a host-owned source debugger
+
+`SourcePage` is the public boundary between source ownership and DOM projection.
+It supplies a stable host target ID, navigation, frames, element resolution and
+existing debugger transports. `BrowserProjection`, `BrowserSession` and the
+optional standalone server accept this interface. Recreating a projection keeps
+the source target ID; document epochs and observation generations still change.
+Closing a projection removes its recorder namespace and listeners, not the source
+page or the host's debugger connection.
+
+```ts
+import { CDPSourcePage, BrowserProjection } from '@floegence/floebrowser';
+
+const source = await CDPSourcePage.attach({
+  id: authorizedTargetID,
+  transport: sharedTargetDebugger,
+  contexts: existingDefaultContexts,
+  close: () => hostCloseTarget(authorizedTargetID),
+  createPage: () => hostCreateAuthorizedPage(),
+});
+const projection = await BrowserProjection.attach(source, {
+  authorize: authorizeCurrentController,
+});
+// The same host owner supplies child sessions; no second auto-attach owner.
+await source.addSession(childDebugger, childDefaultContexts);
+// Later: source.removeSession(childDebugger).
+```
+
+Create the adapter before enabling Runtime, or provide the existing owner's
+execution-context cache. Repeating `Runtime.enable` does not replay existing
+contexts. The adapter tracks document/context replacement after admission. The
+owner alone attaches and detaches root/child sessions and resumes newly attached
+children. It must add only children of this authorized source target; unrelated
+tabs are not discovered or admitted. The adapter never changes
+`Target.setAutoAttach`, disables shared domains, or closes a borrowed debugger.
+Its `dispose()` ends the adapter's consumers and removes its listeners.
+
+`PlaywrightSourceBrowser` is the optional owner for Playwright pages. Call
+`adopt(page, targetID)` once and share the resulting source with other authorized
+tools through `source.transport`. Its disposal detaches its own debugger sessions
+without closing pages. Passing a raw Playwright `Page` directly is a standalone
+convenience using this same adapter and projection engine. Source frame mapping
+queries the resolved node's actual owner document, including same-origin children
+recorded by their parent and Chromium frames in separate renderer processes.
 
 ## Own a source browser session
 

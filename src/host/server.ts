@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
+import type { SourcePage } from './source.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { type AttachOptions } from './engine.js';
 import { BrowserSession, type SessionConnection } from './session.js';
@@ -28,7 +29,7 @@ export interface ProjectionServerOptions {
 
 /** Optional loopback demo carrier. Redeven can mount BrowserProjection on its own transport. */
 export async function createProjectionServer(
-  page: Page,
+  page: Page | SourcePage,
   options: ProjectionServerOptions,
 ) {
   const base = `/session/${randomBytes(32).toString('base64url')}/`;

@@ -29,3 +29,17 @@ export {
   type MediaSubscription,
 } from './media-bridge.js';
 export { MediaSender, type MediaSenderLimits } from './media-carrier.js';
+
+export {
+  CDPSourcePage,
+  type CDPSourceOptions,
+  type SourceContext,
+} from './cdp-source.js';
+export { PlaywrightSourceBrowser } from './playwright-source.js';
+export type {
+  SourcePage,
+  SourceFrame,
+  SourceElement,
+  SourceTransport,
+  SourceViewport,
+} from './source.js';
