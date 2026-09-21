@@ -5,7 +5,7 @@ import { browserText } from './messages.js';
 import { WebsiteDialog } from './dialog.js';
 import { PageFind } from './find.js';
 import { PageZoom } from './zoom.js';
-import { FilePicker } from './files.js';
+import { FilePicker, type ChooseFiles } from './files.js';
 import { Downloads } from './downloads.js';
 import { browserTemplate } from './template.js';
 import {
@@ -35,6 +35,8 @@ export type BrowserOptions = Omit<
   ) => readonly AddressSuggestion[] | Promise<readonly AddressSuggestion[]>;
   /** Invoked only when a user submits a search, never while typing. */
   searchURL?: (query: string) => string;
+  /** Native host selection and upload, canceled with the source chooser. */
+  chooseFiles?: ChooseFiles;
   /** The product performs user/AI takeover through its authorized host API. */
   onTakeControl?: (target: string) => void | Promise<void>;
   /** A unique ID namespace. The standalone document uses the empty prefix. */
@@ -121,6 +123,7 @@ export function mountBrowser(
       filePickerOpen = visible;
       updateChrome();
     },
+    options.chooseFiles,
   );
   const downloads = new Downloads(
     element<HTMLButtonElement>('downloads'),

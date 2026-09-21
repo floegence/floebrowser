@@ -235,6 +235,18 @@ upload identifiers. `mountBrowser` offers a local picker with source origin,
 cancel and transfer progress. Web clients require a new local gesture to open
 that picker after the remote request arrives.
 
+Desktop hosts can supply `BrowserOptions.chooseFiles(request, { signal,
+progress })` to open their system picker immediately, without an extra web
+gesture. This trusted callback streams the chosen files through the host's
+authenticated upload service and returns the resulting opaque upload IDs (or
+`null` on cancellation). It never returns client or source filesystem paths.
+The host must bind selection and staging to the supplied target/chooser and
+honor `signal` by closing native UI and aborting transfers. Navigation, takeover,
+disconnect, replacement choosers and component destruction abort that signal;
+late results and progress are ignored. The component alone sends the one-shot
+`file_reply` through its current source control path. Supplying this callback
+does not grant projected website code access to native APIs.
+
 Hosts implement `ProjectionConnection.upload(request, file, signal)` using an
 independently scheduled, authenticated file stream and pass its metadata and byte
 iterator to `SessionConnection.upload` (or `Controller.upload`). The returned
