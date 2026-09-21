@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
@@ -85,7 +85,7 @@ export const actionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('media'),
       node: z.number().int().positive(),
-      operation: z.enum(['play', 'pause', 'seek']),
+      operation: z.enum(['play', 'pause', 'seek', 'reveal']),
       time: z.number().finite().min(0).max(1e9).optional(),
     })
     .strict(),

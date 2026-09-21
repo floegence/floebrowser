@@ -778,7 +778,25 @@ export class BrowserProjection {
                 });
               }
             } else if (action.operation === 'pause') media.pause();
-            else if (
+            else if (action.operation === 'reveal') {
+              const rect = media.getBoundingClientRect();
+              if (
+                !rect.width ||
+                !rect.height ||
+                !media.checkVisibility({
+                  checkOpacity: true,
+                  checkVisibilityCSS: true,
+                })
+              )
+                return false;
+              // Source scrolling is projected normally; locating never plays,
+              // focuses or clicks website content.
+              media.scrollIntoView({
+                behavior: 'instant',
+                block: 'center',
+                inline: 'center',
+              });
+            } else if (
               action.time !== undefined &&
               Number.isFinite(media.duration)
             )

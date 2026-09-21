@@ -43,6 +43,8 @@ export class MediaView {
       timeline: HTMLElement;
       elapsed: HTMLElement;
       duration: HTMLElement;
+      locate: HTMLButtonElement;
+      location: HTMLElement;
     }
   >();
   private controls = document.createElement('div');
@@ -52,6 +54,7 @@ export class MediaView {
   private list = document.createElement('div');
   private audible = true;
   private soundBlocked = false;
+  private highlight?: Animation;
   private configuration: MediaConfiguration = {};
   private timer: ReturnType<typeof setInterval>;
   constructor(
@@ -372,6 +375,9 @@ export class MediaView {
     if (!node?.isConnected || node.hasAttribute(CANVAS_ATTRIBUTE)) return false;
     // Background audio remains controllable even without a rendered element.
     if (!state.paused && !state.muted && state.volume > 0) return true;
+    return this.visible(node);
+  }
+  private visible(node: Element) {
     for (
       let element: Element | null = node;
       element;
@@ -465,9 +471,75 @@ export class MediaView {
           time: Number(seek.value),
         });
       };
-      root.append(badge, info, play, timeline);
+      const location = document.createElement('div');
+      location.className = 'floe-media-location';
+      const locate = document.createElement('button');
+      locate.type = 'button';
+      locate.className = 'floe-media-locate';
+      const icon = document.createElement('span');
+      setIcon(icon, 'locate');
+      locate.append(icon, document.createTextNode('Show on page'));
+      locate.onclick = async () => {
+        const current = this.states.get(state.id);
+        if (!current || locate.disabled) return;
+        locate.disabled = true;
+        try {
+          const ok = await this.dispatch({
+            kind: 'media',
+            node: state.id,
+            operation: 'reveal',
+          });
+          if (!ok || this.states.get(state.id)?.stream !== current.stream)
+            return;
+          const node = this.node(state.id) as HTMLElement | null;
+          if (!node?.isConnected) return;
+          this.dismiss();
+          this.toggle.focus({ preventScroll: true });
+          this.highlight?.cancel();
+          const color = '#557aac';
+          const reduced = matchMedia(
+            '(prefers-reduced-motion: reduce)',
+          ).matches;
+          this.highlight = node.animate(
+            [
+              {
+                outline: `3px solid ${color}`,
+                outlineOffset: '-3px',
+                offset: 0,
+              },
+              {
+                outline: `3px solid ${color}`,
+                outlineOffset: '-3px',
+                offset: reduced ? 1 : 0.8,
+              },
+              {
+                outline: `3px solid ${reduced ? color : 'transparent'}`,
+                outlineOffset: '-3px',
+                offset: 1,
+              },
+            ],
+            { duration: 2200 },
+          );
+          this.highlight.id = 'floe-media-location';
+        } finally {
+          locate.disabled = false;
+        }
+      };
+      location.append(locate);
+      root.append(badge, info, play, timeline, location);
       this.list.append(root);
-      row = { root, label, title, play, seek, timeline, elapsed, duration };
+      row = {
+        root,
+        label,
+        title,
+        play,
+        seek,
+        timeline,
+        elapsed,
+        duration,
+        locate,
+        location,
+      };
       this.rows.set(state.id, row);
     }
     row.root.hidden = false;
@@ -479,6 +551,11 @@ export class MediaView {
       (node?.tagName === 'AUDIO' ? 'Audio' : 'Video');
     if (row.title.textContent !== title) row.title.textContent = title;
     row.title.title = title;
+    const visible = !!node && this.visible(node);
+    if (visible && row.locate.parentElement !== row.location)
+      row.location.replaceChildren(row.locate);
+    else if (!visible && row.location.textContent !== 'No visible player')
+      row.location.textContent = 'No visible player';
     const failure = this.playback.get(state.stream)?.failed;
     row.label.textContent =
       state.status === 'unavailable'
@@ -490,7 +567,12 @@ export class MediaView {
             : state.paused
               ? 'Paused'
               : state.status === 'streaming'
-                ? 'Playing'
+                ? state.muted ||
+                  state.volume === 0 ||
+                  !this.audible ||
+                  this.soundBlocked
+                  ? 'Playing · Muted'
+                  : 'Playing'
                 : 'Loading…';
     row.play.disabled = state.status === 'unavailable';
     setIcon(row.play, state.paused ? 'play' : 'pause');
@@ -557,6 +639,8 @@ export class MediaView {
     this.renderControls();
   }
   reset() {
+    this.highlight?.cancel();
+    this.highlight = undefined;
     for (const token of this.playback.keys()) this.release(token);
     this.states.clear();
     this.rows.clear();

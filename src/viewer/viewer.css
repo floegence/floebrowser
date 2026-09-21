@@ -258,6 +258,30 @@
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
+.floe-media-location {
+  grid-column: 1 / -1;
+  color: #737f90;
+  font-size: 11px;
+}
+.floe-media-panel .floe-media-locate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: 26px;
+  margin: -4px 0 -4px -6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: #4c6b9a;
+  font: inherit;
+}
+.floe-media-locate span {
+  display: flex;
+}
+.floe-media-panel .floe-media-locate svg {
+  width: 14px;
+  height: 14px;
+}
 .floe-media-timeline input {
   appearance: none;
   -webkit-appearance: none;
