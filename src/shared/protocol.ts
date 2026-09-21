@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
-import type { MediaFrame } from './media-wire.js';
+import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
 export const PROTOCOL_VERSION = 18;
 export const MAX_VIEWPORT_DIMENSION = 8192;
@@ -14,6 +14,7 @@ export const DISCONNECT_CODES = {
   viewer_in_use: 4001,
   viewer_replaced: 4002,
   source_unavailable: 4003,
+  version_mismatch: 4004,
 } as const;
 export type DisconnectReason = keyof typeof DISCONNECT_CODES;
 export const UNSUPPORTED_SELECTOR = 'object,embed';
@@ -315,7 +316,7 @@ export type ServerMessage =
   | {
       type: 'hello';
       version: typeof PROTOCOL_VERSION;
-      mediaWireVersion: 1;
+      mediaWireVersion: typeof MEDIA_WIRE_VERSION;
     }
   | { type: 'state'; state: BrowserState }
   | {

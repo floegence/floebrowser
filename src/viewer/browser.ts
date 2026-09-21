@@ -39,6 +39,9 @@ export type BrowserOptions = Omit<
   chooseFiles?: ChooseFiles;
   /** The product performs user/AI takeover through its authorized host API. */
   onTakeControl?: (target: string) => void | Promise<void>;
+  /** User-selected update entry point after a source/viewer protocol mismatch.
+   * Updating and restarting product components remain host-owned. */
+  onCheckForUpdates?: () => void | Promise<void>;
   /** A unique ID namespace. The standalone document uses the empty prefix. */
   idPrefix?: string;
 };
@@ -93,6 +96,8 @@ export function mountBrowser(
   let canGoBack = false;
   let canGoForward = false;
   let offerTakeover = false;
+  let updateRequired = false;
+  let checkingUpdates = false;
   let toastTimer: ReturnType<typeof setTimeout>;
   const zoom = new PageZoom(
     element<HTMLButtonElement>('zoom'),
@@ -510,6 +515,8 @@ export function mountBrowser(
         offerTakeover =
           status === 'disconnected' &&
           (reason === 'viewer_in_use' || reason === 'viewer_replaced');
+        updateRequired =
+          status === 'disconnected' && reason === 'version_mismatch';
         const label =
           status === 'refreshing'
             ? text('status.loading')
@@ -523,26 +530,33 @@ export function mountBrowser(
         element('status').title = label;
         overlay.hidden = connected;
         element('reconnect').hidden = status !== 'disconnected';
-        element('reconnect').textContent = offerTakeover
-          ? text('connection.useHere')
-          : text('connection.reconnect');
+        element('reconnect').textContent =
+          updateRequired && options.onCheckForUpdates
+            ? text('connection.checkUpdates')
+            : offerTakeover
+              ? text('connection.useHere')
+              : text('connection.reconnect');
         element('connection-title').textContent =
           status === 'disconnected'
-            ? reason === 'viewer_in_use'
-              ? text('connection.otherWindow')
-              : reason === 'viewer_replaced'
-                ? text('connection.transferred')
-                : reason === 'source_unavailable'
-                  ? text('connection.unavailable')
-                  : text('connection.interrupted')
+            ? updateRequired
+              ? text('connection.version')
+              : reason === 'viewer_in_use'
+                ? text('connection.otherWindow')
+                : reason === 'viewer_replaced'
+                  ? text('connection.transferred')
+                  : reason === 'source_unavailable'
+                    ? text('connection.unavailable')
+                    : text('connection.interrupted')
             : text('connection.connecting');
         element('connection-description').textContent =
           status === 'disconnected'
-            ? offerTakeover
-              ? text('connection.continue')
-              : reason === 'source_unavailable'
-                ? text('connection.checkSource')
-                : text('connection.resume')
+            ? updateRequired
+              ? text('connection.updateRequired')
+              : offerTakeover
+                ? text('connection.continue')
+                : reason === 'source_unavailable'
+                  ? text('connection.checkSource')
+                  : text('connection.resume')
             : text('connection.pending');
         element('connection-symbol').className =
           `connection-symbol ${status === 'disconnected' ? 'disconnected-symbol' : ''}`;
@@ -758,7 +772,24 @@ export function mountBrowser(
       if (!destroyed) updateChrome();
     }
   });
-  element('reconnect').addEventListener('click', () => connect(offerTakeover));
+  element('reconnect').addEventListener('click', async () => {
+    if (!updateRequired || !options.onCheckForUpdates) {
+      connect(offerTakeover);
+      return;
+    }
+    if (checkingUpdates) return;
+    checkingUpdates = true;
+    const button = element<HTMLButtonElement>('reconnect');
+    button.disabled = true;
+    try {
+      await options.onCheckForUpdates();
+    } catch {
+      notice(text('connection.updateFailed'));
+    } finally {
+      checkingUpdates = false;
+      button.disabled = false;
+    }
+  });
   element('start-browsing').addEventListener('click', focusAddress);
   element('dismiss-toast').addEventListener('click', () => {
     element('toast').hidden = true;

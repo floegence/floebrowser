@@ -41,7 +41,11 @@ import { SourceFind } from './find.js';
 import { DownloadTransfers } from './downloads.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
-import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
+import {
+  MEDIA_WIRE_VERSION,
+  type MediaFrame,
+  type MediaFrameHeader,
+} from '../shared/media-wire.js';
 
 const attachedPages = new WeakSet<object>();
 
@@ -811,7 +815,11 @@ export class BrowserProjection {
     };
     this.observations.set(observation, watcher);
     try {
-      send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
+      send({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        mediaWireVersion: MEDIA_WIRE_VERSION,
+      });
       send({ type: 'state', state: this.currentState });
       send({ type: 'control', target: this.id, active: false });
       this.publishDownloads(watcher);

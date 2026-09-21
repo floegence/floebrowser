@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { MEDIA_WIRE_VERSION } from '../shared/media-wire.js';
 import type { Page } from 'playwright';
 import type { SourcePage } from './source.js';
 import {
@@ -486,7 +487,11 @@ export class BrowserSession {
       send({ type: 'session_access', editTabs: false });
       if (viewer.selected) await this.select(viewer, viewer.selected);
       else {
-        send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
+        send({
+          type: 'hello',
+          version: PROTOCOL_VERSION,
+          mediaWireVersion: MEDIA_WIRE_VERSION,
+        });
         this.publish(viewer);
       }
       this.publishDownloads(viewer);

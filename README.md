@@ -488,7 +488,13 @@ find, zoom, scoped file selection and downloads, independent observation/media
 subscriptions, source-local encoded media collection, Canvas images, tab ordering,
 viewport commands and epoch-fenced input. It is not compatible with earlier
 viewers or independently upgraded rrweb packages. Source control, DOM and media
-remain separate lifetimes; the media wire version is negotiated independently.
+remain separate lifetimes. The viewer verifies both the projection protocol and
+media wire version before admitting input. Missing or incompatible versions close
+the carrier and permanently reject its queued callbacks, including a later valid
+hello. Recovery creates a new connection and never replays actions. The browser
+component displays a persistent update explanation. A host can provide
+`onCheckForUpdates` to open its update UI when the user selects **Check for
+updates**; this callback never reconnects or updates software automatically.
 
 ## State and failure boundaries
 
@@ -506,7 +512,7 @@ Inactive source documents stop emitting DOM changes and stop their media forward
 
 Viewport sizing is independent of document epochs, like browser navigation, and remains fenced by the active controller, command ID, selected tab and host authorization. Ordinary viewport changes preserve the current epoch. Main-frame rrweb resize events update the authoritative source dimensions, the replay iframe and the UI; child-frame resize events cannot overwrite the main viewport size.
 
-The standalone loopback carrier serializes viewer admission. Its explicit handoff revokes the previous controller immediately; each page drains old work before accepting new page input, without holding unrelated tabs. It does not replace controllers owned outside that carrier. The private session URL and exact Host/Origin checks still apply to handoff requests. `webSocketConnection` passes optional `DisconnectReason` values (`viewer_in_use`, `viewer_replaced`, `source_unavailable`) through `ProjectionConnection.onDisconnect` and the viewer's `onStatus` callback so hosts can render persistent recovery actions. Product integrations retain ownership of their own target leases and handoff policy.
+The standalone loopback carrier serializes viewer admission. Its explicit handoff revokes the previous controller immediately; each page drains old work before accepting new page input, without holding unrelated tabs. It does not replace controllers owned outside that carrier. The private session URL and exact Host/Origin checks still apply to handoff requests. `webSocketConnection` passes optional `DisconnectReason` values (`viewer_in_use`, `viewer_replaced`, `source_unavailable`, `version_mismatch`) through `ProjectionConnection.onDisconnect` and the viewer's `onStatus` callback so hosts can render persistent recovery actions. Product integrations retain ownership of their own target leases and handoff policy.
 
 The viewer detects missing event sequences and requests a fresh snapshot. It also checkpoints after 4,000 incremental messages or 8 MiB of event text to bound rrweb replay history. A rejected action against the current stale view requests one fresh snapshot without repeating input. Passive hover failures and timeouts, and document-bound failures or timeouts from an older view, do not produce action-failure notifications or refresh a newer view. Current-view effect failures remain visible and are never reported as successful. Source hit testing and epoch checks still apply to every input. The `onStatus` callback reports `refreshing` while an established view synchronizes; the standalone UI keeps the current view and navigation visible, without a connection overlay. Page input resumes when the new snapshot is ready. The embedding transport owns disconnect detection.
 

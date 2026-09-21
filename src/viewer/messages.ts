@@ -92,8 +92,12 @@ export const englishMessages = {
     'Check that the source browser is running, then reconnect.',
   'connection.resume': 'Reconnect to continue from your current page.',
   'connection.pending': 'Your page will appear shortly.',
-  'connection.version':
-    'This viewer and source use different protocol versions.',
+  'connection.version': 'Browser update required',
+  'connection.updateRequired':
+    'Update this app and the source browser service to matching versions, then reconnect.',
+  'connection.checkUpdates': 'Check for updates',
+  'connection.updateFailed':
+    'Could not check for updates. Try again or update the app and source service manually.',
   'connection.unconfirmed':
     'Connection lost. Unconfirmed actions have not been repeated.',
   'notice.dismiss': 'Dismiss message',

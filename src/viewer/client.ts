@@ -4,7 +4,11 @@ import {
   type BrowserMessages,
   type BrowserText,
 } from './messages.js';
-import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
+import {
+  MEDIA_WIRE_VERSION,
+  MediaPacketReader,
+  type MediaFrame,
+} from '../shared/media-wire.js';
 import { ReplayPresentation } from './presentation.js';
 import {
   liveEvent,
@@ -97,6 +101,7 @@ export class DOMBrowserView {
   private sequence = 0;
   private nextID = 0;
   private connected = false;
+  private incompatible = false;
   private controlled = false;
   private editTabs = true;
   private tabCommands = 0;
@@ -346,7 +351,7 @@ export class DOMBrowserView {
     }
   }
   private receiveMessage(message: ServerMessage): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.incompatible) return;
     if (message.type === 'downloads') {
       this.options.onDownloads?.(message.target, message.items);
       return;
@@ -444,8 +449,14 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'hello') {
-      if (message.version !== PROTOCOL_VERSION) {
-        this.options.onNotice?.(this.text('connection.version'));
+      if (
+        message.version !== PROTOCOL_VERSION ||
+        message.mediaWireVersion !== MEDIA_WIRE_VERSION
+      ) {
+        // Closing a carrier can be asynchronous. Fence every queued callback
+        // now; a later hello cannot revive this incompatible connection.
+        this.incompatible = true;
+        this.disconnected('version_mismatch');
         this.connection.close();
         return;
       }
