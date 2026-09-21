@@ -45,6 +45,8 @@ export type ViewOptions = {
   ) => void;
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
+  onControl?: (controlling: boolean) => void;
+  onSessionAccess?: (editTabs: boolean) => void;
   onAddressFocus?: () => void;
   /** Return true for a browser-chrome shortcut consumed by the embedding host. */
   onShortcut?: (event: KeyboardEvent, phase: 'down' | 'up') => boolean;
@@ -80,6 +82,8 @@ export class DOMBrowserView {
   private sequence = 0;
   private nextID = 0;
   private connected = false;
+  private controlled = false;
+  private editTabs = true;
   private tabCommands = 0;
   private disconnectReason?: DisconnectReason;
   private ready = false;
@@ -325,6 +329,23 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'session_access') {
+      this.editTabs = message.editTabs;
+      this.options.onSessionAccess?.(message.editTabs);
+      return;
+    }
+    if (message.type === 'control') {
+      if (message.target === this.tab) {
+        this.controlled = message.active;
+        if (!message.active) {
+          this.queuedWheel = undefined;
+          this.inputEngaged = false;
+        }
+        this.options.onControl?.(message.active);
+        this.layout();
+      }
+      return;
+    }
     if (message.type === 'media_end') {
       this.media.end(message.target, message.view);
       return;
@@ -342,6 +363,8 @@ export class DOMBrowserView {
         message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
       );
       if (message.state.active !== this.tab) {
+        this.controlled = false;
+        this.options.onControl?.(false);
         for (const [id, pending] of this.pending) {
           if (pending.chrome) continue;
           clearTimeout(pending.timer);
@@ -596,7 +619,8 @@ export class DOMBrowserView {
   }
 
   private queueWheel(action: Wheel): void {
-    if (!this.connected || !this.ready || this.tabCommands) return;
+    if (!this.controlled || !this.connected || !this.ready || this.tabCommands)
+      return;
     const prior = this.queuedWheel;
     if (
       prior &&
@@ -637,6 +661,10 @@ export class DOMBrowserView {
   private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
+      (!this.controlled && !action.kind.startsWith('tab_')) ||
+      (!this.editTabs &&
+        action.kind.startsWith('tab_') &&
+        action.kind !== 'tab_select') ||
       (this.tabCommands > 0 && !action.kind.startsWith('tab_')) ||
       (!this.ready &&
         ![
@@ -729,6 +757,7 @@ export class DOMBrowserView {
     clearTimeout(this.viewportTimer);
     if (
       this.destroyed ||
+      !this.controlled ||
       !this.connected ||
       !this.ready ||
       this.tabCommands > 0 ||
@@ -739,6 +768,7 @@ export class DOMBrowserView {
     this.viewportTimer = setTimeout(() => {
       if (
         this.viewportPending ||
+        !this.controlled ||
         !this.connected ||
         !this.ready ||
         this.tabCommands
@@ -755,6 +785,7 @@ export class DOMBrowserView {
       this.container.clientHeight,
     );
     if (
+      !this.controlled ||
       width < 1 ||
       height < 1 ||
       this.tabCommands ||
@@ -776,7 +807,11 @@ export class DOMBrowserView {
     return this.viewportPending;
   }
   private layout(): void {
-    this.container.dataset.viewportMode = this.viewportMode;
+    const mode =
+      !this.controlled && this.viewportMode === 'responsive'
+        ? 'fit'
+        : this.viewportMode;
+    this.container.dataset.viewportMode = mode;
     // State confirms source sizing before rrweb's sampled resize event arrives.
     // Keep the replay viewport and its coordinate transform in the same layout.
     if (this.replayer) {
@@ -784,7 +819,7 @@ export class DOMBrowserView {
       this.replayer.iframe.height = String(this.viewport.height);
     }
     const scale =
-      this.viewportMode !== 'actual'
+      mode !== 'actual'
         ? Math.min(
             1,
             this.container.clientWidth / this.viewport.width,
@@ -795,11 +830,11 @@ export class DOMBrowserView {
     this.surface.style.height = `${this.viewport.height}px`;
     this.surface.style.transform = `scale(${scale})`;
     this.surface.style.left =
-      this.viewportMode === 'responsive'
+      mode === 'responsive'
         ? '0px'
         : `${Math.max(0, (this.container.clientWidth - this.viewport.width * scale) / 2)}px`;
     this.surface.style.top =
-      this.viewportMode === 'fit'
+      mode === 'fit'
         ? `${Math.max(0, (this.container.clientHeight - this.viewport.height * scale) / 2)}px`
         : '0px';
     this.scheduleViewport();
@@ -854,6 +889,11 @@ export class DOMBrowserView {
       (raw) => {
         this.media.interact(raw);
         const event = raw as PointerEvent;
+        if (!this.controlled) {
+          if ((event.target as Element).closest('select'))
+            event.preventDefault();
+          return;
+        }
         this.inputEngaged = true;
         this.sourceFocus = undefined;
         const target = event.target as Element;
@@ -884,6 +924,7 @@ export class DOMBrowserView {
       'mouseup',
       (raw) => {
         const event = raw as PointerEvent;
+        if (!this.controlled) return;
         if ((event.target as Element).closest('select')) return;
         const point = this.point(event);
         this.dragging = false;
@@ -910,6 +951,7 @@ export class DOMBrowserView {
       'mousemove',
       (raw) => {
         const event = raw as PointerEvent;
+        if (!this.controlled) return;
         if (!this.dragging && performance.now() - this.lastMove < 40) return;
         this.lastMove = performance.now();
         const point = this.point(event);
@@ -930,7 +972,7 @@ export class DOMBrowserView {
       frame,
       'click',
       (event) => {
-        if (!(event.target as Element).closest('select'))
+        if (!this.controlled || !(event.target as Element).closest('select'))
           event.preventDefault();
       },
       true,
@@ -1050,6 +1092,8 @@ export class DOMBrowserView {
     this.media.reset();
     this.disconnectReason = reason ?? this.disconnectReason;
     this.connected = false;
+    this.controlled = false;
+    this.options.onControl?.(false);
     this.ready = false;
     this.dragging = false;
     this.presentation?.dispose();

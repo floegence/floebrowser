@@ -11,7 +11,7 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
       contents: `
         import { mountBrowser, englishMessages } from './src/viewer/index.js';
         import { PROTOCOL_VERSION } from './src/shared/protocol.js';
-        window.sent = [[], []]; window.closeCounts = [0, 0];
+        window.sent = [[], []]; window.closeCounts = [0, 0]; window.deliver=[]; window.takeovers=[];
         window.views = [0, 1].map(index => {
           let receiver;
           const connection = {
@@ -20,10 +20,11 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
               if (message.type === 'command') queueMicrotask(() => receiver?.({ type: 'ack', id: message.id, ok: true }));
             },
             subscribe(listener) {
-              receiver = listener;
+              receiver = listener; window.deliver[index]=listener;
               queueMicrotask(() => {
                 receiver?.({type:'hello', version:PROTOCOL_VERSION, mediaWireVersion:1});
                 receiver?.({type:'tabs', state:{active:'tab-'+index, tabs:[{id:'tab-'+index,title:'Page '+index,url:'about:blank'}]}});
+                receiver?.({type:'control',target:'tab-'+index,active:true});
               });
               return () => { receiver = undefined; };
             },
@@ -33,6 +34,7 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
           return mountBrowser(document.querySelector('#host-'+index), {
             connect: () => connection,
             messages: Object.fromEntries(Object.entries(englishMessages).map(([key, value]) => [key, index ? value : 'Localized ' + value])),
+            onTakeControl: target => {window.takeovers.push(target);throw new Error('Denied by host');},
             title: index ? 'Second browser' : '<img src=x onerror=alert(1)>'
           });
         });`,
@@ -119,6 +121,39 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
     '0px',
     'Browser styling does not change host buttons',
   );
+  await page.evaluate(() =>
+    (window as any).deliver[0]({
+      type: 'control',
+      target: 'tab-0',
+      active: false,
+    }),
+  );
+  assert.equal(
+    await first
+      .getByRole('combobox')
+      .evaluate((e: HTMLInputElement) => e.readOnly),
+    true,
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      (window as any).views[0].dispatch({
+        kind: 'navigate',
+        url: 'https://must-not-open.invalid/',
+      }),
+    ),
+    false,
+  );
+  await first
+    .getByRole('button', { name: 'Localized Take control', exact: true })
+    .click();
+  await first
+    .locator('[data-floe-ui=toast]')
+    .filter({ hasText: 'Control could not be transferred' })
+    .waitFor();
+  assert.deepEqual(await page.evaluate(() => (window as any).takeovers), [
+    'tab-0',
+  ]);
+  assert.equal(await second.locator('[data-floe-ui=toast]').isVisible(), false);
   await page.evaluate(() => {
     (window as any).views[0].destroy();
     (window as any).views[0].destroy();

@@ -10,7 +10,11 @@ export {
   createProjectionServer,
   type ProjectionServerOptions,
 } from './server.js';
-export { BrowserSession, type SessionConnection } from './session.js';
+export {
+  BrowserSession,
+  type SessionConnection,
+  type SessionViewOptions,
+} from './session.js';
 export {
   PROTOCOL_VERSION,
   type Action,

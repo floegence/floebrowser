@@ -50,6 +50,8 @@ export interface Controller {
   close(): Promise<void>;
 }
 export interface ObservationOptions {
+  /** Host audio-output grant, independent of visible pictures and source mute. */
+  audio?: boolean;
   /** Hidden observations retain authorized audio without DOM or picture traffic. */
   visible?: boolean;
   /** The host may admit DOM before its independently authorized media carrier. */
@@ -66,6 +68,7 @@ export interface Observation {
   /** Only resynchronization and media recovery are accepted here, never input. */
   receive(message: ClientMessage): Promise<void>;
   setMedia(enabled: boolean): Promise<void>;
+  setAudio(enabled: boolean): Promise<void>;
   setVisible(visible: boolean): Promise<void>;
   close(): Promise<void>;
 }
@@ -74,6 +77,7 @@ type Watcher = ObservationOptions & {
   view: string;
   active: boolean;
   mediaEnabled: boolean;
+  audioEnabled: boolean;
   visible: boolean;
   send: (message: ServerMessage) => void;
   resyncPending: boolean;
@@ -84,6 +88,7 @@ type Viewer = {
   watcher: Watcher;
   send: (message: ServerMessage) => void;
   authorize: AttachOptions['authorize'];
+  isCurrent?: () => boolean;
   active: boolean;
   lastID: number;
   pending: number;
@@ -630,6 +635,7 @@ export class BrowserProjection {
       view: randomBytes(18).toString('base64url'),
       active: true,
       mediaEnabled: !!options.onMediaFrame && options.media !== false,
+      audioEnabled: options.audio !== false,
       visible: options.visible !== false,
       send,
       resyncPending: false,
@@ -649,6 +655,14 @@ export class BrowserProjection {
           for (const capture of this.captures.values())
             void capture.subscription?.requestKeyframe().catch(() => {});
       },
+      setAudio: async (enabled) => {
+        if (!watcher.active || watcher.audioEnabled === enabled) return;
+        watcher.audioEnabled = enabled;
+        // A permission generation change retires queued audio before enabling
+        // its new owner. The source collector and website playback stay alive.
+        this.resetMediaSubscription(watcher);
+        await this.setMedia(this.mediaWatched);
+      },
       setMedia: async (enabled) => {
         if (
           !watcher.active ||
@@ -657,18 +671,7 @@ export class BrowserProjection {
         )
           return;
         watcher.mediaEnabled = enabled;
-        watcher.send({
-          type: 'media_end',
-          target: this.id,
-          view: watcher.view,
-        });
-        for (const stream of this.captures.keys())
-          watcher.onMediaRetired?.({
-            target: this.id,
-            view: watcher.view,
-            stream,
-          });
-        watcher.view = randomBytes(18).toString('base64url');
+        this.resetMediaSubscription(watcher);
         await this.setMedia(this.mediaWatched);
       },
       close: () => this.unobserve(watcher),
@@ -677,6 +680,7 @@ export class BrowserProjection {
     try {
       send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
       send({ type: 'state', state: this.currentState });
+      send({ type: 'control', target: this.id, active: false });
       void (
         watcher.visible ? this.snapshot() : this.setMedia(this.mediaWatched)
       ).catch(() => {
@@ -688,6 +692,13 @@ export class BrowserProjection {
       await this.unobserve(watcher);
       throw error;
     }
+  }
+
+  private resetMediaSubscription(watcher: Watcher): void {
+    watcher.send({ type: 'media_end', target: this.id, view: watcher.view });
+    for (const stream of this.captures.keys())
+      watcher.onMediaRetired?.({ target: this.id, view: watcher.view, stream });
+    watcher.view = randomBytes(18).toString('base64url');
   }
 
   private unobserve(watcher: Watcher): Promise<void> {
@@ -714,6 +725,7 @@ export class BrowserProjection {
   async acquireControl(
     observation: Observation,
     authorize: AttachOptions['authorize'],
+    isCurrent?: () => boolean,
   ): Promise<Controller> {
     const watcher = this.observations.get(observation);
     if (
@@ -728,6 +740,7 @@ export class BrowserProjection {
       watcher,
       send: watcher.send,
       authorize,
+      isCurrent,
       active: true,
       lastID: 0,
       pending: 0,
@@ -739,6 +752,11 @@ export class BrowserProjection {
       close: () => {
         if (retiring) return retiring;
         viewer.active = false;
+        try {
+          watcher.send({ type: 'control', target: this.id, active: false });
+        } catch {
+          /* Disconnected carrier. */
+        }
         if (watcher.control === controller) watcher.control = undefined;
         retiring = this.queue = this.queue
           .then(async () => {
@@ -752,6 +770,7 @@ export class BrowserProjection {
       },
     };
     watcher.control = controller;
+    watcher.send({ type: 'control', target: this.id, active: true });
     this.queue = this.queue.then(() => {
       if (viewer.active && this.viewer === viewer && this.controlFault)
         this.updateState({ status: 'error' });
@@ -890,6 +909,7 @@ export class BrowserProjection {
             if (
               !watcher.active ||
               !watcher.mediaEnabled ||
+              (!watcher.audioEnabled && frame.header.track === 'audio') ||
               (!watcher.visible && frame.header.track !== 'audio')
             )
               continue;
@@ -1087,6 +1107,8 @@ export class BrowserProjection {
       throw new CommandError('not_allowed');
     const independent = documentIndependent(action);
     const assertCurrent = () => {
+      if (viewer.isCurrent && !viewer.isCurrent())
+        throw new CommandError('not_allowed');
       if (
         !viewer.active ||
         this.viewer !== viewer ||

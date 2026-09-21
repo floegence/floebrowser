@@ -88,6 +88,37 @@ test(
     );
     await wait(() => audio > 3 && video > 3);
     const streams = collectors;
+    let secondAudio = 0,
+      secondVideo = 0;
+    const second = await engine.observe(() => {}, {
+      audio: false,
+      onMediaFrame: (frame) => {
+        if (frame.header.track === 'audio') secondAudio++;
+        if (frame.header.track === 'video') secondVideo++;
+      },
+    });
+    await wait(() => secondVideo > 3);
+    assert.equal(
+      secondAudio,
+      0,
+      'A second window does not inherit the audio output grant',
+    );
+    await observation.setAudio(false);
+    const mutedAudio = audio;
+    await second.setAudio(true);
+    await wait(() => secondAudio > 5);
+    assert.equal(
+      audio,
+      mutedAudio,
+      'Audio output changes owner without overlapping delivery',
+    );
+    assert.equal(
+      collectors,
+      streams,
+      'Audio grants do not recreate the source collector',
+    );
+    await second.close();
+    await observation.setAudio(true);
     await observation.setVisible(false);
     await source.waitForFunction(() =>
       (window as any).capturePeers.some((peer: RTCPeerConnection) =>

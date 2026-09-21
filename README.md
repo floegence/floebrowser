@@ -154,6 +154,36 @@ await context.close();
 
 `BrowserProjection.observe(send, options)` creates a viewing grant without input authority. `acquireControl(observation, authorize)` creates the page's sole input handle only after host authorization; it never steals another handle. Releasing input leaves authorized DOM and media observation alive. Closing an observation revokes its input handle and media delivery synchronously, then drains held input. Each observation has a separate media subscription generation; disabling its media with `setMedia(false)` sends `media_end`, retires queued packets, and leaves other viewers and input unaffected. Multiple viewers share one source element collector. The source stops collection when the last media subscription ends. `setVisible(false)` immediately revokes that observation's input, suppresses its DOM and picture delivery, and preserves its authorized audio. With no visible observation, source DOM emission stops and video sender encodings become inactive; website execution and playback continue. Returning requests a new DOM snapshot and independent video keyframe without recreating the audio collector.
 
+`BrowserSession.observe(send, options)` opens an independent browser view. Its
+connection owns its selected tab, admission queue and observation grants;
+selection in one window does not change another window or an AI target. A fresh
+observer cannot mutate pages, resize the source or edit the tab directory.
+`acquireControl(authorize)` is a trusted host API that enables authorized tab
+operations and attempts the selected page's exclusive input lease. It returns
+false if another user or AI still owns that page, without stealing control.
+`releaseControl()` revokes authority synchronously and drains held input while
+leaving observation alive. Hosts complete their own takeover policy before
+acquiring again. `projection(target)` gives trusted AI adapters the same
+projection and debugger owner, without itself granting observation or control.
+
+A view's `canObserve(page)` predicate limits its page directory and media; call
+`refreshGrants()` immediately whenever this host permission changes. Removed
+observations are revoked before asynchronous cleanup. Use the connection's
+`readResource(target, resourceID)` for view-scoped resource delivery: it verifies
+both the initial grant and the same observation after the asynchronous read.
+Source callbacks, resource replies and media are not sent for removed grants.
+Private takeover must revoke other user/model views through these host grants;
+it is not a physical keyboard lock on the original personal browser.
+
+`audio: false` observes pictures without receiving audio packets. Hosts designate
+one audio-output view and call `setAudio(false)` on its old owner before enabling
+the new one. This advances the observation's media permission generation and
+retires queued decoders, while keeping source collectors and playback alive.
+This policy is independent of the page's actual mute state and input ownership.
+Observers fit the authoritative viewport and cannot race its controller's size.
+The component exposes `onTakeControl` for a product-owned takeover action; no
+remote input message can manufacture this grant.
+
 The standalone `BrowserSession.connect` returns a `SessionConnection` that controls its observation's media lifetime independently. The carrier admits DOM and control first, enables media only after its separate authorized socket connects, and suspends capture when that socket closes. A media failure cannot revoke browser input. The session retains visited tabs' authorized background audio observations across selection, without sending background DOM or pictures. Media states name their source target, and the viewer keys playback by target and stream, independently of DOM epochs. The media panel offers **Open tab** for a background source; locating it does not start playback. Closing its source tab or the viewing session retires its decoders. `BrowserProjection.connect` remains the convenience API for hosts that grant viewing and input together.
 
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.

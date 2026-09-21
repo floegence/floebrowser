@@ -77,6 +77,7 @@ const template = `    <main class="floe-browser browser-window">
             hidden
           ></div>
         </form>
+        <button data-floe-ui="take-control" class="take-control" hidden></button>
         <div data-floe-ui="media-controls"></div>
         <span
           class="status connecting"
@@ -171,6 +172,7 @@ export function browserTemplate(
   get('address').setAttribute('placeholder', text('address.placeholder'));
   get('address').setAttribute('aria-controls', get('address-suggestions').id);
   for (const [id, key] of Object.entries({
+    'take-control': 'control.take',
     'tab-pin': 'tabs.pin',
     'tab-close': 'tabs.close',
     'tab-restore': 'tabs.restore',

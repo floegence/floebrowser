@@ -22,6 +22,8 @@ export type BrowserOptions = Omit<
 > & {
   connect: (request: { takeover: boolean }) => ProjectionConnection;
   title?: string;
+  /** The product performs user/AI takeover through its authorized host API. */
+  onTakeControl?: (target: string) => void | Promise<void>;
   /** A unique ID namespace. The standalone document uses the empty prefix. */
   idPrefix?: string;
 };
@@ -64,6 +66,9 @@ export function mountBrowser(
   let sourceID = '';
   let tabState: TabState = { active: '', tabs: [] };
   let connected = false;
+  let controlling = false;
+  let takingControl = false;
+  let editTabs = true;
   let ready = false;
   let changingTab = false;
   let canGoBack = false;
@@ -80,7 +85,7 @@ export function mountBrowser(
   >();
   const tabOrder = new TabOrder(
     element('tabs'),
-    () => connected && !switching(),
+    () => connected && editTabs && !switching(),
     (tab, before) => command({ kind: 'tab_move', tab, before }),
     (message) => {
       element('tab-announcement').textContent = message;
@@ -129,16 +134,26 @@ export function mountBrowser(
       item.row.classList.toggle('active', id === selected);
       item.select.setAttribute('aria-selected', String(id === selected));
       item.select.tabIndex = id === selected ? 0 : -1;
-      item.select.disabled = item.close.disabled = !connected;
+      item.select.disabled = !connected;
+      item.close.disabled = !connected || !editTabs;
     }
-    element<HTMLButtonElement>('new-tab').disabled = !connected;
+    element<HTMLButtonElement>('new-tab').disabled = !connected || !editTabs;
     element<HTMLButtonElement>('back').disabled =
-      !connected || pending || !canGoBack;
+      !connected || !controlling || pending || !canGoBack;
     element<HTMLButtonElement>('forward').disabled =
-      !connected || pending || !canGoForward;
-    element<HTMLButtonElement>('reload').disabled = !connected || pending;
+      !connected || !controlling || pending || !canGoForward;
+    element<HTMLButtonElement>('reload').disabled =
+      !connected || !controlling || pending;
     address.disabled = !connected;
-    element<HTMLButtonElement>('address-go').disabled = !connected;
+    address.readOnly = !controlling && !pending;
+    element<HTMLButtonElement>('address-go').disabled =
+      !connected || !controlling;
+    element('take-control').hidden =
+      !connected || !tabState.active || controlling || !options.onTakeControl;
+    element<HTMLButtonElement>('take-control').disabled = takingControl;
+    element('take-control').textContent = text(
+      takingControl ? 'control.pending' : 'control.take',
+    );
     const target = tabState.tabs.find((tab) => tab.id === selected);
     welcome.hidden = !connected || pending || target?.url !== 'about:blank';
   }
@@ -209,7 +224,7 @@ export function mountBrowser(
       ?.select.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   async function closeTab(id: string): Promise<void> {
-    if (closingTab(id)) return;
+    if (!editTabs || closingTab(id)) return;
     const focused = rows.get(id)?.row.contains(document.activeElement);
     const wasActive = id === desiredTab();
     if (await command({ kind: 'tab_close', tab: id })) {
@@ -328,6 +343,16 @@ export function mountBrowser(
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
+      onControl: (active) => {
+        controlling = active;
+        options.onControl?.(active);
+        updateChrome();
+      },
+      onSessionAccess: (allowed) => {
+        editTabs = allowed;
+        options.onSessionAccess?.(allowed);
+        updateChrome();
+      },
       mediaControls: element('media-controls'),
       onTabs: (state) => {
         if (generation === admittedGeneration && !destroyed) renderTabs(state);
@@ -550,6 +575,21 @@ export function mountBrowser(
     element(kind).addEventListener('click', () => {
       void command({ kind });
     });
+  element('take-control').addEventListener('click', async () => {
+    if (takingControl || !tabState.active) return;
+    const target = tabState.active;
+    takingControl = true;
+    updateChrome();
+    try {
+      await options.onTakeControl?.(target);
+    } catch {
+      if (!destroyed && tabState.active === target)
+        notice(text('control.failed'));
+    } finally {
+      takingControl = false;
+      if (!destroyed) updateChrome();
+    }
+  });
   element('reconnect').addEventListener('click', () => connect(offerTakeover));
   element('start-browsing').addEventListener('click', focusAddress);
   element('dismiss-toast').addEventListener('click', () => {
@@ -618,8 +658,9 @@ export function mountBrowser(
       (event.target as Element).closest<HTMLElement>('[data-tab-id]')?.dataset
         .tabId ?? '';
     const target = tabState.tabs.find((tab) => tab.id === menuTab);
-    element<HTMLButtonElement>('tab-pin').disabled = !target;
-    element<HTMLButtonElement>('tab-close').disabled = !target;
+    element<HTMLButtonElement>('tab-pin').disabled = !target || !editTabs;
+    element<HTMLButtonElement>('tab-close').disabled = !target || !editTabs;
+    element<HTMLButtonElement>('tab-restore').disabled = !editTabs;
     element('tab-pin').textContent = text(
       target?.pinned ? 'tabs.unpin' : 'tabs.pin',
     );

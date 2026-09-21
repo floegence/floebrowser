@@ -23,6 +23,10 @@ export const englishMessages = {
   'address.switchTab': 'Switch to tab',
   'address.visited': 'Visited',
   'address.invalid': 'Enter a valid HTTP or HTTPS address, or a search term.',
+  'control.take': 'Take control',
+  'control.pending': 'Taking control…',
+  'control.failed':
+    'Control could not be transferred. Try again on the current page.',
   'status.loading': 'Loading',
   'status.live': 'Live',
   'status.connecting': 'Connecting',

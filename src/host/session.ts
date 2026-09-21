@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { Page } from 'playwright';
 import type { SourcePage } from './source.js';
 import {
@@ -11,6 +12,7 @@ import {
   type AttachOptions,
   type Controller,
   type Observation,
+  type ObservationOptions,
 } from './engine.js';
 import {
   clientMessageSchema,
@@ -22,32 +24,58 @@ import {
 } from '../shared/protocol.js';
 
 type Tab = { page: SourcePage; engine: BrowserProjection };
+export interface SessionViewOptions extends ObservationOptions {
+  initialTab?: string;
+  /** Synchronous host grant predicate. Call refreshGrants after changing it. */
+  canObserve?: (page: SourcePage) => boolean;
+}
 type Viewer = {
+  id: string;
   active: boolean;
+  selected: string;
+  revision: number;
+  queue: Promise<void>;
+  directoryWork: Promise<void>;
   send: (message: ServerMessage) => void;
+  options: SessionViewOptions;
+  visible: boolean;
   controller?: Controller;
   observation?: Observation;
   observations: Map<string, Observation>;
+  authorize?: AttachOptions['authorize'];
   mediaEnabled: boolean;
   lastID: number;
   pending: number;
   retiring: Set<Promise<void>>;
 };
 export interface SessionConnection extends Controller {
+  readonly id: string;
+  readonly currentState: TabState;
   setMedia(enabled: boolean): Promise<void>;
+  setAudio(enabled: boolean): Promise<void>;
+  setVisible(visible: boolean): Promise<void>;
+  /** Host-only grant. Returns false when the selected source has another owner;
+   * it never steals user/AI control. Authorized directory operations remain usable. */
+  acquireControl(authorize: AttachOptions['authorize']): Promise<boolean>;
+  releaseControl(): Promise<void>;
+  /** Revokes removed observation grants synchronously before returning the drain. */
+  refreshGrants(): Promise<void>;
+  readResource(
+    tab: string,
+    id: string,
+  ): ReturnType<BrowserProjection['resources']['read']>;
 }
 
-/** Projects only the host directory. Source lifecycle and grants belong to its owner. */
+/** One projection owner per authorized source; each view selects independently.
+ * The host owns source grants, lifecycle and user/AI target-control policy. */
 export class BrowserSession {
   private tabs = new Map<string, Tab>();
   private adding = new Map<SourcePage, Promise<Tab>>();
-  private selected = '';
+  private viewers = new Set<Viewer>();
+  private standaloneViewer?: Viewer;
+  private resumeTab = '';
   private directoryOrder: string[] = [];
   private unsubscribe?: () => void;
-  private directoryWork = Promise.resolve();
-  private selectionRevision = 0;
-  private viewer?: Viewer;
-  private queue = Promise.resolve();
   private closing?: Promise<void>;
   private constructor(
     private directory: SourceDirectory,
@@ -87,61 +115,94 @@ export class BrowserSession {
       this.directoryChanged(change),
     );
     try {
-      const initial = this.entries()[0];
-      this.directoryOrder = this.entries().map((entry) => entry.page.id);
-      if (initial) {
-        await this.add(initial.page);
-        this.selected = initial.page.id;
+      const entries = this.entries();
+      this.directoryOrder = entries.map((entry) => entry.page.id);
+      if (entries[0]) {
+        await this.add(entries[0].page);
+        this.resumeTab = entries[0].page.id;
       }
     } catch (error) {
       this.unsubscribe();
       throw error;
     }
   }
-  private entries() {
+  private entries(viewer?: Viewer) {
     const entries = this.directory
       .list()
-      .filter((entry) => !entry.page.isClosed());
+      .filter(
+        (entry) =>
+          !entry.page.isClosed() &&
+          (!viewer?.options.canObserve ||
+            viewer.options.canObserve(entry.page)),
+      );
     if (new Set(entries.map((entry) => entry.page.id)).size !== entries.length)
       throw new Error('Duplicate source target identity');
     return entries;
   }
   private directoryChanged(change: DirectoryChange): void {
     if (this.closing) return;
-    const entries = this.entries(),
-      ids = entries.map((entry) => entry.page.id);
+    const ids = this.entries().map((entry) => entry.page.id);
     const previous = this.directoryOrder;
     this.directoryOrder = ids;
-    // Revoke before any async cleanup. A removed directory grant cannot keep
-    // receiving DOM, media or input while another renderer is unresponsive.
     for (const id of this.tabs.keys()) if (!ids.includes(id)) this.drop(id);
-    let next = this.selected;
+    for (const viewer of this.viewers)
+      void this.refreshGrants(viewer, change, previous);
+    if (!ids.includes(this.resumeTab)) this.resumeTab = ids[0] ?? '';
+  }
+  private refreshGrants(
+    viewer: Viewer,
+    change: DirectoryChange = {},
+    previous = this.directoryOrder,
+  ): Promise<void> {
+    if (!viewer.active) return Promise.resolve();
+    const ids = this.entries(viewer).map((entry) => entry.page.id);
+    for (const [id, observation] of viewer.observations)
+      if (!ids.includes(id)) {
+        viewer.observations.delete(id);
+        if (viewer.observation === observation) this.retire(viewer);
+        this.trackRetirement(viewer, observation.close());
+      }
+    let next = viewer.selected;
     if (!ids.includes(next)) {
       const position = Math.max(0, previous.indexOf(next));
-      next = ids[Math.min(position, ids.length - 1)] ?? '';
+      next =
+        previous.slice(position + 1).find((id) => ids.includes(id)) ??
+        previous
+          .slice(0, position)
+          .reverse()
+          .find((id) => ids.includes(id)) ??
+        ids[0] ??
+        '';
     }
     if (change.activate && ids.includes(change.activate))
       next = change.activate;
-    if (next !== this.selected) {
-      this.retire(this.viewer);
-      this.selected = next;
-      ++this.selectionRevision;
-      this.directoryWork = next
-        ? this.select(next).catch(() => this.unavailable())
+    if (next !== viewer.selected) {
+      this.retire(viewer);
+      viewer.selected = next;
+      ++viewer.revision;
+      if (viewer === this.standaloneViewer) this.resumeTab = next;
+      viewer.directoryWork = next
+        ? this.select(viewer, next).catch(() => this.unavailable(viewer))
         : Promise.resolve();
     }
-    this.publish();
+    this.publish(viewer);
+    return viewer.directoryWork;
   }
+  /** Standalone convenience; embedded consumers use their connection's state. */
   get activeProjection(): BrowserProjection {
-    return this.tabs.get(this.selected)!.engine;
+    return this.tabs.get(this.standaloneViewer?.selected ?? this.resumeTab)!
+      .engine;
   }
   get hasController(): boolean {
-    return !!this.viewer?.active;
+    return !!this.standaloneViewer?.active;
   }
   get currentState(): TabState {
+    return this.state(this.standaloneViewer);
+  }
+  private state(viewer?: Viewer): TabState {
     return {
-      active: this.selected,
-      tabs: this.entries().map(({ page, title, pinned }) => {
+      active: viewer?.selected ?? this.resumeTab,
+      tabs: this.entries(viewer).map(({ page, title, pinned }) => {
         const state = this.tabs.get(page.id)?.engine.currentState;
         return {
           id: page.id,
@@ -152,21 +213,25 @@ export class BrowserSession {
       }),
     };
   }
-  private send(message: ServerMessage): void {
-    if (this.viewer?.active) this.viewer.send(message);
+  private publish(viewer?: Viewer): void {
+    if (viewer) {
+      if (viewer.active)
+        viewer.send({ type: 'tabs', state: this.state(viewer) });
+    } else for (const view of this.viewers) this.publish(view);
   }
-  private publish(): void {
-    this.send({ type: 'tabs', state: this.currentState });
-  }
-  private enqueue(work: () => Promise<void>): Promise<void> {
-    const result = this.queue.then(work);
-    this.queue = result.catch(() => {});
+  private enqueue(viewer: Viewer, work: () => Promise<void>): Promise<void> {
+    const result = viewer.queue.then(work);
+    viewer.queue = result.catch(() => {});
     return result;
   }
   private add(page: SourcePage): Promise<Tab> {
     if (this.closing) return Promise.reject(new Error('Session closed'));
-    const existing = [...this.tabs.values()].find((tab) => tab.page === page);
-    if (existing) return Promise.resolve(existing);
+    const existing = this.tabs.get(page.id);
+    if (existing) {
+      if (existing.page !== page)
+        return Promise.reject(new Error('Source identity reused'));
+      return Promise.resolve(existing);
+    }
     const pending = this.adding.get(page);
     if (pending) return pending;
     const task = (async () => {
@@ -177,8 +242,7 @@ export class BrowserSession {
           if (state.status === 'closed') this.directoryChanged({});
           else this.publish();
         },
-        // Popup admission belongs exclusively to the directory owner.
-        onPopup: () => {},
+        onPopup: () => {}, // Only the directory owner can admit popups.
       });
       if (
         this.closing ||
@@ -188,30 +252,31 @@ export class BrowserSession {
         throw new Error('Source grant revoked while attaching a tab');
       }
       const tab = { page, engine };
-      this.tabs.set(engine.id, tab);
+      this.tabs.set(page.id, tab);
       this.publish();
       return tab;
     })().finally(() => this.adding.delete(page));
     this.adding.set(page, task);
     return task;
   }
-  private unavailable(): void {
-    this.send({
-      type: 'notice',
-      code: 'tab_unavailable',
-    });
+  /** Trusted host entry point for AI control. Shares the exact same projection
+   * and debugger as viewers; calling it does not grant input or observation. */
+  async projection(id: string): Promise<BrowserProjection> {
+    const entry = this.entries().find((entry) => entry.page.id === id);
+    if (!entry) throw new Error('Unknown source target');
+    return (await this.add(entry.page)).engine;
+  }
+  private unavailable(viewer: Viewer): void {
+    if (viewer.active) viewer.send({ type: 'notice', code: 'tab_unavailable' });
   }
   private trackRetirement(viewer: Viewer, work: Promise<void>): void {
     viewer.retiring.add(work);
     void work.finally(() => viewer.retiring.delete(work)).catch(() => {});
   }
-  private retire(viewer?: Viewer): void {
-    if (!viewer) return;
+  private retire(viewer: Viewer): void {
     const observation = viewer.observation;
     viewer.controller = undefined;
     viewer.observation = undefined;
-    // Hiding revokes input synchronously, but preserves an authorized audio
-    // subscription. Renderer cleanup never delays a different source target.
     if (observation)
       this.trackRetirement(viewer, observation.setVisible(false));
   }
@@ -222,112 +287,166 @@ export class BrowserSession {
       this.trackRetirement(viewer, observation.close());
     viewer.observations.clear();
   }
-  private async select(id: string): Promise<void> {
-    const entry = this.entries().find((entry) => entry.page.id === id);
-    if (!entry) throw new Error('Unknown source tab');
-    const viewer = this.viewer;
-    // close() revokes synchronously. Its renderer cleanup belongs to the old
-    // projection and must not delay admission to an unrelated source page.
-    this.retire(viewer);
-    this.selected = id;
-    this.publish();
-    const tab = await this.add(entry.page);
-    if (this.selected !== id || this.closing) return;
-    void tab.page.bringToFront().catch(() => {});
-    if (viewer?.active) {
-      const observation =
-        viewer.observations.get(id) ??
-        (await tab.engine.observe(
-          (message) => {
-            if (
-              viewer.active &&
-              this.viewer === viewer &&
-              (message.type === 'media' ||
-                message.type === 'media_end' ||
-                (this.selected === id &&
-                  !(
-                    message.type === 'state' &&
-                    message.state.status === 'closed'
-                  )))
-            )
-              viewer.send(message);
-          },
-          { ...this.options, media: viewer.mediaEnabled },
-        ));
-      if (!viewer.active) {
-        await observation.close();
-        return;
-      }
-      viewer.observations.set(id, observation);
-      if (this.selected !== id) {
-        this.trackRetirement(viewer, observation.setVisible(false));
-        return;
-      }
-      this.trackRetirement(viewer, observation.setVisible(true));
-      viewer.observation = observation;
-      try {
-        const controller = await tab.engine.acquireControl(
-          observation,
-          this.options.authorize,
-        );
-        if (
-          !viewer.active ||
-          viewer.observation !== observation ||
-          this.selected !== id
-        )
-          this.trackRetirement(viewer, observation.setVisible(false));
-        else viewer.controller = controller;
-      } catch (error) {
-        this.trackRetirement(viewer, observation.setVisible(false));
-        if (viewer.observation === observation) viewer.observation = undefined;
-        throw error;
-      }
+  private async control(viewer: Viewer): Promise<boolean> {
+    const observation = viewer.observation,
+      tab = this.tabs.get(viewer.selected),
+      authorize = viewer.authorize;
+    if (!viewer.active || !viewer.visible || !observation || !tab || !authorize)
+      return false;
+    if (viewer.controller) return true;
+    if (tab.engine.hasController) return false;
+    const admitted = () =>
+      viewer.active &&
+      viewer.visible &&
+      viewer.observation === observation &&
+      viewer.authorize === authorize &&
+      this.entries(viewer).some((entry) => entry.page === tab.page);
+    const controller = await tab.engine.acquireControl(
+      observation,
+      authorize,
+      admitted,
+    );
+    if (
+      !viewer.active ||
+      viewer.observation !== observation ||
+      viewer.authorize !== authorize
+    ) {
+      this.trackRetirement(viewer, controller.close());
+      return false;
     }
+    viewer.controller = controller;
+    void tab.page.bringToFront().catch(() => {});
+    return true;
+  }
+  private async select(viewer: Viewer, id: string): Promise<void> {
+    const entry = this.entries(viewer).find((entry) => entry.page.id === id);
+    if (!entry) throw new Error('Unknown source tab');
+    this.retire(viewer);
+    viewer.selected = id;
+    if (viewer === this.standaloneViewer) this.resumeTab = id;
+    this.publish(viewer);
+    const tab = await this.add(entry.page);
+    if (!viewer.active || viewer.selected !== id || this.closing) return;
+    // Only an input owner may activate the physical source page. Watching does
+    // not change AI's target, focus, viewport or personal-browser selection.
+    const observation =
+      viewer.observations.get(id) ??
+      (await tab.engine.observe(
+        (message) => {
+          if (
+            message.type === 'control' &&
+            message.target === viewer.selected &&
+            !message.active
+          )
+            viewer.controller = undefined;
+          if (
+            viewer.active &&
+            (message.type === 'ack' ||
+              message.type === 'media_end' ||
+              (message.type === 'control' && !message.active) ||
+              (this.entries(viewer).some((entry) => entry.page.id === id) &&
+                (message.type === 'media' ||
+                  (viewer.selected === id &&
+                    !(
+                      message.type === 'state' &&
+                      message.state.status === 'closed'
+                    )))))
+          )
+            viewer.send(message);
+        },
+        {
+          ...viewer.options,
+          media: viewer.mediaEnabled,
+          visible: viewer.visible,
+          onMediaFrame: viewer.options.onMediaFrame
+            ? (frame) => {
+                if (
+                  viewer.active &&
+                  this.entries(viewer).some((entry) => entry.page.id === id)
+                )
+                  viewer.options.onMediaFrame?.(frame);
+              }
+            : undefined,
+        },
+      ));
+    if (
+      !viewer.active ||
+      !this.entries(viewer).some((entry) => entry.page.id === id)
+    ) {
+      await observation.close();
+      return;
+    }
+    viewer.observations.set(id, observation);
+    if (viewer.selected !== id) {
+      this.trackRetirement(viewer, observation.setVisible(false));
+      return;
+    }
+    this.trackRetirement(viewer, observation.setVisible(viewer.visible));
+    viewer.observation = observation;
+    await this.control(viewer);
   }
   private drop(id: string): void {
     const tab = this.tabs.get(id);
     if (!tab) return;
-    if (this.selected === id) this.retire(this.viewer);
-    const observation = this.viewer?.observations.get(id);
-    this.viewer?.observations.delete(id);
-    if (observation && this.viewer)
-      this.trackRetirement(this.viewer, observation.close());
+    for (const viewer of this.viewers) {
+      if (viewer.selected === id) this.retire(viewer);
+      const observation = viewer.observations.get(id);
+      viewer.observations.delete(id);
+      if (observation) this.trackRetirement(viewer, observation.close());
+    }
     void tab.engine.close();
     this.tabs.delete(id);
   }
-  async connect(
+  async observe(
     send: (message: ServerMessage) => void,
-    options: { media?: boolean } = {},
+    options: SessionViewOptions = {},
   ): Promise<SessionConnection> {
-    if (this.hasController || this.closing)
-      throw new Error('Session unavailable');
-    await this.queue;
-    if (this.hasController || this.closing)
+    if (this.closing || this.viewers.size >= 16)
       throw new Error('Session unavailable');
     const viewer: Viewer = {
+      id: randomBytes(18).toString('base64url'),
       active: true,
+      selected: '',
+      revision: 0,
+      queue: Promise.resolve(),
+      directoryWork: Promise.resolve(),
       send,
+      options: { ...options },
+      visible: options.visible !== false,
+      observations: new Map(),
+      mediaEnabled: options.media !== false,
       lastID: 0,
       pending: 0,
       retiring: new Set(),
-      observations: new Map(),
-      mediaEnabled: options.media !== false,
     };
-    this.viewer = viewer;
+    const entries = this.entries(viewer);
+    viewer.selected =
+      entries.find(
+        (entry) => entry.page.id === (options.initialTab ?? this.resumeTab),
+      )?.page.id ??
+      entries[0]?.page.id ??
+      '';
+    this.viewers.add(viewer);
     try {
-      if (this.selected) await this.select(this.selected);
+      send({ type: 'session_access', editTabs: false });
+      if (viewer.selected) await this.select(viewer, viewer.selected);
       else {
         send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
-        this.publish();
+        this.publish(viewer);
       }
     } catch (error) {
       viewer.active = false;
       this.closeObservations(viewer);
-      this.viewer = undefined;
+      this.viewers.delete(viewer);
       throw error;
     }
     let closed: Promise<void> | undefined;
+    const session = this;
     return {
+      id: viewer.id,
+      get currentState() {
+        return session.state(viewer);
+      },
       receive: (message) => this.receive(viewer, message),
       setMedia: async (enabled) => {
         if (!viewer.active) return;
@@ -338,31 +457,88 @@ export class BrowserSession {
           ),
         );
       },
-      close: () => {
-        closed ??= (async () => {
-          viewer.active = false;
-          this.closeObservations(viewer);
-          await this.queue;
-          if (this.viewer === viewer) this.viewer = undefined;
-          await Promise.all(viewer.retiring);
-        })();
-        return closed;
+      setAudio: async (enabled) => {
+        if (!viewer.active) return;
+        viewer.options.audio = enabled;
+        await Promise.all(
+          [...viewer.observations.values()].map((observation) =>
+            observation.setAudio(enabled),
+          ),
+        );
       },
+      setVisible: async (visible) => {
+        if (!viewer.active || viewer.visible === visible) return;
+        viewer.visible = visible;
+        if (!visible) this.retire(viewer);
+        else if (viewer.selected) await this.select(viewer, viewer.selected);
+      },
+      acquireControl: async (authorize) => {
+        if (!viewer.active) return false;
+        viewer.authorize = authorize;
+        send({ type: 'session_access', editTabs: true });
+        return this.control(viewer);
+      },
+      releaseControl: () => {
+        viewer.authorize = undefined;
+        if (viewer.active) send({ type: 'session_access', editTabs: false });
+        const control = viewer.controller;
+        viewer.controller = undefined;
+        return control?.close() ?? Promise.resolve();
+      },
+      refreshGrants: () => this.refreshGrants(viewer),
+      readResource: (tab, id) => this.readViewerResource(viewer, tab, id),
+      close: () =>
+        (closed ??= (async () => {
+          viewer.active = false;
+          viewer.authorize = undefined;
+          this.closeObservations(viewer);
+          this.viewers.delete(viewer);
+          await viewer.queue;
+          await Promise.all(viewer.retiring);
+        })()),
     };
   }
+  /** Exclusive standalone convenience. Embedded windows use observe() and a
+   * separate host-authorized acquireControl(), allowing concurrent observers. */
+  async connect(
+    send: (message: ServerMessage) => void,
+    options: SessionViewOptions = {},
+  ): Promise<SessionConnection> {
+    if (this.hasController || this.closing)
+      throw new Error('Session unavailable');
+    const connection = await this.observe(send, {
+      ...this.options,
+      ...options,
+    });
+    const viewer = [...this.viewers].find(
+      (viewer) => viewer.id === connection.id,
+    )!;
+    if (this.hasController) {
+      await connection.close();
+      throw new Error('Session unavailable');
+    }
+    this.standaloneViewer = viewer;
+    this.resumeTab = viewer.selected;
+    await connection.acquireControl(this.options.authorize);
+    return connection;
+  }
   private receive(viewer: Viewer, input: ClientMessage): Promise<void> {
-    if (!viewer.active || this.viewer !== viewer) return Promise.resolve();
+    if (!viewer.active) return Promise.resolve();
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
-    if (message.type === 'media_keyframe') {
+    if (
+      viewer.selected &&
+      !this.entries(viewer).some((entry) => entry.page.id === viewer.selected)
+    )
+      void this.refreshGrants(viewer);
+    if (message.type === 'media_keyframe')
       return (
         viewer.observations.get(message.tab)?.receive(message) ??
         Promise.resolve()
       );
-    }
     if (message.type === 'resync')
-      return viewer.controller?.receive(message) ?? Promise.resolve();
+      return viewer.observation?.receive(message) ?? Promise.resolve();
     const ack = (
       code?: 'stale_view' | 'busy' | 'not_allowed' | 'action_failed',
     ) => {
@@ -374,47 +550,56 @@ export class BrowserSession {
       return Promise.resolve();
     }
     viewer.lastID = message.id;
+    if (message.tab !== viewer.selected) {
+      ack('stale_view');
+      return Promise.resolve();
+    }
     if (!message.action.kind.startsWith('tab_')) {
-      if (message.tab !== this.selected) ack('stale_view');
-      else if (viewer.controller) return viewer.controller.receive(message);
-      else ack('action_failed');
+      if (viewer.controller) return viewer.controller.receive(message);
+      ack('not_allowed');
+      return Promise.resolve();
+    }
+    if (!viewer.authorize && message.action.kind !== 'tab_select') {
+      ack('not_allowed');
       return Promise.resolve();
     }
     if (viewer.pending >= MAX_PENDING_COMMANDS) {
       ack('busy');
       return Promise.resolve();
     }
-    if (message.tab !== this.selected) {
-      ack('stale_view');
-      return Promise.resolve();
-    }
     const revision = ['tab_move', 'tab_pin'].includes(message.action.kind)
-      ? this.selectionRevision
-      : ++this.selectionRevision;
+      ? viewer.revision
+      : ++viewer.revision;
     viewer.pending++;
     let operation: Promise<void> | undefined;
-    const admission = this.enqueue(async () => {
+    const admission = this.enqueue(viewer, async () => {
       if (!viewer.active) return;
-      if (message.tab !== this.selected) {
+      if (message.tab !== viewer.selected) {
         ack('stale_view');
         return;
       }
-      const action = message.action;
-      if (!(await this.options.authorize(action))) {
+      const action = message.action,
+        authorize = viewer.authorize;
+      if (authorize && !(await authorize(action))) {
         ack('not_allowed');
         return;
       }
-      if (!viewer.active || message.tab !== this.selected) return;
+      if (
+        !viewer.active ||
+        message.tab !== viewer.selected ||
+        viewer.authorize !== authorize
+      )
+        return;
       operation = (async () => {
         if (action.kind === 'tab_new' || action.kind === 'tab_restore') {
           const page =
             action.kind === 'tab_new'
               ? await this.directory.create()
               : await this.directory.restore();
-          if (page && viewer.active && revision === this.selectionRevision)
-            await this.select(page.id);
+          if (page && viewer.active && revision === viewer.revision)
+            await this.select(viewer, page.id);
         } else if ('tab' in action) {
-          const ids = this.entries().map((entry) => entry.page.id);
+          const ids = this.entries(viewer).map((entry) => entry.page.id);
           if (
             !ids.includes(action.tab) ||
             (action.kind === 'tab_move' &&
@@ -428,22 +613,20 @@ export class BrowserSession {
             await this.directory.move(action.tab, action.before);
           else if (action.kind === 'tab_pin')
             await this.directory.pin(action.tab, action.pinned);
-          else if (action.kind === 'tab_select') await this.select(action.tab);
+          else if (action.kind === 'tab_select')
+            await this.select(viewer, action.tab);
           else if (action.kind === 'tab_close') {
             await this.directory.close(action.tab);
-            await this.directoryWork;
+            await viewer.directoryWork;
           }
         }
         ack();
       })();
-      // Observe immediately, even while the admission promise is settling.
       void operation.catch(() => {});
     });
     return admission
       .then(() => operation)
-      .catch(() => {
-        ack('action_failed');
-      })
+      .catch(() => ack('action_failed'))
       .finally(() => {
         viewer.pending--;
       });
@@ -458,16 +641,33 @@ export class BrowserSession {
   async readResource(tab: string, id: string) {
     return this.tabs.get(tab)?.engine.resources.read(id);
   }
+  private async readViewerResource(viewer: Viewer, tab: string, id: string) {
+    const observation = viewer.observations.get(tab);
+    const authorized = () =>
+      viewer.active &&
+      observation &&
+      viewer.observations.get(tab) === observation &&
+      this.entries(viewer).some((entry) => entry.page.id === tab);
+    if (!authorized()) return;
+    const resource = await this.tabs.get(tab)?.engine.resources.read(id);
+    return authorized() ? resource : undefined;
+  }
   close(): Promise<void> {
     return (this.closing ??= (async () => {
       this.unsubscribe?.();
       this.standalone?.dispose();
-      if (this.viewer) {
-        this.viewer.active = false;
-        this.closeObservations(this.viewer);
-        await Promise.all(this.viewer.retiring);
+      for (const viewer of this.viewers) {
+        viewer.active = false;
+        viewer.authorize = undefined;
+        this.closeObservations(viewer);
       }
-      await this.queue;
+      await Promise.all(
+        [...this.viewers].flatMap((viewer) => [
+          viewer.queue,
+          ...viewer.retiring,
+        ]),
+      );
+      this.viewers.clear();
       await Promise.allSettled(this.adding.values());
       await Promise.all(
         [...this.tabs.values()].map(({ engine }) => engine.close()),

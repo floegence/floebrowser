@@ -579,3 +579,12 @@
   background: var(--floe-line);
   margin: 4px;
 }
+
+.floe-browser .take-control {
+  border: 1px solid var(--floe-line);
+  border-radius: 6px;
+  background: var(--floe-background);
+  padding: 5px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
