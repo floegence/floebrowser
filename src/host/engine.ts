@@ -31,12 +31,14 @@ import {
   type DialogState,
   type FileChooserState,
   type UploadFile,
+  type DownloadFile,
   type ServerMessage,
 } from '../shared/protocol.js';
 import { DOMProjection } from './projection.js';
 import { ResourceStore } from './resources.js';
 import { FrameBridge } from './frames.js';
 import { SourceFind } from './find.js';
+import { DownloadTransfers } from './downloads.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
 import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
@@ -92,6 +94,7 @@ export interface ObservationOptions {
 }
 export interface Observation {
   readonly id: string;
+  download(id: string, signal?: AbortSignal): Promise<DownloadFile>;
   /** Only resynchronization and media recovery are accepted here, never input. */
   receive(message: ClientMessage): Promise<void>;
   setMedia(enabled: boolean): Promise<void>;
@@ -100,6 +103,7 @@ export interface Observation {
   close(): Promise<void>;
 }
 type Watcher = ObservationOptions & {
+  transfers: DownloadTransfers;
   id: string;
   view: string;
   active: boolean;
@@ -399,10 +403,11 @@ export class BrowserProjection {
     };
     this.listen(this.page, 'documentchanged', retireFiles);
     this.listen(this.page, 'framedetached', retireFiles);
-    this.listen(this.page, 'download', () =>
+    this.listen(this.page, 'downloadschanged', () => this.publishDownloads());
+    this.listen(this.page, 'downloadunavailable', () =>
       this.send({
         type: 'notice',
-        code: 'download_source_only',
+        code: 'download_unavailable',
       }),
     );
     await this.resources.start();
@@ -482,6 +487,25 @@ export class BrowserProjection {
         void this.unobserve(watcher);
       }
     }
+  }
+  private publishDownloads(watcher?: Watcher): void {
+    const message: ServerMessage = {
+      type: 'downloads',
+      target: this.id,
+      items: this.page.downloads().map((download) => ({
+        ...download.state,
+        filename: download.state.filename.slice(0, 1024),
+      })),
+    };
+    if (watcher) watcher.send(message);
+    else this.send(message);
+  }
+  private download(
+    watcher: Watcher,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<DownloadFile> {
+    return watcher.transfers.open(this.page, id, () => watcher.active, signal);
   }
   private get domWatched(): boolean {
     return [...this.watchers].some(
@@ -734,6 +758,7 @@ export class BrowserProjection {
     if (this.closed || this.closing || this.watchers.size >= 16)
       throw new Error('Source observation unavailable');
     const watcher: Watcher = {
+      transfers: new DownloadTransfers(),
       ...options,
       id: randomBytes(18).toString('base64url'),
       view: randomBytes(18).toString('base64url'),
@@ -747,6 +772,7 @@ export class BrowserProjection {
     this.watchers.add(watcher);
     const observation: Observation = {
       id: watcher.id,
+      download: (id, signal) => this.download(watcher, id, signal),
       receive: (message) => this.receiveObservation(watcher, message),
       setVisible: async (visible) => {
         if (!watcher.active || watcher.visible === visible) return;
@@ -788,6 +814,7 @@ export class BrowserProjection {
       send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
       send({ type: 'state', state: this.currentState });
       send({ type: 'control', target: this.id, active: false });
+      this.publishDownloads(watcher);
       void (
         watcher.visible ? this.snapshot() : this.setMedia(this.mediaWatched)
       ).catch(() => {
@@ -811,6 +838,7 @@ export class BrowserProjection {
   private unobserve(watcher: Watcher): Promise<void> {
     if (watcher.closing) return watcher.closing;
     watcher.active = false;
+    watcher.transfers.close();
     this.watchers.delete(watcher);
     if (!this.watchers.size) this.epoch = '';
     try {
@@ -1287,6 +1315,14 @@ export class BrowserProjection {
     };
     assertCurrent();
     if (this.controlFault) throw new CommandError('target_unavailable');
+    if (action.kind === 'download_cancel') {
+      const download = this.page
+        .downloads()
+        .find((file) => file.state.id === action.download);
+      if (!download) throw new CommandError('stale_view');
+      await download.cancel();
+      return;
+    }
     if (action.kind === 'file_reply') {
       const chooser = this.chooser;
       if (
@@ -1738,7 +1774,10 @@ export class BrowserProjection {
       }
     }
     this.clearMedia();
-    for (const watcher of this.watchers) watcher.active = false;
+    for (const watcher of this.watchers) {
+      watcher.active = false;
+      watcher.transfers.close();
+    }
     this.watchers.clear();
     await this.dismissDialog();
     await this.dismissFiles();
@@ -1787,6 +1826,7 @@ function documentIndependent(action: Action): boolean {
     'zoom',
     'dialog_reply',
     'file_reply',
+    'download_cancel',
   ].includes(action.kind);
 }
 function keyCode(key: string, code: string): number {

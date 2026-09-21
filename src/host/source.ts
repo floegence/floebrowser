@@ -7,6 +7,15 @@ export interface SourceTransport {
 }
 export type SourceViewport = { width: number; height: number };
 export type SourceFunction<A, R> = (argument: A) => R | Promise<R>;
+export type SourceDownloadState = import('../shared/protocol.js').DownloadState;
+/** Only a specific download observed from this authorized source target. Never
+ * enumerate a user's download directory or perform a second network fetch. */
+export interface SourceDownload {
+  readonly state: SourceDownloadState;
+  subscribe(changed: () => void): () => void;
+  open(signal: AbortSignal): Promise<AsyncIterable<Uint8Array>>;
+  cancel(): Promise<void>;
+}
 export interface SourceDialog {
   type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
   url: string;
@@ -57,6 +66,7 @@ export interface SourcePage {
   frames(): SourceFrame[];
   mainFrame(): SourceFrame;
   sessions(): SourceTransport[];
+  downloads(): readonly SourceDownload[];
   /** The source owner routes native choosers only while remote control is held. */
   setFileChooserIntercepted(enabled: boolean): Promise<void>;
   url(): string;

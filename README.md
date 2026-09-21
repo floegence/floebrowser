@@ -255,6 +255,31 @@ Chromium's lazy reads until their source document or source adapter ends, even
 if the projection detaches. The shared source budget survives projection
 recreation. A source file mutation has no automatic retry after an unknown result.
 
+Source downloads use a separate file-read contract. `SourcePage.downloads()`
+lists only download handles reported by that source owner, and
+`downloadschanged` publishes changes. Playwright wraps the exact native download
+handle. Other CDP/extension owners enable their download adapter and call
+`CDPSourcePage.reportDownload(handle)` with a `SourceDownload` that exposes state,
+cancellation, and an abortable byte iterator for that exact file. Projection never
+configures a browser-wide download directory, scans personal files, or repeats
+the website request. The source adapter retains at most 128 download records,
+evicting older terminal records before accepting more.
+
+The browser's download panel lists authorized source downloads, including
+background tabs after viewer refresh, without attaching their renderers or
+selecting them. Saving is an explicit local gesture. Hosts implement
+`ProjectionConnection.download(target, id, signal)` and read the matching
+`SessionConnection.download(target, id, signal)` over their file carrier. A
+low-level `Observation` exposes the same authorized download operation. Reads
+are independent of input control, capped at four concurrent transfers per view,
+use at most 16 KiB chunks, and verify the source byte count. Revoking observation
+or closing the target cancels reads; revoking input alone does not. Cancellation
+of an unfinished native download is an authorized source action. Native download
+files remain owned by their source browser/context, and availability ends with
+the source target grant or adapter lifetime. The standalone carrier streams
+attachments to the browser's native save UI without buffering entire files in
+viewer JavaScript.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:
@@ -501,7 +526,7 @@ The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exerci
 | CAPTCHA                                                      | DOM-based widgets can be shown and operated by the user; site acceptance, image challenges and anti-automation compatibility require site qualification |
 | Native dialogs                                               | Alerts, confirmations, prompts and beforeunload are shown to the current controller; unattended dialogs are cancelled unless handled by the host        |
 | File inputs                                                  | Native source selection; bounded host-carried uploads and directory paths; no arbitrary source file access                                              |
-| Downloads                                                    | Started at the source with a notice; no file-transfer UI                                                                                                |
+| Downloads                                                    | Native source downloads, explicit client save, cancellation and revocable streaming through the host carrier                                            |
 | Clipboard                                                    | Text paste and copying projected text; no source OS clipboard synchronization                                                                           |
 | Existing loaded pages                                        | Recover retained source resources on attachment; bodies already discarded by Chromium remain unavailable                                                |
 | Closed shadow roots, DRM, WebAuthn, browser chrome, DevTools | Not supported or qualified                                                                                                                              |

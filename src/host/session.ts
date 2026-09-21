@@ -7,6 +7,7 @@ import {
   type DirectoryChange,
 } from './directory.js';
 import { PlaywrightSourceBrowser } from './playwright-source.js';
+import { DownloadTransfers } from './downloads.js';
 import {
   BrowserProjection,
   type AttachOptions,
@@ -21,6 +22,7 @@ import {
   type ClientMessage,
   type ServerMessage,
   type TabState,
+  type DownloadFile,
 } from '../shared/protocol.js';
 
 type Tab = { page: SourcePage; engine: BrowserProjection };
@@ -30,6 +32,7 @@ export interface SessionViewOptions extends ObservationOptions {
   canObserve?: (page: SourcePage) => boolean;
 }
 type Viewer = {
+  transfers: DownloadTransfers;
   id: string;
   active: boolean;
   selected: string;
@@ -58,6 +61,11 @@ export interface SessionConnection extends Controller {
    * it never steals user/AI control. Authorized directory operations remain usable. */
   acquireControl(authorize: AttachOptions['authorize']): Promise<boolean>;
   releaseControl(): Promise<void>;
+  download(
+    tab: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<DownloadFile>;
   /** Revokes removed observation grants synchronously before returning the drain. */
   refreshGrants(): Promise<void>;
   readResource(
@@ -69,6 +77,7 @@ export interface SessionConnection extends Controller {
 /** One projection owner per authorized source; each view selects independently.
  * The host owns source grants, lifecycle and user/AI target-control policy. */
 export class BrowserSession {
+  private downloadTargets = new Map<SourcePage, () => void>();
   private tabs = new Map<string, Tab>();
   private adding = new Map<SourcePage, Promise<Tab>>();
   private viewers = new Set<Viewer>();
@@ -116,6 +125,7 @@ export class BrowserSession {
     );
     try {
       const entries = this.entries();
+      this.watchDownloads();
       this.directoryOrder = entries.map((entry) => entry.page.id);
       if (entries[0]) {
         await this.add(entries[0].page);
@@ -123,6 +133,8 @@ export class BrowserSession {
       }
     } catch (error) {
       this.unsubscribe();
+      for (const dispose of this.downloadTargets.values()) dispose();
+      this.downloadTargets.clear();
       throw error;
     }
   }
@@ -141,6 +153,7 @@ export class BrowserSession {
   }
   private directoryChanged(change: DirectoryChange): void {
     if (this.closing) return;
+    this.watchDownloads();
     const ids = this.entries().map((entry) => entry.page.id);
     const previous = this.directoryOrder;
     this.directoryOrder = ids;
@@ -156,6 +169,7 @@ export class BrowserSession {
   ): Promise<void> {
     if (!viewer.active) return Promise.resolve();
     const ids = this.entries(viewer).map((entry) => entry.page.id);
+    viewer.transfers.retain((page) => ids.includes(page.id));
     for (const [id, observation] of viewer.observations)
       if (!ids.includes(id)) {
         viewer.observations.delete(id);
@@ -186,7 +200,40 @@ export class BrowserSession {
         : Promise.resolve();
     }
     this.publish(viewer);
+    this.publishDownloads(viewer);
     return viewer.directoryWork;
+  }
+  private watchDownloads(): void {
+    const entries = this.entries();
+    for (const [page, dispose] of this.downloadTargets)
+      if (!entries.some((entry) => entry.page === page)) {
+        dispose();
+        this.downloadTargets.delete(page);
+      }
+    for (const { page } of entries)
+      if (!this.downloadTargets.has(page)) {
+        const changed = () => {
+          for (const viewer of this.viewers)
+            this.publishDownloads(viewer, page);
+        };
+        page.on('downloadschanged', changed);
+        this.downloadTargets.set(page, () =>
+          page.off('downloadschanged', changed),
+        );
+      }
+  }
+  private publishDownloads(viewer: Viewer, target?: SourcePage): void {
+    if (!viewer.active) return;
+    for (const { page } of this.entries(viewer))
+      if (!target || target === page)
+        viewer.send({
+          type: 'downloads',
+          target: page.id,
+          items: page.downloads().map((download) => ({
+            ...download.state,
+            filename: download.state.filename.slice(0, 1024),
+          })),
+        });
   }
   /** Standalone convenience; embedded consumers use their connection's state. */
   get activeProjection(): BrowserProjection {
@@ -282,6 +329,7 @@ export class BrowserSession {
       this.trackRetirement(viewer, observation.setVisible(false));
   }
   private closeObservations(viewer: Viewer): void {
+    viewer.transfers.close();
     viewer.controller = undefined;
     viewer.observation = undefined;
     for (const observation of viewer.observations.values())
@@ -346,6 +394,7 @@ export class BrowserSession {
             viewer.controller = undefined;
           if (
             viewer.active &&
+            message.type !== 'downloads' &&
             (message.type === 'ack' ||
               message.type === 'media_end' ||
               (message.type === 'control' && !message.active) ||
@@ -409,6 +458,7 @@ export class BrowserSession {
     if (this.closing || this.viewers.size >= 16)
       throw new Error('Session unavailable');
     const viewer: Viewer = {
+      transfers: new DownloadTransfers(),
       id: randomBytes(18).toString('base64url'),
       active: true,
       selected: '',
@@ -439,6 +489,7 @@ export class BrowserSession {
         send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
         this.publish(viewer);
       }
+      this.publishDownloads(viewer);
     } catch (error) {
       viewer.active = false;
       this.closeObservations(viewer);
@@ -503,6 +554,16 @@ export class BrowserSession {
       },
       refreshGrants: () => this.refreshGrants(viewer),
       readResource: (tab, id) => this.readViewerResource(viewer, tab, id),
+      download: async (tab, id, signal) => {
+        const page = this.entries(viewer).find(
+          (entry) => entry.page.id === tab,
+        )?.page;
+        const authorized = () =>
+          viewer.active &&
+          this.entries(viewer).some((entry) => entry.page === page);
+        if (!page || !authorized()) throw new Error('Download unavailable');
+        return viewer.transfers.open(page, id, authorized, signal);
+      },
       close: () =>
         (closed ??= (async () => {
           viewer.active = false;
@@ -674,6 +735,8 @@ export class BrowserSession {
   close(): Promise<void> {
     return (this.closing ??= (async () => {
       this.unsubscribe?.();
+      for (const dispose of this.downloadTargets.values()) dispose();
+      this.downloadTargets.clear();
       this.standalone?.dispose();
       for (const viewer of this.viewers) {
         viewer.active = false;

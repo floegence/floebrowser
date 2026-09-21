@@ -6,6 +6,7 @@ import { WebsiteDialog } from './dialog.js';
 import { PageFind } from './find.js';
 import { PageZoom } from './zoom.js';
 import { FilePicker } from './files.js';
+import { Downloads } from './downloads.js';
 import { browserTemplate } from './template.js';
 import {
   AddressSuggestions,
@@ -121,6 +122,13 @@ export function mountBrowser(
       updateChrome();
     },
   );
+  const downloads = new Downloads(
+    element<HTMLButtonElement>('downloads'),
+    stage,
+    text,
+    (target, id, signal) => view!.download(target, id, signal),
+    (action) => command(action),
+  );
   // Only unsent tab selections are replaceable. Submitted effects are never replayed.
   type ChromeCommand = { action: Action; resolve: (ok: boolean) => void };
   const commands: ChromeCommand[] = [];
@@ -171,6 +179,7 @@ export function mountBrowser(
     );
   }
   function updateChrome(): void {
+    downloads.enable(connected, controlling, view?.canDownload ?? false);
     if (!connected) tabOrder.cancel();
     const selected = desiredTab();
     const pending = switching();
@@ -444,6 +453,10 @@ export function mountBrowser(
         files.show(request, view?.canUpload);
         options.onFileChooser?.(request);
       },
+      onDownloads: (target, items) => {
+        downloads.state(target, items);
+        options.onDownloads?.(target, items);
+      },
       onControl: (active) => {
         controlling = active;
         options.onControl?.(active);
@@ -456,6 +469,7 @@ export function mountBrowser(
       },
       mediaControls: element('media-controls'),
       onTabs: (state) => {
+        downloads.tabs(state);
         if (generation === admittedGeneration && !destroyed) renderTabs(state);
       },
       onState: (state) => {
@@ -882,6 +896,7 @@ export function mountBrowser(
     find.destroy();
     zoom.destroy();
     files.destroy();
+    downloads.destroy();
     view?.destroy();
     root.remove();
   }

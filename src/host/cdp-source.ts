@@ -3,6 +3,7 @@ import type {
   SourceElement,
   SourceDialog,
   SourceFileChooser,
+  SourceDownload,
   SourceFrame,
   SourceFunction,
   SourcePage,
@@ -15,6 +16,8 @@ export type SourceContext = {
   auxData?: { isDefault?: boolean; frameId?: string };
 };
 export interface CDPSourceOptions {
+  /** The host routes native download handles through reportDownload(). */
+  downloads?: boolean;
   id: string;
   transport: SourceTransport;
   /** Existing default contexts when borrowing an already enabled connection.
@@ -47,6 +50,10 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   private disposed = false;
   private interceptFiles = false;
   private chooserGeneration = 0;
+  private downloadMap = new Map<
+    string,
+    { source: SourceDownload; dispose: () => void }
+  >();
   private constructor(private options: CDPSourceOptions) {
     super();
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(options.id))
@@ -140,8 +147,10 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       listen('Page.domContentEventFired', () => this.emit('domcontentloaded'));
       listen('Page.loadEventFired', () => this.emit('load'));
       listen('Inspector.targetCrashed', () => this.emit('crash'));
-      listen('Page.downloadWillBegin', (download) =>
-        this.emit('download', download),
+      listen(
+        'Page.downloadWillBegin',
+        (download) =>
+          !this.options.downloads && this.emit('downloadunavailable', download),
       );
     }
     let activeDialog: SourceDialog | undefined;
@@ -241,6 +250,32 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   }
   sessions(): SourceTransport[] {
     return [...this.sessionMap.keys()];
+  }
+  downloads(): readonly SourceDownload[] {
+    return [...this.downloadMap.values()].map((entry) => entry.source);
+  }
+  reportDownload(download: SourceDownload): void {
+    if (this.disposed) return;
+    const id = download.state.id;
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || this.downloadMap.has(id))
+      throw new Error('Invalid source download identity');
+    if (this.downloadMap.size >= 128) {
+      const retired = [...this.downloadMap].find(
+        ([, entry]) => entry.source.state.status !== 'receiving',
+      );
+      if (retired) {
+        retired[1].dispose();
+        this.downloadMap.delete(retired[0]);
+      } else {
+        this.emit('downloadunavailable');
+        return;
+      }
+    }
+    this.downloadMap.set(id, {
+      source: download,
+      dispose: download.subscribe(() => this.emit('downloadschanged')),
+    });
+    this.emit('downloadschanged');
   }
   async setFileChooserIntercepted(enabled: boolean): Promise<void> {
     if (this.interceptFiles === enabled) return;
@@ -498,6 +533,8 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       this.emit('close');
     }
     for (const transport of this.sessions()) this.removeSession(transport);
+    for (const entry of this.downloadMap.values()) entry.dispose();
+    this.downloadMap.clear();
     this.removeAllListeners();
   }
 }

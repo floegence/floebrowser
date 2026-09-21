@@ -5,6 +5,8 @@ import {
 } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
 import type { SourcePage } from './source.js';
@@ -104,6 +106,51 @@ export async function createProjectionServer(
         return;
       }
       const path = url.pathname.slice(base.length);
+      if (path.startsWith('download/') && request.method === 'GET') {
+        const [token, tab, id, extra] = path.slice(9).split('/');
+        const viewer = active;
+        if (
+          !viewer?.connection ||
+          token !== viewer.uploadToken ||
+          !tab ||
+          !id ||
+          extra ||
+          viewer.ws.readyState !== WebSocket.OPEN
+        ) {
+          respond(response, 403, 'Download unavailable');
+          return;
+        }
+        const abort = new AbortController();
+        const canceled = () => {
+          if (!response.writableFinished) abort.abort();
+        };
+        response.on('close', canceled);
+        try {
+          const file = await viewer.connection.download(tab, id, abort.signal);
+          const filename = encodeURIComponent(file.filename).replace(
+            /['()*]/g,
+            (character) => `%${character.charCodeAt(0).toString(16)}`,
+          );
+          response.writeHead(200, {
+            ...securityHeaders,
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${filename}`,
+            ...(file.size !== undefined
+              ? { 'Content-Length': String(file.size) }
+              : {}),
+          });
+          await pipeline(Readable.from(file.body), response, {
+            signal: abort.signal,
+          });
+        } catch {
+          if (!response.headersSent && !response.destroyed)
+            respond(response, 404, 'Download unavailable');
+          else response.destroy();
+        } finally {
+          response.off('close', canceled);
+        }
+        return;
+      }
       if (path.startsWith('upload/') && request.method === 'POST') {
         const [token, chooser, extra] = path.slice(7).split('/');
         const viewer = active;

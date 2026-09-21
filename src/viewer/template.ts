@@ -84,6 +84,7 @@ const template = `    <main class="floe-browser browser-window">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
         </button>
         <div data-floe-ui="media-controls"></div>
+        <button class="icon-button" data-floe-ui="downloads"></button>
         <span
           class="status connecting"
           data-floe-ui="status"
@@ -168,6 +169,7 @@ export function browserTemplate(
     reload: 'navigation.reloadPage',
     find: 'find.label',
     zoom: 'zoom.label',
+    downloads: 'downloads.title',
     'dismiss-toast': 'notice.dismiss',
   };
   for (const [id, key] of Object.entries(labels)) {

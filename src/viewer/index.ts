@@ -22,4 +22,5 @@ export type {
   ProjectionConnection,
   FileChooserState,
   UploadFile,
+  DownloadState,
 } from '../shared/protocol.js';

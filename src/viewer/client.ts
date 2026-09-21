@@ -31,6 +31,7 @@ import type {
   TabState,
   DialogState,
   FileChooserState,
+  DownloadState,
 } from '../shared/protocol.js';
 import {
   DISCONNECT_CODES,
@@ -62,6 +63,7 @@ export type ViewOptions = {
   /** Website-native dialogs are delivered only to the active source controller. */
   onDialog?: (dialog: DialogState | null) => void;
   onFileChooser?: (chooser: FileChooserState | null) => void;
+  onDownloads?: (target: string, downloads: DownloadState[]) => void;
   onFind?: (result: { query: string; found: boolean }) => void;
 };
 type Pending = {
@@ -345,6 +347,10 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'downloads') {
+      this.options.onDownloads?.(message.target, message.items);
+      return;
+    }
     if (message.type === 'file_chooser') {
       if (
         message.target === this.tab &&
@@ -730,6 +736,7 @@ export class DOMBrowserView {
           'stop',
           'dialog_reply',
           'file_reply',
+          'download_cancel',
           'viewport',
           'zoom',
           'tab_new',
@@ -810,6 +817,18 @@ export class DOMBrowserView {
 
   get canUpload(): boolean {
     return !!this.connection.upload;
+  }
+  get canDownload(): boolean {
+    return !!this.connection.download;
+  }
+  download(target: string, id: string, signal: AbortSignal): Promise<void> {
+    if (
+      !this.connected ||
+      !this.tabTitles.has(target) ||
+      !this.connection.download
+    )
+      return Promise.reject(new Error('Download unavailable'));
+    return this.connection.download(target, id, signal);
   }
   upload(
     request: FileChooserState,
@@ -1278,6 +1297,26 @@ export function webSocketConnection(url: string): ProjectionConnection {
     for (const listener of disconnected) listener(reason);
   });
   return {
+    download: async (target, id, signal) => {
+      signal.throwIfAborted();
+      if (socket.readyState !== WebSocket.OPEN || !uploadToken)
+        throw new Error('Disconnected');
+      const address = new URL(url, location.href);
+      address.protocol = address.protocol === 'wss:' ? 'https:' : 'http:';
+      address.pathname = address.pathname.replace(
+        /stream$/,
+        `download/${uploadToken}/${encodeURIComponent(target)}/${encodeURIComponent(id)}`,
+      );
+      address.search = '';
+      const anchor = document.createElement('a');
+      anchor.href = address.href;
+      anchor.download = '';
+      anchor.referrerPolicy = 'no-referrer';
+      anchor.hidden = true;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    },
     upload: async (request, file, signal) => {
       if (socket.readyState !== WebSocket.OPEN || !uploadToken)
         throw new Error('Disconnected');

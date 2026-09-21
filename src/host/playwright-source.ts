@@ -1,5 +1,6 @@
-import type { CDPSession, Frame, Page } from 'playwright';
+import type { CDPSession, Frame, Page, Download } from 'playwright';
 import { CDPSourcePage } from './cdp-source.js';
+import { playwrightDownload } from './downloads.js';
 
 const sources = new WeakMap<Page, Promise<CDPSourcePage>>();
 
@@ -31,6 +32,7 @@ export class PlaywrightSourceBrowser {
       source = await CDPSourcePage.attach({
         id: id ?? target.targetInfo.targetId,
         transport: root,
+        downloads: true,
         viewport: page.viewportSize() ?? undefined,
         setViewport: async (size, deviceScaleFactor) => {
           // Keep Playwright's CSS viewport model aligned with the borrowed CDP
@@ -107,6 +109,8 @@ export class PlaywrightSourceBrowser {
         .catch(() => {});
     };
     const crash = () => source.emit('crash');
+    const download = (file: Download) =>
+      source.reportDownload(playwrightDownload(file));
     // Playwright otherwise auto-dismisses website dialogs before the shared
     // debugger owner can present them to the authorized controller.
     const dialog = () => {};
@@ -119,6 +123,7 @@ export class PlaywrightSourceBrowser {
     page.on('framedetached', detached);
     page.on('popup', popup);
     page.on('crash', crash);
+    page.on('download', download);
     page.on('dialog', dialog);
     page.on('close', closed);
     const dispose = async () => {
@@ -132,6 +137,7 @@ export class PlaywrightSourceBrowser {
       page.off('framedetached', detached);
       page.off('popup', popup);
       page.off('crash', crash);
+      page.off('download', download);
       page.off('dialog', dialog);
       page.off('close', closed);
       await Promise.allSettled(pending.values());

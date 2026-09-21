@@ -29,6 +29,18 @@ export type FileChooserState = {
   maxBytes: number;
   maxFiles: number;
 };
+export type DownloadState = {
+  id: string;
+  filename: string;
+  status: 'receiving' | 'complete' | 'canceled' | 'failed';
+  received: number;
+  size?: number;
+};
+export type DownloadFile = {
+  filename: string;
+  size?: number;
+  body: AsyncIterable<Uint8Array>;
+};
 
 const point = z
   .object({
@@ -39,6 +51,12 @@ const point = z
   .strict();
 const modifiers = z.number().int().min(0).max(15);
 export const actionSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('download_cancel'),
+      download: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal('file_reply'),
@@ -262,10 +280,11 @@ export type NoticeCode =
   | 'dom_limit'
   | 'dom_update_failed'
   | 'popup_unavailable'
-  | 'download_source_only'
+  | 'download_unavailable'
   | 'resource_limit'
   | 'tab_unavailable';
 export type ServerMessage =
+  | { type: 'downloads'; target: string; items: DownloadState[] }
   | { type: 'file_chooser'; target: string; chooser: FileChooserState | null }
   | {
       type: 'find';
@@ -316,6 +335,8 @@ export type ServerMessage =
   | { type: 'notice'; code: NoticeCode };
 
 export interface ProjectionConnection {
+  /** Save one observed source download through the host carrier/native UI. */
+  download?(target: string, id: string, signal: AbortSignal): Promise<void>;
   /** Independent binary upload lane; the host authenticates and binds it to
    * the exact controller and chooser. No data is sent to the website directly. */
   upload?(

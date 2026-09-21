@@ -711,3 +711,59 @@
   font-size: 12px;
   white-space: nowrap;
 }
+
+.floe-browser .downloads-panel {
+  position: absolute;
+  z-index: 42;
+  top: 8px;
+  right: 12px;
+  width: min(380px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--floe-background);
+  box-shadow: 0 12px 36px #17263e24;
+}
+.floe-browser .downloads-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.floe-browser .downloads-panel h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.floe-browser .downloads-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.floe-browser .download-row {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.floe-browser .download-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.floe-browser .download-row h3 {
+  font-size: 13px;
+  font-weight: 500;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.floe-browser .download-row p {
+  margin: 4px 0 12px;
+  overflow-wrap: anywhere;
+}
+.floe-browser .download-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.floe-browser .has-downloads {
+  color: var(--accent);
+}

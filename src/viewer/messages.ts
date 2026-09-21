@@ -61,6 +61,18 @@ export const englishMessages = {
   'files.failed':
     'The files could not be confirmed. Cancel and choose files again on the page.',
   'files.unavailable': 'File transfer is not available in this connection.',
+  'downloads.title': 'Downloads',
+  'downloads.close': 'Close downloads',
+  'downloads.empty': 'Files downloaded by your source pages appear here.',
+  'downloads.save': 'Save file',
+  'downloads.cancel': 'Cancel download',
+  'downloads.openTab': 'Open tab',
+  'downloads.receiving': 'Downloading at source…',
+  'downloads.complete': 'Ready to save',
+  'downloads.canceled': 'Canceled',
+  'downloads.failed': 'Download failed',
+  'downloads.unavailable':
+    'This file is no longer available in this connection.',
   'files.limit':
     'Choose fewer or smaller files. Reloading the source page releases its earlier file selections.',
   'status.loading': 'Loading',
@@ -92,8 +104,8 @@ export const englishMessages = {
     'A page update could not be projected. Reconnect to refresh the view.',
   'notice.popup_unavailable':
     'The website opened another source tab. Additional tabs are not projected in this version.',
-  'notice.download_source_only':
-    'The download was started in the source browser. File transfer is not available in this version.',
+  'notice.download_unavailable':
+    'The file is downloading in the source browser, but this connection cannot transfer it.',
   'notice.resource_limit':
     'A page resource exceeds the projection memory limit.',
   'notice.tab_unavailable':
