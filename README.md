@@ -573,6 +573,29 @@ Canvas layout attributes, source intrinsic dimensions and mutations remain on th
 
 The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exercised at a 781 × 801 source viewport through seven chapter selections and repeated scrolling. The qualification compared the geometry of the directory controls, article controls and editor Canvas surfaces against the source and observed 69 acknowledged actions with no rejected actions. This validates those document flows, not WebGL or WebGPU rendering.
 
+## Published Flowersec transport qualification
+
+`test/flowersec.e2e.ts` uses the published TypeScript SDK 5.2.3 and Go SDK v5.2.2
+through public ByteStream APIs. The disposable Go acceptor binds numeric loopback,
+issues one test artifact and checks a host-only session cookie before upgrade.
+The test uses the SDK's explicit `flowersec-private-loopback/1` profile; it does
+not implement or replace encryption, multiplexing, authorization or reconnect.
+Flowersec remains a development-only dependency of this transport-neutral SDK.
+
+One session carries control acknowledgements, an 8 MiB resource transfer, bounded
+synthetic media packets and a stream whose reader deliberately stalls. The check
+verifies that media stops at its consumer-credit budget, writes stay at most
+16 KiB, resumed consumption progresses, a reset settles the blocked writer, and
+control latency does not grow by 100 ms at p95 on that local run. It writes the
+source commit, environment, SDK versions and measured values to
+`.test-artifacts/flowersec-mixed-lanes.json`.
+
+This is a local stream scheduling/cancellation check, not the required 80 ms RTT /
+10 Mbps product performance acceptance, a 30-minute soak, actual codec decoding,
+or qualification of Redeven's Flowersec carrier. The real media decoding cases
+are separate. No Flowersec SDK defect or need for a downstream transport copy
+has been established by this check.
+
 ## Current limits
 
 | Surface                                                      | Preview behavior                                                                                                                                        |

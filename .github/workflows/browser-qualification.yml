@@ -16,10 +16,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: media/go.mod
-          cache-dependency-path: media/go.sum
+          cache-dependency-path: |
+            media/go.sum
+            test/flowersec/go.sum
       - run: go test -race ./...
         working-directory: media
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium firefox webkit
         env:
           PLAYWRIGHT_SKIP_BROWSER_GC: '1'
       - run: npm run build

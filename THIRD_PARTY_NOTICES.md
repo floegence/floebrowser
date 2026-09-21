@@ -42,6 +42,12 @@ and notice files in `dist/THIRD_PARTY_LICENSES.txt`. Installed npm dependencies 
 license files where supplied by their maintainers. Development tooling is not
 included in the shipped browser bundle.
 
+The development-only Flowersec transport qualification uses the MIT-licensed
+`@floegence/flowersec-core` 5.2.3 and
+`github.com/floegence/flowersec/flowersec-go/v5` v5.2.2 from
+https://github.com/floegence/flowersec. They are not runtime dependencies or
+included in the FloeBrowser media helper.
+
 ## MIT license (rrweb and MIT components)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
