@@ -353,6 +353,19 @@ tabs are not discovered or admitted. The adapter never changes
 `Target.setAutoAttach`, disables shared domains, or closes a borrowed debugger.
 Its `dispose()` ends the adapter's consumers and removes its listeners.
 
+Source adapters emit `framecontext(frame)` after each new default execution
+context becomes usable. `CDPSourcePage` supplies this event automatically.
+Navigation may arrive before the context; the projection installs the child
+recorder when its context is ready, without another navigation, debugger attach,
+or periodic retry. This also covers child renderers reused after parent navigation.
+`test/extension-source.e2e.ts` exercises actual `chrome.debugger` root/child
+sessions in a disposable extension profile, including cached cross-origin CSS,
+child replacement, full navigation, input, upload and element Canvas delivery.
+It denies viewer access to the source fixture and verifies that projection
+teardown preserves the borrowed debugger and unrelated personal tabs. The test
+carrier reaches the extension worker locally; product Native Messaging and
+Flowersec integration require separate downstream qualification.
+
 `PlaywrightSourceBrowser` is the optional owner for Playwright pages. Call
 `adopt(page, targetID)` once and share the resulting source with other authorized
 tools through `source.transport`. Its disposal detaches its own debugger sessions

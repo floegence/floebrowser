@@ -61,6 +61,8 @@ export interface SourcePage {
   /** Stable host-owned identity, preserved when a projection is recreated. */
   readonly id: string;
   readonly transport: SourceTransport;
+  /** Emit framecontext(frame) whenever a frame's new default execution context
+   * becomes available, even when its navigation event has already fired. */
   on(event: string, listener: (...args: any[]) => void): unknown;
   off(event: string, listener: (...args: any[]) => void): unknown;
   frames(): SourceFrame[];

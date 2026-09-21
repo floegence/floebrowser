@@ -93,6 +93,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
       const frame = this.frame(value.auxData.frameId, transport);
       frame.transport = transport;
       frame.contextID = value.id;
+      this.emit('framecontext', frame);
     };
     const navigate = (frame: any) => {
       if (!active()) return;

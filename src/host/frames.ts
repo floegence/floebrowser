@@ -33,6 +33,9 @@ export class FrameBridge {
     this.page.on('sessionattached', this.attached);
     this.page.on('sessiondetached', this.detached);
     this.page.on('framenavigated', this.navigated);
+    // Navigation can precede its default execution context, especially when
+    // a host lends an extension debugger. Install when that context exists.
+    this.page.on('framecontext', this.navigated);
     await Promise.all(
       this.page.sessions().map((transport) => this.install(transport)),
     );
@@ -96,6 +99,7 @@ export class FrameBridge {
     this.page.off('sessionattached', this.attached);
     this.page.off('sessiondetached', this.detached);
     this.page.off('framenavigated', this.navigated);
+    this.page.off('framecontext', this.navigated);
     await Promise.all(this.pending.values());
     for (const frame of this.page.frames())
       if (frame !== this.page.mainFrame())
