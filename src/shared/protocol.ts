@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -150,10 +150,16 @@ export const actionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('media'),
       node: z.number().int().positive(),
-      operation: z.enum(['play', 'pause', 'seek', 'reveal']),
+      operation: z.enum(['play', 'pause', 'seek', 'reveal', 'mute']),
       time: z.number().finite().min(0).max(1e9).optional(),
+      muted: z.boolean().optional(),
     })
-    .strict(),
+    .strict()
+    .refine((action) =>
+      action.operation === 'mute'
+        ? action.muted !== undefined && action.time === undefined
+        : action.muted === undefined,
+    ),
   z.object({ kind: z.enum(['tab_new', 'tab_restore']) }).strict(),
   z
     .object({

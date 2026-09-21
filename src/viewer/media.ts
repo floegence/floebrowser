@@ -48,6 +48,7 @@ export class MediaView {
       label: HTMLElement;
       title: HTMLElement;
       play: HTMLButtonElement;
+      mute: HTMLButtonElement;
       seek: HTMLInputElement;
       timeline: HTMLElement;
       elapsed: HTMLElement;
@@ -508,6 +509,31 @@ export class MediaView {
             state.stream,
           );
       };
+      const mute = document.createElement('button');
+      mute.type = 'button';
+      mute.className = 'floe-media-mute';
+      mute.onclick = async () => {
+        const current = this.states.get(identity(state.target, state.stream));
+        if (!current || mute.disabled) return;
+        mute.disabled = true;
+        try {
+          await this.dispatch(
+            {
+              kind: 'media',
+              node: current.id,
+              operation: 'mute',
+              muted: !current.muted,
+            },
+            state.target,
+            state.stream,
+          );
+        } finally {
+          mute.disabled = false;
+        }
+      };
+      const actions = document.createElement('div');
+      actions.className = 'floe-media-actions';
+      actions.append(mute, play);
       const seek = document.createElement('input');
       seek.type = 'range';
       seek.min = '0';
@@ -609,13 +635,14 @@ export class MediaView {
         }
       };
       location.append(locate);
-      root.append(badge, info, play, timeline, location);
+      root.append(badge, info, actions, timeline, location);
       this.list.append(root);
       row = {
         root,
         label,
         title,
         play,
+        mute,
         seek,
         timeline,
         elapsed,
@@ -672,6 +699,13 @@ export class MediaView {
                   : this.text('media.playing')
                 : this.text('media.loading');
     row.play.disabled = state.status === 'unavailable';
+    const muteLabel = this.text(
+      state.muted ? 'media.unmuteSource' : 'media.muteSource',
+    );
+    row.mute.title = muteLabel;
+    row.mute.setAttribute('aria-label', muteLabel);
+    row.mute.setAttribute('aria-pressed', String(state.muted));
+    setIcon(row.mute, state.muted ? 'muted' : 'sound');
     setIcon(row.play, state.paused ? 'play' : 'pause');
     row.play.title = state.paused
       ? this.text('media.play')

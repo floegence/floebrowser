@@ -1430,6 +1430,7 @@ export class BrowserProjection {
                 });
               }
             } else if (action.operation === 'pause') media.pause();
+            else if (action.operation === 'mute') media.muted = action.muted!;
             else if (action.operation === 'reveal') {
               const rect = media.getBoundingClientRect();
               if (

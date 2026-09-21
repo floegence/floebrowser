@@ -65,7 +65,7 @@ for (const artifact of bundle.artifacts) {
   assert.equal(bytes.length, artifact.bytes);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
 }
-assert.equal(PROTOCOL_VERSION, 17);
+assert.equal(PROTOCOL_VERSION, 18);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 const browser = await chromium.launch({ chromiumSandbox: true });
 let server, context;

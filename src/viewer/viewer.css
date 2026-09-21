@@ -196,7 +196,7 @@
 }
 .floe-media-row {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 34px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 12px;
   row-gap: 10px;
@@ -240,6 +240,14 @@
   height: 34px;
   border-radius: 50%;
   background: #ecf1f8;
+  color: var(--floe-accent);
+}
+.floe-media-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.floe-media-mute[aria-pressed='true'] {
   color: var(--floe-accent);
 }
 .floe-media-panel .floe-media-play:hover {

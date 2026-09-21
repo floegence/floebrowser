@@ -136,6 +136,8 @@ export const englishMessages = {
   'media.soundBlocked': 'Sound is muted — media controls',
   'media.mute': 'Mute audio',
   'media.unmute': 'Unmute audio',
+  'media.muteSource': 'Mute source media',
+  'media.unmuteSource': 'Unmute source media',
   'media.seek': 'Seek source media',
   'media.showOnPage': 'Show on page',
   'media.openTab': 'Open tab',

@@ -5,14 +5,15 @@ import {
   mediaPacketSchema,
 } from '../src/shared/protocol.js';
 
+const command = (action: unknown) => ({
+  type: 'command',
+  tab: 'source-tab',
+  id: 1,
+  epoch: 'current',
+  action,
+});
+
 test('rejects remote commands with active URLs, oversized text, or extra authority', () => {
-  const command = (action: unknown) => ({
-    type: 'command',
-    tab: 'source-tab',
-    id: 1,
-    epoch: 'current',
-    action,
-  });
   for (const url of [
     'javascript:alert(1)',
     'file:///etc/passwd',
@@ -43,6 +44,26 @@ test('rejects remote commands with active URLs, oversized text, or extra authori
     ).success,
     true,
   );
+});
+
+test('source mute requires an explicit boolean and cannot carry seek parameters', () => {
+  const action = { kind: 'media', node: 1, operation: 'mute' };
+  for (const muted of [true, false])
+    assert.equal(
+      clientMessageSchema.safeParse(command({ ...action, muted })).success,
+      true,
+    );
+  for (const invalid of [
+    action,
+    { ...action, muted: 'true' },
+    { ...action, muted: null },
+    { ...action, muted: true, time: 1 },
+    { ...action, operation: 'play', muted: true },
+  ])
+    assert.equal(
+      clientMessageSchema.safeParse(command(invalid)).success,
+      false,
+    );
 });
 
 test('remote media feedback cannot inject ICE, SDP or encoded payloads into control', () => {
