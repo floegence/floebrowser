@@ -2,7 +2,11 @@ import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
 import { record } from '@rrweb/record';
 import type { MediaConfiguration } from '../shared/protocol.js';
-import { IncrementalSource, type ICrossOriginIframeMirror } from '@rrweb/types';
+import {
+  EventType,
+  IncrementalSource,
+  type ICrossOriginIframeMirror,
+} from '@rrweb/types';
 import { styleAttributes, type SourceStylesheet } from '../shared/style.js';
 
 /** Runs inside source documents. Relay credentials must be scoped and short-lived. */
@@ -37,6 +41,7 @@ export function installRecorder(
   let lastTitle = document.title;
   let mediaActive = false;
   let projecting = true;
+  let recordedDocument = false;
   const media = new Set<ReturnType<typeof observeMedia>>();
   const rawAttributes = (element: Element, keys: string[]) =>
     Object.fromEntries(
@@ -115,8 +120,10 @@ export function installRecorder(
     for (const child of node.childNodes ?? []) prepareNode(child, false);
   };
   const prepare = (event: any) => {
-    if (event.type === 2) frameIDs.clear();
-    if (event.type === 2) {
+    if (event.type === EventType.FullSnapshot) {
+      // Cross-origin roots forward to their parent instead of calling emit.
+      recordedDocument = true;
+      frameIDs.clear();
       styleBases.clear();
       styleSheets.clear();
       styleIDs = new WeakMap();
@@ -403,6 +410,10 @@ export function installRecorder(
       },
       snapshot: () => {
         projecting = true;
+        // Admission can precede DOMContentLoaded in a popup or slow document.
+        // Its first natural snapshot will satisfy observation when rrweb starts;
+        // readyState alone is insufficient while deferred scripts are pending.
+        if (!recordedDocument) return;
         record.takeFullSnapshot();
         emitFocus(document, true);
       },

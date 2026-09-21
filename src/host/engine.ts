@@ -70,6 +70,7 @@ export class BrowserProjection {
   private controlFault = false;
   private closing?: Promise<void>;
   private snapshotPending = false;
+  private stateRead = 0;
   private heldKeys = new Map<string, Record<string, unknown>>();
   private heldButtons = new Set<string>();
   private state: BrowserState;
@@ -150,6 +151,7 @@ export class BrowserProjection {
         context.auxData?.isDefault &&
         context.auxData.frameId === this.mainFrameID
       ) {
+        this.stateRead++;
         this.contextID = context.id;
         this.epoch = '';
         this.mediaNodes.clear();
@@ -158,6 +160,7 @@ export class BrowserProjection {
       }
     });
     this.listen(this.cdp, 'Runtime.executionContextsCleared', () => {
+      this.stateRead++;
       this.contextID = 0;
       this.epoch = '';
       this.mediaNodes.clear();
@@ -208,6 +211,7 @@ export class BrowserProjection {
       void this.close();
     });
     this.listen(this.page, 'crash', () => {
+      this.stateRead++;
       this.epoch = '';
       this.mediaNodes.clear();
       this.updateState({ status: 'error' });
@@ -266,6 +270,7 @@ export class BrowserProjection {
 
   private async refreshState(): Promise<void> {
     if (this.closed) return;
+    const read = ++this.stateRead;
     const title = await this.page.title().catch(() => '');
     const history = await this.cdp
       .send('Page.getNavigationHistory')
@@ -274,7 +279,9 @@ export class BrowserProjection {
       .send('Page.getFrameTree')
       .catch(() => undefined);
     const failedURL = tree?.frameTree.frame.unreachableUrl;
-    if (!this.closed)
+    // These asynchronous reads belong to one document. A newer refresh,
+    // navigation or crash supersedes them, including old unreachable URLs.
+    if (!this.closed && read === this.stateRead)
       this.updateState({
         url: failedURL || this.page.url(),
         title,
