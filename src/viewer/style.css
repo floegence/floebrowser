@@ -35,6 +35,39 @@
 .floe-browser button {
   -webkit-tap-highlight-color: transparent;
 }
+.floe-browser .page-find {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  max-width: calc(100% - 24px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 5px 20px #17263e1a;
+  background: var(--floe-background);
+}
+.floe-browser .page-find input {
+  width: 200px;
+  min-width: 50px;
+  padding: 6px 8px;
+  background: var(--floe-field);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  font-size: 13px;
+}
+.floe-browser .page-find input:focus {
+  border-color: var(--accent);
+}
+.floe-browser .find-result {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .floe-browser .website-dialog {
   position: absolute;
   z-index: 40;

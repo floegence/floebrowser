@@ -84,6 +84,14 @@ export const actionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['back', 'forward', 'reload', 'stop']) }).strict(),
   z
     .object({
+      kind: z.literal('find'),
+      query: z.string().min(1).max(512),
+      backwards: z.boolean(),
+      restart: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('dialog_reply'),
       dialog: z.string().min(1).max(80),
       accept: z.boolean(),
@@ -226,6 +234,13 @@ export type NoticeCode =
   | 'resource_limit'
   | 'tab_unavailable';
 export type ServerMessage =
+  | {
+      type: 'find';
+      target: string;
+      epoch: string;
+      query: string;
+      found: boolean;
+    }
   | { type: 'dialog'; target: string; dialog: DialogState | null }
   | { type: 'control'; target: string; active: boolean }
   | { type: 'session_access'; editTabs: boolean }

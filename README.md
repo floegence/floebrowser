@@ -210,6 +210,14 @@ that page. Hosts with an existing AI/native-dialog owner supply
 unattended dialogs are dismissed. The low-level view exposes `onDialog`, and
 `mountBrowser` supplies the localized, keyboard-accessible dialog surface.
 
+**Find in page** (Control/Command+F) uses Chromium's native text matching,
+selection and scrolling at the source, including authorized child frames. Enter
+and Shift+Enter move forward and backward with wrapping; Escape closes the find
+bar. The viewer mirrors the resulting selection without moving focus away from
+the query. Search text is not sent to a search service or indexed in a host-side
+copy of the document. Find is an input operation and requires the current control
+lease. Switching tabs cancels an unsent query and closes its find surface.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:

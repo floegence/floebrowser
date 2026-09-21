@@ -5,15 +5,26 @@ import {
   IncrementalSource,
   type eventWithTime,
   type scrollData,
+  type selectionData,
 } from '@rrweb/types';
 
 const scrollPlugin = 'floebrowser:live-scroll';
+const selectionPlugin = 'floebrowser:live-selection';
 
 /** Keep scroll positions in replay order, without rrweb's second animation. */
 export function liveEvent(
   event: eventWithTime,
   timestamp: number,
 ): eventWithTime {
+  if (
+    event.type === EventType.IncrementalSnapshot &&
+    event.data.source === IncrementalSource.Selection
+  )
+    return {
+      type: EventType.Plugin,
+      timestamp,
+      data: { plugin: selectionPlugin, payload: event.data },
+    };
   if (
     event.type === EventType.IncrementalSnapshot &&
     event.data.source === IncrementalSource.Scroll
@@ -25,6 +36,43 @@ export function liveEvent(
     };
   return { ...event, timestamp };
 }
+
+/** Empty selections must clear the previous highlight too. rrweb's default
+ * selection replay only visits documents named by a non-empty range. */
+export const liveSelection: NonNullable<playerConfig['plugins']>[number] = {
+  handler(event, _isSync, { replayer }) {
+    if (
+      event.type !== EventType.Plugin ||
+      event.data.plugin !== selectionPlugin
+    )
+      return;
+    const clear = (doc?: Document | null) => {
+      if (!doc) return;
+      doc.getSelection()?.removeAllRanges();
+      for (const frame of doc.querySelectorAll('iframe,frame'))
+        clear((frame as HTMLIFrameElement).contentDocument);
+    };
+    clear(replayer.iframe.contentDocument);
+    for (const item of (event.data.payload as selectionData).ranges) {
+      const start = replayer.getMirror().getNode(item.start),
+        end = replayer.getMirror().getNode(item.end);
+      if (
+        !start?.isConnected ||
+        !end?.isConnected ||
+        start.ownerDocument !== end.ownerDocument
+      )
+        continue;
+      try {
+        const range = start.ownerDocument!.createRange();
+        range.setStart(start, item.startOffset);
+        range.setEnd(end, item.endOffset);
+        start.ownerDocument!.getSelection()?.addRange(range);
+      } catch {
+        /* The DOM may have removed this range before selection arrived. */
+      }
+    }
+  },
+};
 
 export const liveScroll: NonNullable<playerConfig['plugins']>[number] = {
   handler(event, _isSync, { replayer }) {

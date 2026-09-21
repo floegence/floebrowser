@@ -3,6 +3,7 @@ import { setIcon } from './icons.js';
 import { DOMBrowserView, type ViewOptions } from './client.js';
 import { browserText } from './messages.js';
 import { WebsiteDialog } from './dialog.js';
+import { PageFind } from './find.js';
 import { browserTemplate } from './template.js';
 import {
   AddressSuggestions,
@@ -87,6 +88,11 @@ export function mountBrowser(
   let canGoForward = false;
   let offerTakeover = false;
   let toastTimer: ReturnType<typeof setTimeout>;
+  const find = new PageFind(
+    stage,
+    text,
+    (action) => view?.dispatch(action) ?? Promise.resolve(false),
+  );
   const dialog = new WebsiteDialog(
     stage,
     text,
@@ -160,6 +166,10 @@ export function mountBrowser(
     );
     setIcon(element('reload'), loading ? 'close' : 'reload');
     viewport.inert = !connected || !ready || pending || dialogOpen;
+    const canFind =
+      connected && controlling && ready && !pending && !dialogOpen;
+    element<HTMLButtonElement>('find').disabled = !canFind;
+    find.enable(canFind);
     for (const [id, item] of rows) {
       item.row.classList.toggle('active', id === selected);
       item.select.setAttribute('aria-selected', String(id === selected));
@@ -279,6 +289,7 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
+    if (previous !== state.active) find.close();
     if (previous !== state.active)
       loading = !!state.tabs.find((tab) => tab.id === state.active)?.loading;
     const scopeChanged =
@@ -387,11 +398,16 @@ export function mountBrowser(
     current = undefined;
     view?.destroy();
     dialog.show(null);
+    find.close();
     connected = ready = changingTab = false;
     view = new DOMBrowserView(viewport, options.connect({ takeover }), {
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
+      onFind: (result) => {
+        find.result(result);
+        options.onFind?.(result);
+      },
       onDialog: (state) => {
         dialog.show(state);
         options.onDialog?.(state);
@@ -436,6 +452,7 @@ export function mountBrowser(
         ready = status === 'live';
         if (ready || status === 'disconnected') changingTab = false;
         if (status === 'disconnected') {
+          find.close();
           dialog.show(null);
           for (const pending of commands.splice(0)) pending.resolve(false);
           hideSuggestions();
@@ -671,6 +688,7 @@ export function mountBrowser(
     else if (address.value.trim()) navigate(address.value);
   });
   element('new-tab').addEventListener('click', newTab);
+  element('find').addEventListener('click', () => find.open());
   for (const kind of ['back', 'forward', 'reload'] as const)
     element(kind).addEventListener('click', () => {
       void command({ kind: kind === 'reload' && loading ? 'stop' : kind });
@@ -707,11 +725,12 @@ export function mountBrowser(
     if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey)
       return false;
     const key = event.key.toLowerCase();
-    if (!['l', 'r', 't', 'w', 'tab'].includes(key)) return false;
+    if (!['l', 'r', 't', 'w', 'tab', 'f'].includes(key)) return false;
     if (phase === 'up') return true;
     event.preventDefault();
     if (event.repeat) return true;
     if (key === 'l') focusAddress();
+    else if (key === 'f') find.open();
     else if (key === 'r') void command({ kind: 'reload' });
     else if (key === 't') {
       if (event.shiftKey) void command({ kind: 'tab_restore' });
@@ -821,6 +840,7 @@ export function mountBrowser(
     current = undefined;
     tabOrder.destroy();
     dialog.destroy();
+    find.destroy();
     view?.destroy();
     root.remove();
   }

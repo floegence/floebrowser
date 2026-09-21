@@ -23,6 +23,7 @@ import {
 import { DOMProjection } from './projection.js';
 import { ResourceStore } from './resources.js';
 import { FrameBridge } from './frames.js';
+import { SourceFind } from './find.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
 import type { MediaFrame, MediaFrameHeader } from '../shared/media-wire.js';
@@ -105,6 +106,7 @@ export class BrowserProjection {
   readonly resources: ResourceStore;
   private projection: DOMProjection;
   private frames!: FrameBridge;
+  private find: SourceFind;
   private binding = `floe_emit_${randomBytes(12).toString('hex')}`;
   private recorderKey = `__floe_${randomBytes(12).toString('hex')}`;
   private scriptID = '';
@@ -147,6 +149,7 @@ export class BrowserProjection {
     private options: AttachOptions,
   ) {
     this.id = page.id;
+    this.find = new SourceFind(page);
     this.resources = new ResourceStore(
       cdp,
       (code) => this.send({ type: 'notice', code }),
@@ -790,6 +793,7 @@ export class BrowserProjection {
         if (retiring) return retiring;
         viewer.active = false;
         const dialogDrain = this.dismissDialog(viewer);
+        this.find = new SourceFind(this.page);
         try {
           watcher.send({ type: 'control', target: this.id, active: false });
         } catch {
@@ -1179,6 +1183,23 @@ export class BrowserProjection {
     };
     assertCurrent();
     if (this.controlFault) throw new CommandError('target_unavailable');
+    if (action.kind === 'find') {
+      const found = await this.find.next(
+        action.query,
+        action.backwards,
+        action.restart,
+        assertCurrent,
+      );
+      assertCurrent();
+      viewer.send({
+        type: 'find',
+        target: this.id,
+        epoch: this.epoch,
+        query: action.query,
+        found,
+      });
+      return;
+    }
     if (action.kind === 'dialog_reply') {
       const dialog = this.dialog;
       if (

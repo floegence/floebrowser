@@ -6,7 +6,13 @@ import {
 } from './messages.js';
 import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
 import { ReplayPresentation } from './presentation.js';
-import { liveEvent, liveScroll, svgStyles, mathElements } from './replay.js';
+import {
+  liveEvent,
+  liveScroll,
+  liveSelection,
+  svgStyles,
+  mathElements,
+} from './replay.js';
 import { mapWheelPoint } from '../shared/wheel.js';
 import { Replayer } from '@rrweb/replay';
 import {
@@ -54,6 +60,7 @@ export type ViewOptions = {
   onTabs?: (state: TabState) => void;
   /** Website-native dialogs are delivered only to the active source controller. */
   onDialog?: (dialog: DialogState | null) => void;
+  onFind?: (result: { query: string; found: boolean }) => void;
 };
 type Pending = {
   resolve: (ok: boolean) => void;
@@ -334,6 +341,11 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'find') {
+      if (message.target === this.tab && message.epoch === this.epoch)
+        this.options.onFind?.({ query: message.query, found: message.found });
+      return;
+    }
     if (message.type === 'dialog') {
       if (message.target === this.tab && (!message.dialog || this.controlled)) {
         this.dialogOpen = !!message.dialog;
@@ -517,6 +529,7 @@ export class DOMBrowserView {
         triggerFocus: false,
         plugins: [
           liveScroll,
+          liveSelection,
           svgStyles,
           mathElements,
           {
@@ -733,6 +746,7 @@ export class DOMBrowserView {
       'text',
       'select',
       'media',
+      'find',
     ].includes(action.kind);
     return new Promise((resolve) => {
       const expire = () => {

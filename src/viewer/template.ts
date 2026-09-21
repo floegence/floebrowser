@@ -79,6 +79,9 @@ const template = `    <main class="floe-browser browser-window">
           ></div>
         </form>
         <button data-floe-ui="take-control" class="take-control" hidden></button>
+        <button class="icon-button" data-floe-ui="find">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+        </button>
         <div data-floe-ui="media-controls"></div>
         <span
           class="status connecting"
@@ -162,6 +165,7 @@ export function browserTemplate(
     back: 'navigation.back',
     forward: 'navigation.forward',
     reload: 'navigation.reloadPage',
+    find: 'find.label',
     'dismiss-toast': 'notice.dismiss',
   };
   for (const [id, key] of Object.entries(labels)) {
