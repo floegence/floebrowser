@@ -48,10 +48,11 @@
     "test": "node --import tsx --test test/*.test.ts",
     "test:e2e": "node --import tsx --test --test-concurrency=1 test/*.e2e.ts",
     "start": "node dist/host/cli.js",
-    "prepack": "npm run build",
+    "prepack": "node scripts/build.mjs --release",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check:package": "node scripts/check-package.mjs"
+    "check:package": "node scripts/check-package.mjs",
+    "build:release": "node scripts/build.mjs --release"
   },
   "dependencies": {
     "@rrweb/record": "2.1.6",

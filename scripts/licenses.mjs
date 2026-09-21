@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 
 // Include original license/notice text alongside the compiled third-party code.
-export async function writeThirdPartyLicenses() {
+export async function writeThirdPartyLicenses(targets) {
   const root = JSON.parse(await readFile('package.json', 'utf8'));
   const pending = Object.keys(root.dependencies).map((name) => ({
     name,
@@ -53,17 +53,30 @@ export async function writeThirdPartyLicenses() {
     for (const child of Object.keys(manifest.dependencies ?? {}))
       pending.push({ name: child, parent: join(directory, 'package.json') });
   }
-  const compiledModules = execFileSync(
-    'go',
-    [
-      'list',
-      '-deps',
-      '-f',
-      '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}{{end}}',
-      './cmd/floebrowser-media',
-    ],
-    { cwd: 'media', env: { ...process.env, GOWORK: 'off' }, encoding: 'utf8' },
-  );
+  const compiledModules = targets
+    .map(([platform, arch]) =>
+      execFileSync(
+        'go',
+        [
+          'list',
+          '-deps',
+          '-f',
+          '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}{{end}}',
+          './cmd/floebrowser-media',
+        ],
+        {
+          cwd: 'media',
+          env: {
+            ...process.env,
+            GOWORK: 'off',
+            GOOS: platform === 'win32' ? 'windows' : platform,
+            GOARCH: arch === 'x64' ? 'amd64' : arch,
+          },
+          encoding: 'utf8',
+        },
+      ),
+    )
+    .join('\n');
   for (const line of [
     ...new Set(compiledModules.split('\n').filter(Boolean)),
   ].sort()) {

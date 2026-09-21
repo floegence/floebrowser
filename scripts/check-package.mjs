@@ -50,8 +50,21 @@ try {
     `
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import {readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import { createProjectionServer, launchSourceBrowser, PROTOCOL_VERSION } from '@floegence/floebrowser';
 import { clientMessageSchema } from '@floegence/floebrowser/protocol';
+const packageRoot = new URL('./node_modules/@floegence/floebrowser/', import.meta.url);
+const bundle = JSON.parse(await readFile(new URL('dist/bin/manifest.json', packageRoot), 'utf8'));
+const pkg = JSON.parse(await readFile(new URL('package.json', packageRoot), 'utf8'));
+assert.equal(bundle.version, pkg.version);
+assert.equal(bundle.mediaWireVersion, 1);
+assert.equal(bundle.artifacts.length, 6, 'Formal package qualification requires build:release');
+for (const artifact of bundle.artifacts) {
+  const bytes=await readFile(new URL('dist/bin/'+artifact.path, packageRoot));
+  assert.equal(bytes.length, artifact.bytes);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
+}
 assert.equal(PROTOCOL_VERSION, 14);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 const browser = await chromium.launch({ chromiumSandbox: true });
@@ -69,6 +82,15 @@ try {
   const css = await fetch(new URL('app.css', server.url));
   assert.equal(css.status, 200);
   assert.match(await css.text(), /floe-viewport/);
+  await server.close(); server=undefined;
+  const native=bundle.artifacts.find(a=>a.platform===process.platform && a.arch===process.arch);
+  const nativeURL=new URL('dist/bin/'+native.path, packageRoot);
+  const original=await readFile(nativeURL);
+  try {
+    const changed=Buffer.from(original);changed[0]^=255;
+    await writeFile(nativeURL,changed);
+    await assert.rejects(()=>createProjectionServer(source,{authorize:()=>true}),/integrity verification/);
+  } finally { await writeFile(nativeURL,original); }
 } finally { await server?.close(); await context?.close(); await browser.close(); }
 `,
   );

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/logging"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
@@ -72,8 +74,13 @@ func NewCollector(scope Scope, onTrack func(*Track)) (*Collector, error) {
 	if err != nil {
 		return nil, err
 	}
-	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn})
+	// Source media metadata and library diagnostics never enter application
+	// control/media pipes or host debug logs.
+	logger := logging.NewDefaultLoggerFactory()
+	logger.Writer = io.Discard
+	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn, Logger: logger.NewLogger("source-ice")})
 	var settings webrtc.SettingEngine
+	settings.LoggerFactory = logger
 	settings.SetLite(true)
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetIncludeLoopbackCandidate(true)

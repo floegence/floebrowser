@@ -1,4 +1,5 @@
 import { writeThirdPartyLicenses } from './licenses.mjs';
+import { buildMedia } from './build-media.mjs';
 import { build } from 'esbuild';
 import { mkdir, copyFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -43,22 +44,5 @@ await build({
   minify: true,
 });
 
-await writeThirdPartyLicenses();
-const mediaDirectory = `dist/bin/${process.platform}-${process.arch}`;
-await mkdir(mediaDirectory, { recursive: true });
-execFileSync(
-  'go',
-  [
-    'build',
-    '-trimpath',
-    '-ldflags=-s -w',
-    '-o',
-    `../${mediaDirectory}/floebrowser-media${process.platform === 'win32' ? '.exe' : ''}`,
-    './cmd/floebrowser-media',
-  ],
-  {
-    cwd: 'media',
-    env: { ...process.env, GOWORK: 'off', CGO_ENABLED: '0' },
-    stdio: 'inherit',
-  },
-);
+const targets = await buildMedia(process.argv.includes('--release'));
+await writeThirdPartyLicenses(targets);

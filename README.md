@@ -86,7 +86,7 @@ DOM layout still happens on the client. Font availability, browser versions and 
 
 ## Source media
 
-Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` sends individual tracks to the Go `media` module's Pion collector on the same host. It binds only `127.0.0.1`, advertises only loopback candidates, uses ICE-lite, and has no STUN/TURN configuration. The optional Node adapter uses the packaged native helper; embedding Go hosts can use the collector directly. Neither route captures a display, tab, camera or microphone.
+Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` sends individual tracks to the Go `media` module's Pion collector on the same host. It binds only `127.0.0.1`, advertises only loopback candidates, uses ICE-lite, and has no STUN/TURN configuration. The optional Node adapter uses the packaged native helper; embedding Go hosts can use the collector directly. The helper uses standard input for requests, standard error for structured replies, and standard output for binary media; it has no inherited descriptor-number requirement or diagnostic output. The SDK verifies the packaged native artifact checksum and negotiates matching SDK/media wire versions before accepting a collector. Neither route captures a display, tab, camera or microphone.
 
 The collector emits bounded packets containing target, subscription, element, stream, track, timestamp, codec and keyframe identity. The remote viewer receives encoded bytes through `ProjectionConnection.subscribeMedia`, decodes video and Opus in Workers using WebCodecs, and schedules PCM through AudioWorklet. Canvas uses complete WebP element images. The client never needs source website access or a route to the collection port. Resource and replay restrictions remain unchanged.
 
@@ -370,3 +370,15 @@ FloeBrowser owns reusable projection, source input mapping, the wire protocol an
 ## License
 
 MIT. rrweb and other upstream notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Package the native collector
+
+`npm run build` builds the SDK, client assets and helper for the current host.
+`npm run build:release` (also used by `prepack`) includes macOS, Linux and Windows
+helpers for x64 and arm64, a versioned SHA-256 manifest and licenses for dependencies
+compiled on any of those targets. Run `npm run check:package` after a release build
+to install the tarball outside the checkout, verify all six artifacts, open the
+packaged DOM browser and prove that a modified helper is rejected before execution.
+Consumers do not need a Go toolchain or a helper on PATH. Cross-compilation verifies
+artifact construction; supported-platform behavior still requires native runtime
+and browser qualification on each platform.

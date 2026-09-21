@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import type { Readable } from 'node:stream';
+import { readFileSync } from 'node:fs';
 import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
 
 export type MediaScope = {
@@ -47,11 +47,15 @@ export class NativeMediaBridge implements SourceMediaBridge {
   >();
   private ended = false;
   private stopped: Promise<void>;
+  private ready: Promise<void>;
   constructor(executablePath: string) {
+    const { version } = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    );
     this.child = spawn(executablePath, [], {
-      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const lines = createInterface({ input: this.child.stdout! });
+    const lines = createInterface({ input: this.child.stderr! });
     lines.on('line', (line) => {
       if (line.length > 65536) {
         this.fail();
@@ -70,7 +74,7 @@ export class NativeMediaBridge implements SourceMediaBridge {
       }
     });
     const reader = new MediaPacketReader();
-    (this.child.stdio[3] as Readable).on('data', (data: Buffer) => {
+    this.child.stdout!.on('data', (data: Buffer) => {
       if (this.ended) return;
       try {
         for (const frame of reader.push(data))
@@ -79,14 +83,13 @@ export class NativeMediaBridge implements SourceMediaBridge {
         this.fail();
       }
     });
-    (this.child.stdio[3] as Readable).on('end', () => {
+    this.child.stdout!.on('end', () => {
       try {
         reader.finish();
       } catch {
         this.fail();
       }
     });
-    this.child.stderr!.resume();
     this.child.on('error', () => this.fail());
     this.child.stdin!.on('error', () => this.fail());
     this.stopped = new Promise((resolve) =>
@@ -96,6 +99,16 @@ export class NativeMediaBridge implements SourceMediaBridge {
         resolve();
       }),
     );
+    this.ready = this.command('bridge', 'hello')
+      .then((result) => {
+        if (result.version !== version || result.mediaWireVersion !== 1)
+          throw new Error('Source media helper version mismatch');
+      })
+      .catch((error) => {
+        this.fail();
+        throw error;
+      });
+    void this.ready.catch(() => {});
   }
   private fail(): void {
     if (this.ended) return;
@@ -143,6 +156,7 @@ export class NativeMediaBridge implements SourceMediaBridge {
     onFrame: (frame: MediaFrame) => void,
     onFailure?: () => void,
   ): Promise<MediaSubscription> {
+    await this.ready;
     const key = scopeKey(scope);
     if (this.receivers.has(key))
       throw new Error('Media stream already subscribed');

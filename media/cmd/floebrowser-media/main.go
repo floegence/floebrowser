@@ -1,5 +1,6 @@
-// floebrowser-media is a local source helper. Control uses stdin/stdout; encoded
-// packets use a separate inherited pipe (fd 3), never the control carrier.
+// floebrowser-media is a local source helper. Control uses stdin/stderr; encoded
+// packets use stdout. Standard handles work on Unix and Windows without inherited
+// descriptor-number assumptions. No diagnostic output enters either wire.
 package main
 
 import (
@@ -14,6 +15,8 @@ import (
 	"github.com/floegence/floebrowser/media"
 )
 
+var version = "development"
+
 type command struct {
 	ID        string      `json:"id"`
 	Collector string      `json:"collector"`
@@ -23,11 +26,7 @@ type command struct {
 }
 
 func main() {
-	frames := os.NewFile(3, "media-frames")
-	if frames == nil {
-		os.Exit(1)
-	}
-	defer frames.Close()
+	frames := os.Stdout
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	collectors := map[string]*media.Collector{}
@@ -46,6 +45,9 @@ func main() {
 		}
 		result := map[string]any{"id": cmd.ID}
 		switch cmd.Op {
+		case "hello":
+			result["version"] = version
+			result["mediaWireVersion"] = media.WireVersion
 		case "open":
 			if collectors[cmd.Collector] != nil || len(collectors) >= 64 {
 				result["error"] = "collector_unavailable"
@@ -95,7 +97,7 @@ func main() {
 			result["error"] = "invalid_command"
 		}
 		body, _ := json.Marshal(result)
-		if _, err := fmt.Fprintln(os.Stdout, string(body)); err != nil {
+		if _, err := fmt.Fprintln(os.Stderr, string(body)); err != nil {
 			return
 		}
 	}
