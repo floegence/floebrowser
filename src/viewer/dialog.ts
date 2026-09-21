@@ -129,15 +129,27 @@ export class WebsiteDialog {
   private async respond(accept: boolean): Promise<void> {
     const state = this.state;
     if (!state || this.accept.disabled) return;
+    const promptText =
+      state.type === 'prompt' && accept ? this.input.value : undefined;
     this.accept.disabled = this.cancel.disabled = this.input.disabled = true;
+    // Remove the modal in the same event turn as the user's decision. The
+    // source response can finish before its asynchronous dialog-closed event
+    // reaches the viewer; keeping the old modal mounted during that gap makes
+    // the next source action appear to be ignored. A rejected authorization
+    // receives a fresh dialog state from the host and restores it explicitly.
+    this.show(null);
     const ok = await this.dispatch({
       kind: 'dialog_reply',
       dialog: state.id,
       accept,
-      ...(state.type === 'prompt' && accept ? { text: this.input.value } : {}),
+      ...(promptText !== undefined ? { text: promptText } : {}),
     });
-    if (this.state !== state) return;
-    if (ok) this.show(null);
+    if (!ok && !this.state) {
+      // The host may have rejected a stale dialog without sending a new
+      // state. It is intentionally left closed; the next source event is the
+      // only authority allowed to present another decision.
+      return;
+    }
     // Do not re-enable an uncertain response. Reconnection revokes the pending
     // dialog and the host reports the unknown outcome through normal notices.
   }
