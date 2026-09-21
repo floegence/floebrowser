@@ -234,6 +234,39 @@ Cross-origin frame recording uses rrweb's published cross-origin mirror API, wit
 
 ## Embed the viewer
 
+`mountBrowser(container, options)` mounts the same browser chrome used by the
+standalone application: tabs, address suggestions, navigation, page projection
+and source-media controls. Each mount owns its focus, element IDs, notices and
+carrier lifetime. Host document titles and unrelated keyboard focus remain with
+the embedding application. `destroy()` removes the mount and its listeners,
+closes its carrier and never closes source pages.
+
+```ts
+import { mountBrowser } from '@floegence/floebrowser/viewer';
+import '@floegence/floebrowser/viewer.css';
+
+const browser = mountBrowser(container, {
+  title: 'FloeBrowser',
+  connect: ({ takeover }) => hostProjectionConnection({ takeover }),
+  messages: completeLocalizedBrowserCatalog,
+  mediaAssets: { decoderURL, audioWorkletURL },
+  onState: (state) => hostUpdateWindowTitle(state.title),
+});
+// Later: browser.destroy();
+```
+
+Omitting `messages` uses `englishMessages`. A supplied catalog must explicitly
+provide every `BrowserMessageKey` and preserve each message's named placeholders;
+missing or malformed entries fail at mount. Source content and URLs remain
+literal. Protocol notices carry stable codes instead of source-language prose.
+The `--floe-background`, `--floe-foreground`, `--floe-muted`, `--floe-line`,
+`--floe-accent`, `--floe-surface` and `--floe-field` custom properties style browser
+chrome; component styles do not reset the embedding document. The host supplies
+constrained dimensions and the authenticated connection factory. The component
+never creates a new host environment connection itself.
+
+For a host that already supplies browser chrome, use the lower-level projection:
+
 ```ts
 import { DOMBrowserView } from '@floegence/floebrowser/viewer';
 import '@floegence/floebrowser/viewer.css';

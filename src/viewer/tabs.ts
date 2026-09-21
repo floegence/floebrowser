@@ -1,3 +1,4 @@
+import { browserText, type BrowserText } from './messages.js';
 type Gesture = {
   id: string;
   pointer: number;
@@ -11,6 +12,7 @@ type Gesture = {
 
 /** A drag is a local preview; the session remains the owner of committed order. */
 export class TabOrder {
+  private lifetime = new AbortController();
   private order: string[] = [];
   private gesture?: Gesture;
   private pending?: string[];
@@ -21,8 +23,9 @@ export class TabOrder {
     private available: () => boolean,
     private move: (tab: string, before: string | null) => Promise<boolean>,
     private announce: (message: string) => void,
+    private text: BrowserText = browserText(),
   ) {
-    list.addEventListener('pointerdown', (event) => {
+    this.listen(list, 'pointerdown', (event) => {
       this.suppressClick = false;
       const button = (event.target as Element).closest<HTMLElement>(
         '.tab-select',
@@ -47,8 +50,9 @@ export class TabOrder {
         order: [...this.order],
       };
     });
-    list.addEventListener('dragstart', (event) => event.preventDefault());
-    list.addEventListener(
+    this.listen(list, 'dragstart', (event) => event.preventDefault());
+    this.listen(
+      list,
       'click',
       (event) => {
         if (!this.suppressClick) return;
@@ -58,7 +62,8 @@ export class TabOrder {
       },
       true,
     );
-    list.addEventListener(
+    this.listen(
+      list,
       'keydown',
       (event) => {
         if (event.key === 'Escape' && this.gesture) {
@@ -100,7 +105,8 @@ export class TabOrder {
       },
       true,
     );
-    window.addEventListener(
+    this.listen(
+      window,
       'pointermove',
       (event) => {
         const drag = this.gesture;
@@ -119,16 +125,31 @@ export class TabOrder {
       },
       { passive: false },
     );
-    window.addEventListener('pointerup', (event) => {
+    this.listen(window, 'pointerup', (event) => {
       if (this.gesture?.pointer !== event.pointerId) return;
       this.gesture.x = event.clientX;
       this.gesture.y = event.clientY;
       this.finish(true);
     });
-    window.addEventListener('pointercancel', () => this.finish(false));
-    list.addEventListener('lostpointercapture', () => this.finish(false));
-    window.addEventListener('blur', () => this.finish(false));
-    window.addEventListener('resize', () => this.finish(false));
+    this.listen(window, 'pointercancel', () => this.finish(false));
+    this.listen(list, 'lostpointercapture', () => this.finish(false));
+    this.listen(window, 'blur', () => this.finish(false));
+    this.listen(window, 'resize', () => this.finish(false));
+  }
+  private listen<K extends keyof WindowEventMap>(
+    target: HTMLElement | Window,
+    name: K,
+    listener: (event: WindowEventMap[K]) => void,
+    options: boolean | AddEventListenerOptions = false,
+  ) {
+    target.addEventListener(name, listener as EventListener, {
+      ...(typeof options === 'boolean' ? { capture: options } : options),
+      signal: this.lifetime.signal,
+    });
+  }
+  destroy() {
+    this.cancel();
+    this.lifetime.abort();
   }
   sync(order: string[]) {
     const changed =
@@ -239,7 +260,10 @@ export class TabOrder {
     this.row(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (ok)
       this.announce(
-        `Tab moved to position ${this.order.indexOf(id) + 1} of ${this.order.length}.`,
+        this.text('tabs.moved', {
+          position: this.order.indexOf(id) + 1,
+          total: this.order.length,
+        }),
       );
   }
 }

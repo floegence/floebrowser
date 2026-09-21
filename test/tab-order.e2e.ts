@@ -31,9 +31,9 @@ async function setup(t: test.TestContext, count = 3) {
   viewer.setDefaultTimeout(5000);
   const messages: any[] = [];
   viewer.on('websocket', (socket) =>
-    socket.on('framereceived', ({ payload }) =>
-      messages.push(JSON.parse(String(payload))),
-    ),
+    socket.on('framereceived', ({ payload }) => {
+      if (typeof payload === 'string') messages.push(JSON.parse(payload));
+    }),
   );
   t.after(async () => {
     release?.();

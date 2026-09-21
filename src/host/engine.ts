@@ -139,7 +139,7 @@ export class BrowserProjection {
     this.id = page.id;
     this.resources = new ResourceStore(
       cdp,
-      (message) => this.send({ type: 'notice', message }),
+      (code) => this.send({ type: 'notice', code }),
       options.resourceURL
         ? (id) => options.resourceURL!(id, this.id)
         : undefined,
@@ -243,7 +243,7 @@ export class BrowserProjection {
       if (Buffer.byteLength(event.payload) > MAX_MESSAGE_BYTES) {
         this.send({
           type: 'notice',
-          message: 'This page exceeds the DOM snapshot limit.',
+          code: 'dom_limit',
         });
         return;
       }
@@ -252,8 +252,7 @@ export class BrowserProjection {
       } catch {
         this.send({
           type: 'notice',
-          message:
-            'A page update could not be projected. Reconnect to refresh the view.',
+          code: 'dom_update_failed',
         });
       }
     });
@@ -285,23 +284,20 @@ export class BrowserProjection {
         ? this.options.onPopup(page)
         : this.send({
             type: 'notice',
-            message:
-              'The website opened another source tab. Additional tabs are not projected in this version.',
+            code: 'popup_unavailable',
           }),
     );
     this.listen(this.page, 'dialog', (dialog) => {
       this.send({
         type: 'notice',
-        message:
-          'A browser dialog was dismissed. Native dialogs are not supported in DOM mode.',
+        code: 'dialog_dismissed',
       });
       void dialog.dismiss().catch(() => {});
     });
     this.listen(this.page, 'download', () =>
       this.send({
         type: 'notice',
-        message:
-          'The download was started in the source browser. File transfer is not available in this version.',
+        code: 'download_source_only',
       }),
     );
     await this.resources.start();

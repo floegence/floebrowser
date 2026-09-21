@@ -1,4 +1,9 @@
 import { MediaView, type MediaAssets } from './media.js';
+import {
+  browserText,
+  type BrowserMessages,
+  type BrowserText,
+} from './messages.js';
 import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
 import { ReplayPresentation } from './presentation.js';
 import { liveEvent, liveScroll, svgStyles, mathElements } from './replay.js';
@@ -28,7 +33,8 @@ import {
 
 export type ViewportMode = 'responsive' | 'fit' | 'actual';
 
-type ViewOptions = {
+export type ViewOptions = {
+  messages?: BrowserMessages;
   /** Mount optional media controls in host browser chrome, outside the page. */
   mediaControls?: HTMLElement;
   mediaAssets?: MediaAssets;
@@ -64,6 +70,7 @@ export class DOMBrowserView {
   private replayer?: Replayer;
   private presentation?: ReplayPresentation;
   private media: MediaView;
+  private text: BrowserText;
   private epoch = '';
   private tab = '';
   private tabTitles = new Map<string, string>();
@@ -104,12 +111,13 @@ export class DOMBrowserView {
     private connection: ProjectionConnection,
     private options: ViewOptions = {},
   ) {
+    this.text = browserText(options.messages);
     container.classList.add('floe-viewport');
     this.surface = document.createElement('div');
     this.surface.className = 'floe-projection';
     this.sink = document.createElement('textarea');
     this.sink.className = 'floe-input-sink';
-    this.sink.setAttribute('aria-label', 'Type in the source browser');
+    this.sink.setAttribute('aria-label', this.text('page.input'));
     this.sink.setAttribute('autocapitalize', 'off');
     this.sink.autocomplete = 'off';
     this.sink.spellcheck = false;
@@ -118,13 +126,12 @@ export class DOMBrowserView {
     this.pageError.className = 'floe-page-error';
     this.pageError.hidden = true;
     const heading = document.createElement('h1');
-    heading.textContent = 'This page couldn’t be loaded';
+    heading.textContent = this.text('page.failed');
     const explanation = document.createElement('p');
-    explanation.textContent =
-      'Check the address and your connection, or try opening another website.';
+    explanation.textContent = this.text('page.recovery');
     const reload = document.createElement('button');
     reload.type = 'button';
-    reload.textContent = 'Reload page';
+    reload.textContent = this.text('page.reload');
     this.listen(reload, 'click', () => {
       void this.dispatch({ kind: 'reload' });
     });
@@ -148,6 +155,7 @@ export class DOMBrowserView {
       },
       options.mediaAssets,
       (target) => this.tabTitles.get(target) ?? '',
+      this.text,
     );
     this.disposers.push(
       connection.subscribe((message) => this.receive(message)),
@@ -355,9 +363,7 @@ export class DOMBrowserView {
     }
     if (message.type === 'hello') {
       if (message.version !== PROTOCOL_VERSION) {
-        this.options.onNotice?.(
-          'This viewer and source use different protocol versions.',
-        );
+        this.options.onNotice?.(this.text('connection.version'));
         this.connection.close();
         return;
       }
@@ -450,10 +456,7 @@ export class DOMBrowserView {
           this.options.onStatus?.('live');
           for (const changed of this.readiness) changed();
         },
-        () =>
-          this.options.onNotice?.(
-            'Some page styles took too long to load. Reload the page if it looks incomplete.',
-          ),
+        () => this.options.onNotice?.(this.text('page.stylesSlow')),
       );
       this.presentation = presentation;
       const now = Date.now();
@@ -556,23 +559,14 @@ export class DOMBrowserView {
             return;
           this.resync();
         }
-        const text = {
-          stale_view:
-            'The page changed before that action. Please try again on the current view.',
-          target_unavailable: 'The source page is unavailable.',
-          unsupported: 'This control is not supported in DOM mode.',
-          action_failed:
-            'The source could not confirm that action. It has not been repeated.',
-          navigation_failed:
-            'This page couldn’t be loaded. Check the address or try again.',
-          busy: 'The source is catching up. Please wait a moment.',
-          not_allowed: 'The host did not authorize that action.',
-        };
-        this.options.onNotice?.(text[message.code ?? 'action_failed']);
+        this.options.onNotice?.(
+          this.text(`action.${message.code ?? 'action_failed'}`),
+        );
       }
       return;
     }
-    if (message.type === 'notice') this.options.onNotice?.(message.message);
+    if (message.type === 'notice')
+      this.options.onNotice?.(this.text(`notice.${message.code}`));
   }
 
   private resync(): void {
@@ -657,7 +651,7 @@ export class DOMBrowserView {
     )
       return Promise.resolve(false);
     if (action.kind === 'text' && action.text.length > 16000) {
-      this.options.onNotice?.('Paste up to 16,000 characters at a time.');
+      this.options.onNotice?.(this.text('action.pasteLimit'));
       return Promise.resolve(false);
     }
     const chrome = action.kind.startsWith('tab_');
@@ -665,9 +659,7 @@ export class DOMBrowserView {
       [...this.pending.values()].filter((pending) => pending.chrome === chrome)
         .length >= MAX_PENDING_COMMANDS
     ) {
-      this.options.onNotice?.(
-        'The source is catching up. Please wait a moment.',
-      );
+      this.options.onNotice?.(this.text('action.busy'));
       return Promise.resolve(false);
     }
     const id = ++this.nextID;
@@ -694,9 +686,7 @@ export class DOMBrowserView {
           (!documentBound || epoch === this.epoch) &&
           (chrome || this.tab === tab)
         )
-          this.options.onNotice?.(
-            'This page did not confirm the action. You can switch tabs or close it. The action has not been repeated.',
-          );
+          this.options.onNotice?.(this.text('action.timeout'));
       }, 25000);
       this.pending.set(id, {
         resolve,
@@ -1057,9 +1047,7 @@ export class DOMBrowserView {
     this.options.onStatus?.('disconnected', this.disconnectReason);
     for (const changed of this.readiness) changed();
     if (this.pending.size)
-      this.options.onNotice?.(
-        'Connection lost. Unconfirmed actions have not been repeated.',
-      );
+      this.options.onNotice?.(this.text('connection.unconfirmed'));
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.resolve(false);

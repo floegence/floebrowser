@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { SourceTransport } from './source.js';
+import type { NoticeCode } from '../shared/protocol.js';
 import parseCSS from 'postcss-safe-parser';
 import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
@@ -113,7 +114,7 @@ export class ResourceStore {
 
   constructor(
     private cdp: SourceTransport,
-    private notice: (message: string) => void = () => {},
+    private notice: (code: NoticeCode) => void = () => {},
     private resourceURL: (id: string) => string = (id) => `/_floe/assets/${id}`,
   ) {}
 
@@ -403,7 +404,7 @@ export class ResourceStore {
   ): void {
     if (this.closed) return;
     if (data.length > MAX_RESOURCE_BYTES) {
-      this.notice('A page resource exceeds the projection memory limit.');
+      this.notice('resource_limit');
       return;
     }
     while (

@@ -137,8 +137,7 @@ export class BrowserSession {
   private unavailable(): void {
     this.send({
       type: 'notice',
-      message:
-        'The source tab could not be opened. Try again from the current tab.',
+      code: 'tab_unavailable',
     });
   }
   private trackRetirement(viewer: Viewer, work: Promise<void>): void {

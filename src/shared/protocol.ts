@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 64 * 1024;
@@ -188,6 +188,14 @@ export const sourceMediaPacketSchema = z.discriminatedUnion('kind', [
 export type SourceMediaPacket = z.infer<typeof sourceMediaPacketSchema>;
 export type MediaPacket = z.infer<typeof mediaPacketSchema>;
 export type MediaState = z.infer<typeof mediaStateSchema>;
+export type NoticeCode =
+  | 'dom_limit'
+  | 'dom_update_failed'
+  | 'popup_unavailable'
+  | 'dialog_dismissed'
+  | 'download_source_only'
+  | 'resource_limit'
+  | 'tab_unavailable';
 export type ServerMessage =
   | { type: 'media_end'; target: string; view: string }
   | {
@@ -225,7 +233,7 @@ export type ServerMessage =
         | 'busy'
         | 'not_allowed';
     }
-  | { type: 'notice'; message: string };
+  | { type: 'notice'; code: NoticeCode };
 
 export interface ProjectionConnection {
   send(message: ClientMessage): void;

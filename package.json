@@ -21,8 +21,8 @@
       "import": "./dist/shared/protocol.js"
     },
     "./viewer": {
-      "types": "./dist/viewer/client.d.ts",
-      "import": "./dist/viewer/client.js"
+      "types": "./dist/viewer/index.d.ts",
+      "import": "./dist/viewer/index.js"
     },
     "./viewer.css": "./dist/assets/app.css",
     "./media": {

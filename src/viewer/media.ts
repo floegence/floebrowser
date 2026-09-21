@@ -3,6 +3,7 @@ import { ElementDecoder, type DecoderEvent } from './media-decoder.js';
 import { AudioOutput } from './audio-output.js';
 import type { MediaFrame } from '../shared/media-wire.js';
 import { setIcon } from './icons.js';
+import { browserText, type BrowserText } from './messages.js';
 import type { Action, MediaPacket, MediaState } from '../shared/protocol.js';
 
 type ScopedState = MediaState & { target: string; view: string };
@@ -79,6 +80,7 @@ export class MediaView {
       audioWorkletURL: new URL('audio-worklet.js', document.baseURI),
     },
     private targetTitle: (target: string) => string = () => '',
+    private text: BrowserText = browserText(),
   ) {
     this.audio = new AudioOutput(assets.audioWorkletURL, (blocked) => {
       this.soundBlocked = blocked;
@@ -88,7 +90,7 @@ export class MediaView {
     this.controls.hidden = true;
     this.toggle.type = 'button';
     this.toggle.className = 'floe-media-toggle';
-    this.toggle.setAttribute('aria-label', 'Media controls');
+    this.toggle.setAttribute('aria-label', this.text('media.controls'));
     this.toggle.setAttribute('aria-haspopup', 'dialog');
     this.toggle.setAttribute('aria-expanded', 'false');
     this.toggle.innerHTML =
@@ -96,7 +98,7 @@ export class MediaView {
     this.panel.className = 'floe-media-panel';
     this.panel.popover = 'auto';
     this.panel.setAttribute('role', 'dialog');
-    this.panel.setAttribute('aria-label', 'Media controls');
+    this.panel.setAttribute('aria-label', this.text('media.controls'));
     this.toggle.popoverTargetElement = this.panel;
     this.panel.addEventListener('toggle', () => {
       const open = this.panel.matches(':popover-open');
@@ -127,11 +129,11 @@ export class MediaView {
     const header = document.createElement('header');
     header.className = 'floe-media-header';
     const heading = document.createElement('h2');
-    heading.textContent = 'Media';
+    heading.textContent = this.text('media.title');
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'floe-media-dismiss';
-    close.title = 'Close media controls';
+    close.title = this.text('media.close');
     close.setAttribute('aria-label', close.title);
     setIcon(close, 'close');
     close.onclick = () => {
@@ -392,13 +394,13 @@ export class MediaView {
       if (failed) {
         image.setAttribute(
           'data-floebrowser-unsupported',
-          'Canvas unavailable',
+          this.text('media.canvasUnavailable'),
         );
         const [width, height] = image
           .getAttribute(CANVAS_ATTRIBUTE)!
           .split(',')
           .map(Number);
-        const src = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"><rect width="300" height="150" fill="#f3f5f8"/><text x="150" y="80" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">Canvas unavailable</text></svg>`)}`;
+        const src = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 300 150"><rect width="300" height="150" fill="#f3f5f8"/><text x="150" y="80" text-anchor="middle" fill="#64748b" font-family="system-ui,sans-serif" font-size="12">${this.text('media.canvasUnavailable').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</text></svg>`)}`;
         if (image.src !== src) image.src = src;
       } else image.removeAttribute('data-floebrowser-unsupported');
     }
@@ -454,10 +456,12 @@ export class MediaView {
     this.controls.hidden = !relevant.size;
     if (!relevant.size) this.dismiss();
     this.toggle.title = this.soundBlocked
-      ? 'Sound is muted — media controls'
-      : 'Media controls';
+      ? this.text('media.soundBlocked')
+      : this.text('media.controls');
     const soundLabel =
-      this.audible && !this.soundBlocked ? 'Mute audio' : 'Unmute audio';
+      this.audible && !this.soundBlocked
+        ? this.text('media.mute')
+        : this.text('media.unmute');
     this.sound.title = soundLabel;
     this.sound.setAttribute('aria-label', soundLabel);
     setIcon(this.sound, this.audible && !this.soundBlocked ? 'sound' : 'muted');
@@ -509,7 +513,7 @@ export class MediaView {
       seek.type = 'range';
       seek.min = '0';
       seek.step = '0.1';
-      seek.setAttribute('aria-label', 'Seek source media');
+      seek.setAttribute('aria-label', this.text('media.seek'));
       const timeline = document.createElement('div');
       timeline.className = 'floe-media-timeline';
       const times = document.createElement('div');
@@ -540,7 +544,10 @@ export class MediaView {
       locate.className = 'floe-media-locate';
       const icon = document.createElement('span');
       setIcon(icon, 'locate');
-      locate.append(icon, document.createTextNode('Show on page'));
+      locate.append(
+        icon,
+        document.createTextNode(this.text('media.showOnPage')),
+      );
       locate.onclick = async () => {
         const current = this.states.get(identity(state.target, state.stream));
         if (!current || locate.disabled) return;
@@ -626,44 +633,55 @@ export class MediaView {
       node?.title ||
       node?.ownerDocument.title ||
       this.targetTitle(state.target) ||
-      (node?.tagName === 'AUDIO' ? 'Audio' : 'Video');
+      (node?.tagName === 'AUDIO'
+        ? this.text('media.audio')
+        : this.text('media.video'));
     if (row.title.textContent !== title) row.title.textContent = title;
     row.title.title = title;
     const visible = !!node && this.visible(node);
     const canLocate = visible || !node;
-    const label = visible ? 'Show on page' : 'Open tab';
+    const label = visible
+      ? this.text('media.showOnPage')
+      : this.text('media.openTab');
     if (row.locate.lastChild?.textContent !== label)
       row.locate.lastChild!.textContent = label;
     if (canLocate && row.locate.parentElement !== row.location)
       row.location.replaceChildren(row.locate);
-    else if (!canLocate && row.location.textContent !== 'No visible player')
-      row.location.textContent = 'No visible player';
+    else if (
+      !canLocate &&
+      row.location.textContent !== this.text('media.noPlayer')
+    )
+      row.location.textContent = this.text('media.noPlayer');
     const failure = this.playback.get(
       identity(state.target, state.stream),
     )?.failed;
     row.label.textContent =
       state.status === 'unavailable'
-        ? 'This media cannot play in this browser.'
+        ? this.text('media.unavailable')
         : failure
-          ? 'Playback interrupted. Check your connection.'
+          ? this.text('media.interrupted')
           : state.reason
-            ? 'Playback could not start. Try the page’s play button.'
+            ? this.text('media.playFailed')
             : state.paused
-              ? 'Paused'
+              ? this.text('media.paused')
               : state.status === 'streaming'
                 ? state.muted ||
                   state.volume === 0 ||
                   !this.audible ||
                   this.soundBlocked
-                  ? 'Playing · Muted'
-                  : 'Playing'
-                : 'Loading…';
+                  ? this.text('media.playingMuted')
+                  : this.text('media.playing')
+                : this.text('media.loading');
     row.play.disabled = state.status === 'unavailable';
     setIcon(row.play, state.paused ? 'play' : 'pause');
-    row.play.title = state.paused ? 'Play' : 'Pause';
+    row.play.title = state.paused
+      ? this.text('media.play')
+      : this.text('media.pause');
     row.play.setAttribute(
       'aria-label',
-      state.paused ? 'Play source media' : 'Pause source media',
+      state.paused
+        ? this.text('media.playSource')
+        : this.text('media.pauseSource'),
     );
     row.timeline.hidden = state.duration <= 0 || state.status === 'unavailable';
     row.seek.max = String(state.duration);
@@ -692,7 +710,10 @@ export class MediaView {
     elapsed.textContent = this.time(value);
     seek.setAttribute(
       'aria-valuetext',
-      `${this.time(value)} of ${this.time(duration)}`,
+      this.text('media.progress', {
+        elapsed: this.time(value),
+        duration: this.time(duration),
+      }),
     );
   }
   private release(token: string) {
