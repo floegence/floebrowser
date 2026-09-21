@@ -152,6 +152,10 @@ await context.close();
 
 `authorize` is checked immediately before an effect. It is not a target mutex or a site-navigation firewall. The host must preserve its existing tab ownership, network policies, origin grants and user/AI takeover rules for the controller's entire lifetime. Attaching does not authorize sibling tabs. Page-originated navigation, redirects and popups remain website behavior at the source.
 
+`BrowserProjection.observe(send, options)` creates a viewing grant without input authority. `acquireControl(observation, authorize)` creates the page's sole input handle only after host authorization; it never steals another handle. Releasing input leaves authorized DOM and media observation alive. Closing an observation revokes its input handle and media delivery synchronously, then drains held input. Each observation has a separate media subscription generation; disabling its media with `setMedia(false)` sends `media_end`, retires queued packets, and leaves other viewers and input unaffected. Multiple viewers share one source element collector. The source stops collection when the last media subscription ends, and stops DOM emission when the last observation closes.
+
+The standalone `BrowserSession.connect` returns a `SessionConnection` that controls its observation's media lifetime independently. The carrier admits DOM and control first, enables media only after its separate authorized socket connects, and suspends capture when that socket closes. A media failure cannot revoke browser input. `BrowserProjection.connect` remains the convenience API for hosts that grant viewing and input together.
+
 `connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
 
 For a standalone loopback carrier:

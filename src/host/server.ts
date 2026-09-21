@@ -8,8 +8,8 @@ import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
 import { WebSocketServer, WebSocket } from 'ws';
-import { type AttachOptions, type Controller } from './engine.js';
-import { BrowserSession } from './session.js';
+import { type AttachOptions } from './engine.js';
+import { BrowserSession, type SessionConnection } from './session.js';
 import { NativeMediaBridge, type SourceMediaBridge } from './media-bridge.js';
 import { mediaExecutable } from './media-executable.js';
 import { MediaSender } from './media-carrier.js';
@@ -56,6 +56,7 @@ export async function createProjectionServer(
         mediaToken: string;
         sender?: MediaSender;
         mediaSocket?: WebSocket;
+        connection?: SessionConnection;
         release: () => Promise<void>;
       }
     | undefined;
@@ -177,6 +178,7 @@ export async function createProjectionServer(
           }),
         (scope) => session.requestMediaKeyframe(scope),
       );
+      void viewer.connection?.setMedia(true);
       ws.on('message', (data, binary) => {
         const bytes = Buffer.isBuffer(data)
           ? data
@@ -192,10 +194,11 @@ export async function createProjectionServer(
       ws.on('close', () => {
         viewer.sender?.close();
         viewer.sender = undefined;
+        void viewer.connection?.setMedia(false);
       });
       return;
     }
-    let controller: Controller | undefined;
+    let controller: SessionConnection | undefined;
     let disconnected = false;
     let released: Promise<void> | undefined;
     const viewer: NonNullable<typeof active> = {
@@ -259,18 +262,25 @@ export async function createProjectionServer(
           void active.release();
         }
         if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
-        controller = await session.connect((message) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          const payload = JSON.stringify(message);
-          if (
-            Buffer.byteLength(payload) > MAX_MESSAGE_BYTES ||
-            ws.bufferedAmount > MAX_MESSAGE_BYTES
-          ) {
-            ws.close(1013, 'Projection is behind; reconnect for a fresh view');
-            return;
-          }
-          ws.send(payload);
-        });
+        controller = await session.connect(
+          (message) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const payload = JSON.stringify(message);
+            if (
+              Buffer.byteLength(payload) > MAX_MESSAGE_BYTES ||
+              ws.bufferedAmount > MAX_MESSAGE_BYTES
+            ) {
+              ws.close(
+                1013,
+                'Projection is behind; reconnect for a fresh view',
+              );
+              return;
+            }
+            ws.send(payload);
+          },
+          { media: false },
+        );
+        viewer.connection = controller;
         active = viewer;
         ws.send(
           JSON.stringify({ type: 'carrier', mediaToken: viewer.mediaToken }),

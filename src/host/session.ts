@@ -3,6 +3,7 @@ import {
   BrowserProjection,
   type AttachOptions,
   type Controller,
+  type Observation,
 } from './engine.js';
 import {
   clientMessageSchema,
@@ -17,10 +18,15 @@ type Viewer = {
   active: boolean;
   send: (message: ServerMessage) => void;
   controller?: Controller;
+  observation?: Observation;
+  mediaEnabled: boolean;
   lastID: number;
   pending: number;
   retiring: Set<Promise<void>>;
 };
+export interface SessionConnection extends Controller {
+  setMedia(enabled: boolean): Promise<void>;
+}
 
 /** Owns one initial page, its popups and explicitly created tabs; never adopts unrelated pages. */
 export class BrowserSession {
@@ -123,10 +129,11 @@ export class BrowserSession {
     });
   }
   private retire(viewer?: Viewer): void {
-    const controller = viewer?.controller;
-    if (!viewer || !controller) return;
+    const observation = viewer?.observation;
+    if (!viewer || !observation) return;
     viewer.controller = undefined;
-    const drained = controller.close();
+    viewer.observation = undefined;
+    const drained = observation.close();
     viewer.retiring.add(drained);
     void drained.finally(() => viewer.retiring.delete(drained)).catch(() => {});
   }
@@ -141,16 +148,40 @@ export class BrowserSession {
     this.publish();
     void tab.page.bringToFront().catch(() => {});
     if (viewer?.active) {
-      viewer.controller = await tab.engine.connect((message) => {
+      const observation = await tab.engine.observe(
+        (message) => {
+          if (
+            viewer.active &&
+            this.viewer === viewer &&
+            this.selected === id &&
+            !(message.type === 'state' && message.state.status === 'closed')
+          )
+            viewer.send(message);
+        },
+        { ...this.options, media: viewer.mediaEnabled },
+      );
+      if (!viewer.active || this.selected !== id) {
+        await observation.close();
+        return;
+      }
+      viewer.observation = observation;
+      try {
+        const controller = await tab.engine.acquireControl(
+          observation,
+          this.options.authorize,
+        );
         if (
-          viewer.active &&
-          this.viewer === viewer &&
-          this.selected === id &&
-          !(message.type === 'state' && message.state.status === 'closed')
+          !viewer.active ||
+          viewer.observation !== observation ||
+          this.selected !== id
         )
-          viewer.send(message);
-      });
-      if (!viewer.active) await viewer.controller.close();
+          await observation.close();
+        else viewer.controller = controller;
+      } catch (error) {
+        await observation.close();
+        if (viewer.observation === observation) viewer.observation = undefined;
+        throw error;
+      }
     }
   }
   private async remove(id: string): Promise<void> {
@@ -171,7 +202,10 @@ export class BrowserSession {
     }
     this.publish();
   }
-  async connect(send: (message: ServerMessage) => void): Promise<Controller> {
+  async connect(
+    send: (message: ServerMessage) => void,
+    options: { media?: boolean } = {},
+  ): Promise<SessionConnection> {
     if (this.hasController || this.closing)
       throw new Error('Session unavailable');
     await this.queue;
@@ -183,6 +217,7 @@ export class BrowserSession {
       lastID: 0,
       pending: 0,
       retiring: new Set(),
+      mediaEnabled: options.media !== false,
     };
     this.viewer = viewer;
     try {
@@ -195,6 +230,11 @@ export class BrowserSession {
     let closed: Promise<void> | undefined;
     return {
       receive: (message) => this.receive(viewer, message),
+      setMedia: async (enabled) => {
+        if (!viewer.active) return;
+        viewer.mediaEnabled = enabled;
+        await viewer.observation?.setMedia(enabled);
+      },
       close: () => {
         closed ??= (async () => {
           viewer.active = false;
@@ -322,7 +362,7 @@ export class BrowserSession {
     return (this.closing ??= (async () => {
       if (this.viewer) {
         this.viewer.active = false;
-        await this.viewer.controller?.close();
+        await this.viewer.observation?.close();
       }
       await this.queue;
       await Promise.allSettled(this.adding.values());

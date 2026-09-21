@@ -189,6 +189,7 @@ export type SourceMediaPacket = z.infer<typeof sourceMediaPacketSchema>;
 export type MediaPacket = z.infer<typeof mediaPacketSchema>;
 export type MediaState = z.infer<typeof mediaStateSchema>;
 export type ServerMessage =
+  | { type: 'media_end'; target: string; view: string }
   | { type: 'media'; epoch: string; view: string; packet: MediaPacket }
   | { type: 'tabs'; state: TabState }
   | { type: 'focus'; epoch: string; focus: FocusState }

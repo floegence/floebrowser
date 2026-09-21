@@ -47,16 +47,43 @@ export interface Controller {
   receive(message: ClientMessage): Promise<void>;
   close(): Promise<void>;
 }
-type Viewer = {
+export interface ObservationOptions {
+  /** The host may admit DOM before its independently authorized media carrier. */
+  media?: boolean;
+  onMediaFrame?: (frame: MediaFrame) => void;
+  onMediaRetired?: (scope: {
+    target: string;
+    view: string;
+    stream: string;
+  }) => void;
+}
+export interface Observation {
+  readonly id: string;
+  /** Only resynchronization and media recovery are accepted here, never input. */
+  receive(message: ClientMessage): Promise<void>;
+  setMedia(enabled: boolean): Promise<void>;
+  close(): Promise<void>;
+}
+type Watcher = ObservationOptions & {
+  id: string;
+  view: string;
+  active: boolean;
+  mediaEnabled: boolean;
   send: (message: ServerMessage) => void;
+  resyncPending: boolean;
+  control?: Controller;
+  closing?: Promise<void>;
+};
+type Viewer = {
+  watcher: Watcher;
+  send: (message: ServerMessage) => void;
+  authorize: AttachOptions['authorize'];
   active: boolean;
   lastID: number;
   pending: number;
-  resyncPending: boolean;
-  observing: boolean;
 };
 
-/** One page, one projection, one controller. Does not own the browser or profile. */
+/** One source page and input queue, with independently authorized observers. */
 export class BrowserProjection {
   readonly id = randomBytes(18).toString('base64url');
   readonly resources: ResourceStore;
@@ -72,6 +99,9 @@ export class BrowserProjection {
   private sequence = 0;
   private metadata?: eventWithTime;
   private viewer?: Viewer;
+  private watchers = new Set<Watcher>();
+  private observations = new WeakMap<Observation, Watcher>();
+  private snapshotTask?: Promise<void>;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private controlFault = false;
@@ -305,12 +335,31 @@ export class BrowserProjection {
       });
   }
   private updateState(state: Partial<BrowserState>): void {
+    if (this.controlFault && this.hasController && state.status === 'ready')
+      state = { ...state, status: 'error' };
     this.state = { ...this.state, ...state };
     this.send({ type: 'state', state: this.currentState });
     this.options.onState?.(this.currentState);
   }
   private send(message: ServerMessage): void {
-    if (this.viewer?.active) this.viewer.send(message);
+    for (const watcher of this.watchers) {
+      if (!watcher.active) continue;
+      try {
+        watcher.send(
+          message.type === 'media'
+            ? { ...message, view: watcher.view }
+            : message,
+        );
+      } catch {
+        void this.unobserve(watcher);
+      }
+    }
+  }
+  private get mediaWatched(): boolean {
+    return [...this.watchers].some(
+      (watcher) =>
+        watcher.active && watcher.mediaEnabled && !!watcher.onMediaFrame,
+    );
   }
 
   private recorded(event: eventWithTime): void {
@@ -339,7 +388,7 @@ export class BrowserProjection {
       if (typeof title === 'string') this.updateState({ title });
       return;
     }
-    if (!this.viewer?.active || !this.viewer.observing) {
+    if (!this.watchers.size) {
       if (event.type === EventType.FullSnapshot) void this.setMedia(false);
       return;
     }
@@ -527,33 +576,111 @@ export class BrowserProjection {
       });
   }
 
-  async connect(send: (message: ServerMessage) => void): Promise<Controller> {
-    if (this.closed || this.closing)
-      throw new Error('The source page is unavailable.');
-    if (this.hasController)
-      throw new Error('The source page already has a controller.');
-    const viewer: Viewer = {
+  async observe(
+    send: (message: ServerMessage) => void,
+    options: ObservationOptions = {},
+  ): Promise<Observation> {
+    if (this.closed || this.closing || this.watchers.size >= 16)
+      throw new Error('Source observation unavailable');
+    const watcher: Watcher = {
+      ...options,
+      id: randomBytes(18).toString('base64url'),
+      view: randomBytes(18).toString('base64url'),
+      active: true,
+      mediaEnabled: !!options.onMediaFrame && options.media !== false,
       send,
+      resyncPending: false,
+    };
+    this.watchers.add(watcher);
+    const observation: Observation = {
+      id: watcher.id,
+      receive: (message) => this.receiveObservation(watcher, message),
+      setMedia: async (enabled) => {
+        if (
+          !watcher.active ||
+          watcher.mediaEnabled === enabled ||
+          (enabled && !watcher.onMediaFrame)
+        )
+          return;
+        watcher.mediaEnabled = enabled;
+        watcher.send({
+          type: 'media_end',
+          target: this.id,
+          view: watcher.view,
+        });
+        for (const stream of this.captures.keys())
+          watcher.onMediaRetired?.({
+            target: this.id,
+            view: watcher.view,
+            stream,
+          });
+        watcher.view = randomBytes(18).toString('base64url');
+        await this.setMedia(this.mediaWatched);
+      },
+      close: () => this.unobserve(watcher),
+    };
+    this.observations.set(observation, watcher);
+    try {
+      send({ type: 'hello', version: PROTOCOL_VERSION, mediaWireVersion: 1 });
+      send({ type: 'state', state: this.currentState });
+      void this.snapshot().catch(() => {
+        if (watcher.active && !this.closed)
+          this.updateState({ status: 'error' });
+      });
+      return observation;
+    } catch (error) {
+      await this.unobserve(watcher);
+      throw error;
+    }
+  }
+
+  private unobserve(watcher: Watcher): Promise<void> {
+    if (watcher.closing) return watcher.closing;
+    watcher.active = false;
+    this.watchers.delete(watcher);
+    if (!this.watchers.size) this.epoch = '';
+    try {
+      watcher.send({ type: 'media_end', target: this.id, view: watcher.view });
+    } catch {
+      /* The viewer carrier may already be closed. */
+    }
+    for (const stream of this.captures.keys())
+      watcher.onMediaRetired?.({ target: this.id, view: watcher.view, stream });
+    const drain = watcher.control?.close();
+    return (watcher.closing = Promise.all([
+      drain,
+      this.setMedia(this.mediaWatched),
+    ]).then(() => {}));
+  }
+
+  /** The embedding host must authorize this grant before calling. It never
+   * implicitly takes a lease from an existing user or AI controller. */
+  async acquireControl(
+    observation: Observation,
+    authorize: AttachOptions['authorize'],
+  ): Promise<Controller> {
+    const watcher = this.observations.get(observation);
+    if (!watcher?.active || this.closed || this.closing || this.hasController)
+      throw new Error('Source control unavailable');
+    const viewer: Viewer = {
+      watcher,
+      send: watcher.send,
+      authorize,
       active: true,
       lastID: 0,
       pending: 0,
-      resyncPending: false,
-      observing: false,
     };
     this.viewer = viewer;
-    this.epoch = '';
     let retiring: Promise<void> | undefined;
     const controller: Controller = {
       receive: (message) => this.receive(viewer, message),
       close: () => {
         if (retiring) return retiring;
         viewer.active = false;
-        viewer.observing = false;
-        const suspended = this.setMedia(false);
+        if (watcher.control === controller) watcher.control = undefined;
         retiring = this.queue = this.queue
           .then(async () => {
             await this.releaseInput();
-            await suspended;
             if (this.viewer === viewer) this.viewer = undefined;
           })
           .catch(() => {
@@ -562,43 +689,75 @@ export class BrowserProjection {
         return retiring;
       },
     };
+    watcher.control = controller;
+    this.queue = this.queue.then(() => {
+      if (viewer.active && this.viewer === viewer && this.controlFault)
+        this.updateState({ status: 'error' });
+    });
+    return controller;
+  }
+
+  /** Convenience for private standalone hosts that grant both viewing and input. */
+  async connect(send: (message: ServerMessage) => void): Promise<Controller> {
+    if (this.hasController)
+      throw new Error('The source page already has a controller.');
+    const observation = await this.observe(send, this.options);
     try {
-      send({
-        type: 'hello',
-        version: PROTOCOL_VERSION,
-        mediaWireVersion: 1,
-      });
-      send({ type: 'state', state: this.currentState });
-      // Begin observation after old input drains. Snapshot completion must not
-      // hold navigation; DOM input remains fenced by the fresh snapshot epoch.
-      this.queue = this.queue
-        .then(() => {
-          if (!viewer.active || this.viewer !== viewer) return;
-          if (this.controlFault) {
-            this.updateState({ status: 'error' });
-            return;
-          }
-          viewer.observing = true;
-          void this.snapshot().catch(() => {
-            if (viewer.active && this.viewer === viewer)
-              this.updateState({ status: 'error' });
-          });
-        })
-        .catch(() => {
-          if (viewer.active && this.viewer === viewer)
-            this.updateState({ status: 'error' });
-        });
-      return controller;
+      const controller = await this.acquireControl(
+        observation,
+        this.options.authorize,
+      );
+      return { receive: controller.receive, close: () => observation.close() };
     } catch (error) {
-      // Admission owns the lease even before the first snapshot completes.
-      await controller.close();
+      await observation.close();
       throw error;
     }
   }
 
+  private receiveObservation(
+    watcher: Watcher,
+    input: ClientMessage,
+  ): Promise<void> {
+    if (!watcher.active || this.closed) return Promise.resolve();
+    const parsed = clientMessageSchema.safeParse(input);
+    if (!parsed.success) return Promise.resolve();
+    const message = parsed.data;
+    if (message.type === 'command') {
+      watcher.send({
+        type: 'ack',
+        id: message.id,
+        ok: false,
+        code: 'not_allowed',
+      });
+      return Promise.resolve();
+    }
+    if (message.type === 'media_keyframe') {
+      if (
+        watcher.mediaEnabled &&
+        message.tab === this.id &&
+        message.view === watcher.view
+      )
+        this.requestMediaKeyframe(message);
+      return Promise.resolve();
+    }
+    if (watcher.resyncPending) return Promise.resolve();
+    watcher.resyncPending = true;
+    return this.snapshot()
+      .catch(() => {})
+      .finally(() => {
+        watcher.resyncPending = false;
+      });
+  }
+
   requestMediaKeyframe(scope: Pick<MediaFrameHeader, 'view' | 'stream'>): void {
     const capture = this.captures.get(scope.stream);
-    if (capture?.view === scope.view)
+    if (
+      capture &&
+      [...this.watchers].some(
+        (watcher) =>
+          watcher.active && watcher.mediaEnabled && watcher.view === scope.view,
+      )
+    )
       void capture.subscription?.requestKeyframe().catch(() => {});
   }
 
@@ -606,11 +765,12 @@ export class BrowserProjection {
     const capture = this.captures.get(stream);
     this.captures.delete(stream);
     if (capture)
-      this.options.onMediaRetired?.({
-        target: this.id,
-        view: capture.view,
-        stream,
-      });
+      for (const watcher of this.watchers)
+        watcher.onMediaRetired?.({
+          target: this.id,
+          view: watcher.view,
+          stream,
+        });
     void capture?.subscription?.close().catch(() => {});
   }
 
@@ -618,13 +778,15 @@ export class BrowserProjection {
     for (const stream of this.captures.keys()) this.retireMedia(stream);
     this.mediaNodes.clear();
     this.mediaView = randomBytes(18).toString('base64url');
+    for (const watcher of this.watchers)
+      watcher.view = randomBytes(18).toString('base64url');
   }
 
   private async collectMedia(
     packet: Extract<SourceMediaPacket, { kind: 'offer' }>,
   ): Promise<void> {
     const bridge = this.options.mediaBridge;
-    if (!bridge || !this.viewer?.active) return;
+    if (!bridge || !this.mediaWatched) return;
     const old = this.captures.get(packet.stream);
     if (old?.offer === packet.sdp) return;
     if (old) this.retireMedia(packet.stream);
@@ -637,7 +799,7 @@ export class BrowserProjection {
     } = { offer: packet.sdp, node: packet.id, view: this.mediaView };
     this.captures.set(packet.stream, capture);
     const current = () =>
-      this.viewer?.active && this.captures.get(packet.stream) === capture;
+      this.mediaWatched && this.captures.get(packet.stream) === capture;
     try {
       const subscription = await bridge.open(
         {
@@ -650,11 +812,23 @@ export class BrowserProjection {
         },
         packet.sdp,
         (frame) => {
-          if (current() && this.mediaNodes.get(capture.node) === packet.stream)
-            this.options.onMediaFrame?.({
-              header: { ...frame.header, node: capture.node },
-              data: frame.data,
-            });
+          if (!current() || this.mediaNodes.get(capture.node) !== packet.stream)
+            return;
+          for (const watcher of this.watchers) {
+            if (!watcher.active || !watcher.mediaEnabled) continue;
+            try {
+              watcher.onMediaFrame?.({
+                header: {
+                  ...frame.header,
+                  node: capture.node,
+                  view: watcher.view,
+                },
+                data: frame.data,
+              });
+            } catch {
+              void this.unobserve(watcher);
+            }
+          }
         },
         () => {
           if (current()) void this.mediaFailed(packet.stream, capture.node);
@@ -710,52 +884,49 @@ export class BrowserProjection {
   }
 
   private async setMedia(active: boolean): Promise<void> {
-    if (!active) this.clearMedia();
+    const enabled = active && this.mediaWatched && !!this.options.mediaBridge;
+    if (!enabled) this.clearMedia();
+    const observing = this.watchers.size > 0;
     await Promise.all(
       this.page.frames().map((frame) =>
         frame
           .evaluate(
-            ({ key, active }) =>
-              active
-                ? (window as any)[key]?.media(true)
-                : (window as any)[key]?.suspend(),
-            {
-              key: this.recorderKey,
-              active:
-                active &&
-                !!this.viewer?.active &&
-                this.viewer.observing &&
-                !!this.options.mediaBridge &&
-                !!this.options.onMediaFrame,
+            ({ key, enabled, observing }) => {
+              if (observing) (window as any)[key]?.media(enabled);
+              else (window as any)[key]?.suspend();
             },
+            { key: this.recorderKey, enabled, observing },
           )
           .catch(() => {}),
       ),
     );
   }
 
-  private async snapshot(): Promise<void> {
-    if (this.snapshotPending || this.closed || !this.contextID) return;
-    const viewer = this.viewer;
+  private snapshot(): Promise<void> {
+    if (this.closed || !this.contextID || !this.watchers.size)
+      return Promise.resolve();
+    if (this.snapshotTask) return this.snapshotTask.then(() => this.snapshot());
     const contextID = this.contextID;
     const current = () =>
-      viewer?.active && this.viewer === viewer && this.contextID === contextID;
+      this.watchers.size > 0 && this.contextID === contextID;
     this.snapshotPending = true;
-    try {
-      await this.evaluate(
-        `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
-      );
-      if (!current()) return;
-      await this.frames.snapshot();
-      if (!current()) return;
-      await this.setMedia(true);
-    } catch (error) {
-      // Navigation destroys the old execution context. Its snapshot failure
-      // cannot invalidate the replacement document or another controller.
-      if (current()) throw error;
-    } finally {
-      this.snapshotPending = false;
-    }
+    const task = (async () => {
+      try {
+        await this.evaluate(
+          `globalThis[${JSON.stringify(this.recorderKey)}]?.snapshot()`,
+        );
+        if (!current()) return;
+        await this.frames.snapshot();
+        if (current()) await this.setMedia(this.mediaWatched);
+      } catch (error) {
+        if (current()) throw error;
+      } finally {
+        this.snapshotPending = false;
+        this.snapshotTask = undefined;
+      }
+    })();
+    this.snapshotTask = task;
+    return task;
   }
 
   private receive(viewer: Viewer, input: ClientMessage): Promise<void> {
@@ -764,22 +935,8 @@ export class BrowserProjection {
     const parsed = clientMessageSchema.safeParse(input);
     if (!parsed.success) return Promise.resolve();
     const message = parsed.data;
-    if (message.type === 'media_keyframe') {
-      if (message.tab === this.id && message.view === this.mediaView)
-        this.requestMediaKeyframe(message);
-      return Promise.resolve();
-    }
-    if (message.type === 'resync') {
-      if (viewer.resyncPending) return this.queue;
-      viewer.resyncPending = true;
-      this.queue = this.queue
-        .then(() => (viewer.active ? this.snapshot() : undefined))
-        .catch(() => {})
-        .finally(() => {
-          viewer.resyncPending = false;
-        });
-      return this.queue;
-    }
+    if (message.type !== 'command')
+      return this.receiveObservation(viewer.watcher, message);
     if (message.id <= viewer.lastID) {
       viewer.send({
         type: 'ack',
@@ -849,7 +1006,7 @@ export class BrowserProjection {
 
   private async execute(command: Command, viewer: Viewer): Promise<void> {
     const action = command.action;
-    if (!(await this.options.authorize(action)))
+    if (!(await viewer.authorize(action)))
       throw new CommandError('not_allowed');
     const independent = documentIndependent(action);
     const assertCurrent = () => {
@@ -1176,7 +1333,20 @@ export class BrowserProjection {
   private async dispose(): Promise<void> {
     if (this.closed) return;
     if (this.viewer) this.viewer.active = false;
+    for (const watcher of this.watchers) {
+      try {
+        watcher.send({
+          type: 'media_end',
+          target: this.id,
+          view: watcher.view,
+        });
+      } catch {
+        /* A disconnected viewer cannot receive retirement. */
+      }
+    }
     this.clearMedia();
+    for (const watcher of this.watchers) watcher.active = false;
+    this.watchers.clear();
     await this.queue;
     await this.releaseInput().catch(() => {
       this.controlFault = true;

@@ -656,6 +656,11 @@ export class MediaView {
     this.rows.delete(id);
     this.renderControls();
   }
+  end(target: string, view: string): void {
+    for (const playback of this.playback.values())
+      if (playback.target === target && playback.view === view)
+        this.remove(playback.id);
+  }
   reset() {
     this.highlight?.cancel();
     this.highlight = undefined;

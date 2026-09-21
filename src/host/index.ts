@@ -3,12 +3,14 @@ export {
   BrowserProjection,
   type AttachOptions,
   type Controller,
+  type Observation,
+  type ObservationOptions,
 } from './engine.js';
 export {
   createProjectionServer,
   type ProjectionServerOptions,
 } from './server.js';
-export { BrowserSession } from './session.js';
+export { BrowserSession, type SessionConnection } from './session.js';
 export {
   PROTOCOL_VERSION,
   type Action,

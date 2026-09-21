@@ -276,6 +276,10 @@ export class DOMBrowserView {
 
   private receive(message: ServerMessage): void {
     if (this.destroyed) return;
+    if (message.type === 'media_end') {
+      this.media.end(message.target, message.view);
+      return;
+    }
     if (message.type === 'media') {
       if (message.epoch === this.epoch && this.connected)
         this.media.receive(message.packet, {
