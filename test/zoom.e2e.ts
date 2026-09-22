@@ -87,6 +87,8 @@ test(
     );
     await viewer.locator('#new-tab').click();
     await viewer.getByRole('tab', { name: 'New tab', exact: true }).waitFor();
+    // The directory announces new tabs before their selected view is ready.
+    await viewer.locator('#status.live').waitFor();
     assert.equal(
       await viewer
         .getByRole('button', { name: 'Page zoom', exact: true })
@@ -95,6 +97,10 @@ test(
     );
     await viewer.locator(`[data-tab="${original}"]`).click();
     await viewer.locator('#status.live').waitFor();
+    await viewer
+      .getByRole('button', { name: 'Page zoom', exact: true })
+      .filter({ hasText: /^150%$/ })
+      .waitFor();
     assert.equal(await source.evaluate(() => devicePixelRatio), 1.5);
     assert.equal(
       await viewer

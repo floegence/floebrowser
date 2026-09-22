@@ -277,7 +277,7 @@ test(
     const { viewer, service } = await fixture(t, 'font');
     const gate = await gateAssets(viewer);
     t.after(gate.release);
-    await viewer.goto(service.url);
+    await viewer.goto(service.url, { waitUntil: 'domcontentloaded' });
     await gate.loading;
     await viewer.locator('#status.live').waitFor({ timeout: 1500 });
     assert.equal(

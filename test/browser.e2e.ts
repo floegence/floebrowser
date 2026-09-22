@@ -282,6 +282,14 @@ test('explains an occupied browser and transfers control only on an explicit req
 test('handles scaled input, double clicks, text selection, and multiline editing', async (t) => {
   const { page, viewer, projected } = await setup(t);
   await viewer.setViewportSize({ width: 900, height: 720 });
+  // Responsive resizing is an asynchronous source command. Forced clicks on
+  // inert replay nodes cannot use Playwright's normal geometry stability wait.
+  await page.waitForFunction(() => innerWidth === 900);
+  await viewer.waitForFunction(
+    () =>
+      document.querySelector<HTMLIFrameElement>('#viewport iframe')
+        ?.contentWindow?.innerWidth === 900,
+  );
   await clickProjected(projected.locator('#count'), { clickCount: 2 });
   await eventually(
     async () => (await page.locator('#count-value').textContent()) === '2',
