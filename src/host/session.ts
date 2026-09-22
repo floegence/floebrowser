@@ -47,6 +47,7 @@ type Viewer = {
   observation?: Observation;
   observations: Map<string, Observation>;
   authorize?: AttachOptions['authorize'];
+  canControl?: (page: SourcePage) => boolean;
   mediaEnabled: boolean;
   lastID: number;
   pending: number;
@@ -58,9 +59,13 @@ export interface SessionConnection extends Controller {
   setMedia(enabled: boolean): Promise<void>;
   setAudio(enabled: boolean): Promise<void>;
   setVisible(visible: boolean): Promise<void>;
-  /** Host-only grant. Returns false when the selected source has another owner;
-   * it never steals user/AI control. Authorized directory operations remain usable. */
-  acquireControl(authorize: AttachOptions['authorize']): Promise<boolean>;
+  /** Host-only grant. By default it covers only the currently selected source.
+   * A dynamic predicate must reflect the host's target leases. Directory grants
+   * remain usable without page input. Returns false instead of stealing control. */
+  acquireControl(
+    authorize: AttachOptions['authorize'],
+    canControl?: (page: SourcePage) => boolean,
+  ): Promise<boolean>;
   releaseControl(): Promise<void>;
   download(
     tab: string,
@@ -169,6 +174,15 @@ export class BrowserSession {
     previous = this.directoryOrder,
   ): Promise<void> {
     if (!viewer.active) return Promise.resolve();
+    const selected = this.tabs.get(viewer.selected);
+    if (
+      viewer.controller &&
+      (!selected || !viewer.canControl?.(selected.page))
+    ) {
+      const control = viewer.controller;
+      viewer.controller = undefined;
+      this.trackRetirement(viewer, control.close());
+    }
     const ids = this.entries(viewer).map((entry) => entry.page.id);
     viewer.transfers.retain((page) => ids.includes(page.id));
     for (const [id, observation] of viewer.observations)
@@ -202,7 +216,9 @@ export class BrowserSession {
     }
     this.publish(viewer);
     this.publishDownloads(viewer);
-    return viewer.directoryWork;
+    return Promise.all([viewer.directoryWork, ...viewer.retiring]).then(
+      () => {},
+    );
   }
   private watchDownloads(): void {
     const entries = this.entries();
@@ -340,8 +356,16 @@ export class BrowserSession {
   private async control(viewer: Viewer): Promise<boolean> {
     const observation = viewer.observation,
       tab = this.tabs.get(viewer.selected),
-      authorize = viewer.authorize;
-    if (!viewer.active || !viewer.visible || !observation || !tab || !authorize)
+      authorize = viewer.authorize,
+      canControl = viewer.canControl;
+    if (
+      !viewer.active ||
+      !viewer.visible ||
+      !observation ||
+      !tab ||
+      !authorize ||
+      !canControl?.(tab.page)
+    )
       return false;
     if (viewer.controller) return true;
     if (tab.engine.hasController) return false;
@@ -350,17 +374,15 @@ export class BrowserSession {
       viewer.visible &&
       viewer.observation === observation &&
       viewer.authorize === authorize &&
+      viewer.canControl === canControl &&
+      canControl(tab.page) &&
       this.entries(viewer).some((entry) => entry.page === tab.page);
     const controller = await tab.engine.acquireControl(
       observation,
       authorize,
       admitted,
     );
-    if (
-      !viewer.active ||
-      viewer.observation !== observation ||
-      viewer.authorize !== authorize
-    ) {
+    if (!admitted()) {
       this.trackRetirement(viewer, controller.close());
       return false;
     }
@@ -544,14 +566,23 @@ export class BrowserSession {
         if (!visible) this.retire(viewer);
         else if (viewer.selected) await this.select(viewer, viewer.selected);
       },
-      acquireControl: async (authorize) => {
+      acquireControl: async (authorize, canControl) => {
         if (!viewer.active) return false;
+        const selected = this.tabs.get(viewer.selected)?.page;
+        const previous = viewer.controller;
+        const grant = canControl ?? ((page: SourcePage) => page === selected);
+        viewer.controller = undefined;
         viewer.authorize = authorize;
+        viewer.canControl = grant;
         send({ type: 'session_access', editTabs: true });
+        if (previous) await previous.close();
+        if (viewer.authorize !== authorize || viewer.canControl !== grant)
+          return false;
         return this.control(viewer);
       },
       releaseControl: () => {
         viewer.authorize = undefined;
+        viewer.canControl = undefined;
         if (viewer.active) send({ type: 'session_access', editTabs: false });
         const control = viewer.controller;
         viewer.controller = undefined;
@@ -573,6 +604,7 @@ export class BrowserSession {
         (closed ??= (async () => {
           viewer.active = false;
           viewer.authorize = undefined;
+          viewer.canControl = undefined;
           this.closeObservations(viewer);
           this.viewers.delete(viewer);
           await viewer.queue;
@@ -601,7 +633,7 @@ export class BrowserSession {
     }
     this.standaloneViewer = viewer;
     this.resumeTab = viewer.selected;
-    await connection.acquireControl(this.options.authorize);
+    await connection.acquireControl(this.options.authorize, () => true);
     return connection;
   }
   private receive(viewer: Viewer, input: ClientMessage): Promise<void> {

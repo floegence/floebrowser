@@ -174,9 +174,17 @@ media carrier. The host must close the bridge when its owning session ends.
 connection owns its selected tab, admission queue and observation grants;
 selection in one window does not change another window or an AI target. A fresh
 observer cannot mutate pages, resize the source or edit the tab directory.
-`acquireControl(authorize)` is a trusted host API that enables authorized tab
-operations and attempts the selected page's exclusive input lease. It returns
-false if another user or AI still owns that page, without stealing control.
+`acquireControl(authorize, canControl?)` is a trusted host API that enables
+authorized tab operations and attempts the selected page's exclusive input
+lease. Without a predicate, the grant is limited to the page selected at that
+call; switching or creating a tab does not extend input authority. Embedded
+hosts pass a synchronous `canControl(page)` predicate backed by their target
+leases. It is checked before acquisition and again before input dispatch,
+including after asynchronous action authorization. Call `refreshGrants()` when
+it changes to revoke input synchronously and drain held keys. Observation and
+authorized directory operations remain available. The method returns false if
+the predicate denies the page or another controller owns it, without stealing
+control. Standalone `connect()` explicitly grants its own directory's pages.
 `releaseControl()` revokes authority synchronously and drains held input while
 leaving observation alive. Hosts complete their own takeover policy before
 acquiring again. `projection(target)` gives trusted AI adapters the same

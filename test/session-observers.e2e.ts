@@ -12,6 +12,125 @@ const wait = async (predicate: () => boolean) => {
 };
 
 test(
+  'embedded control grants stay on their source until the host grants another target',
+  { timeout: 20000 },
+  async (t) => {
+    const browser = await chromium.launch();
+    t.after(() => browser.close());
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const session = await BrowserSession.attach(page, {
+      authorize: () => false,
+    });
+    t.after(() => session.close());
+    const messages: ServerMessage[] = [];
+    const view = await session.observe((message) => messages.push(message), {
+      media: false,
+    });
+    const original = view.currentState.active;
+    assert.equal(await view.acquireControl(() => true), true);
+    await view.receive({
+      type: 'command',
+      id: 1,
+      tab: original,
+      epoch: '',
+      action: { kind: 'tab_new' },
+    });
+    assert.equal(
+      messages.findLast((message) => message.type === 'ack')?.ok,
+      true,
+    );
+    const other = view.currentState.active;
+    assert.notEqual(other, original);
+    assert.equal(
+      (await session.projection(other)).hasController,
+      false,
+      'A directory grant does not grant the newly selected source',
+    );
+    assert.equal((await session.projection(original)).hasController, false);
+    let grant = other;
+    assert.equal(
+      await view.acquireControl(
+        () => true,
+        (source) => source.id === grant,
+      ),
+      true,
+    );
+    const projection = await session.projection(other);
+    assert.equal(projection.hasController, true);
+    grant = '';
+    const revoked = view.refreshGrants();
+    assert.equal(
+      projection.hasController,
+      false,
+      'Changed input grants revoke synchronously',
+    );
+    await revoked;
+    assert.equal(
+      view.currentState.tabs.length,
+      2,
+      'Control revocation preserves observation',
+    );
+    assert.equal(
+      await view.acquireControl(
+        () => true,
+        () => false,
+      ),
+      false,
+    );
+    await view.close();
+  },
+);
+
+test(
+  'a changed target lease rejects input after asynchronous action authorization',
+  { timeout: 20000 },
+  async (t) => {
+    const browser = await chromium.launch();
+    t.after(() => browser.close());
+    const page = await browser.newPage();
+    await page.goto('data:text/html,<input>');
+    const session = await BrowserSession.attach(page, {
+      authorize: () => false,
+    });
+    t.after(() => session.close());
+    const messages: ServerMessage[] = [];
+    const view = await session.observe((message) => messages.push(message), {
+      media: false,
+    });
+    let allowed = true;
+    let release!: () => void;
+    let authorizing = false;
+    await view.acquireControl(
+      () =>
+        new Promise<boolean>((resolve) => {
+          authorizing = true;
+          release = () => resolve(true);
+        }),
+      () => allowed,
+    );
+    await page.locator('input').focus();
+    const input = view.receive({
+      type: 'command',
+      id: 1,
+      tab: view.currentState.active,
+      epoch: messages.findLast((m) => m.type === 'snapshot')!.epoch,
+      action: { kind: 'text', text: 'stale lease' },
+    });
+    await wait(() => authorizing);
+    allowed = false;
+    release();
+    await input;
+    assert.equal(await page.locator('input').inputValue(), '');
+    assert.equal(
+      messages.findLast((m) => m.type === 'ack')?.code,
+      'not_allowed',
+    );
+    await view.close();
+  },
+);
+
+test(
   'session viewers select independently, cannot input without authority, and revoke private observation immediately',
   { timeout: 20000 },
   async (t) => {
