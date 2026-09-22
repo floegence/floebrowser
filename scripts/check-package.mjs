@@ -54,6 +54,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import { BrowserSession, createProjectionServer, launchSourceBrowser, NativeMediaBridge, PROTOCOL_VERSION } from '@floegence/floebrowser';
 import { clientMessageSchema } from '@floegence/floebrowser/protocol';
+import { projectionPortConnection, serveProjectionPorts } from '@floegence/floebrowser/viewer';
 const packageRoot = new URL('./node_modules/@floegence/floebrowser/', import.meta.url);
 const bundle = JSON.parse(await readFile(new URL('dist/bin/manifest.json', packageRoot), 'utf8'));
 const pkg = JSON.parse(await readFile(new URL('package.json', packageRoot), 'utf8'));
@@ -67,6 +68,8 @@ for (const artifact of bundle.artifacts) {
 }
 assert.equal(PROTOCOL_VERSION, 19);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
+assert.equal(typeof projectionPortConnection, 'function');
+assert.equal(typeof serveProjectionPorts, 'function');
 // Embedding hosts use the public SDK without reaching into private package paths.
 const nativeBridge = new NativeMediaBridge();
 await nativeBridge.close();
@@ -76,7 +79,12 @@ try {
   context = await launchSourceBrowser();
   const source = await context.newPage();
   const embedded = await BrowserSession.attach(source, { authorize: () => false });
-  const observer = await embedded.observe(() => {}, { media: false });
+  const access = [];
+  const observer = await embedded.observe(message => { if (message.type === 'session_access') access.push(message.editTabs); }, { media: false, canHear: () => false });
+  assert.equal(access.at(-1), false);
+  observer.setDirectoryAuthority(() => true);
+  assert.equal(access.at(-1), true);
+  observer.setDirectoryAuthority();
   assert.equal(await observer.acquireControl(() => true, () => false), false);
   assert.equal((await embedded.projection(observer.currentState.active)).hasController, false);
   await observer.close();

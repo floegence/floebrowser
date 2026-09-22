@@ -19,6 +19,11 @@ export {
 export { addressURL, type AddressSuggestion } from './address.js';
 export type { MediaAssets } from './media.js';
 export type { ChooseFiles } from './files.js';
+export {
+  projectionPortConnection,
+  serveProjectionPorts,
+  type ProjectionPorts,
+} from './port.js';
 export type {
   ProjectionConnection,
   FileChooserState,

@@ -174,9 +174,8 @@ media carrier. The host must close the bridge when its owning session ends.
 connection owns its selected tab, admission queue and observation grants;
 selection in one window does not change another window or an AI target. A fresh
 observer cannot mutate pages, resize the source or edit the tab directory.
-`acquireControl(authorize, canControl?)` is a trusted host API that enables
-authorized tab operations and attempts the selected page's exclusive input
-lease. Without a predicate, the grant is limited to the page selected at that
+`acquireControl(authorize, canControl?)` is a trusted host API that attempts
+the selected page's exclusive input lease. It never grants directory editing. Without a predicate, the grant is limited to the page selected at that
 call; switching or creating a tab does not extend input authority. Embedded
 hosts pass a synchronous `canControl(page)` predicate backed by their target
 leases. It is checked before acquisition and again before input dispatch,
@@ -184,7 +183,13 @@ including after asynchronous action authorization. Call `refreshGrants()` when
 it changes to revoke input synchronously and drain held keys. Observation and
 authorized directory operations remain available. The method returns false if
 the predicate denies the page or another controller owns it, without stealing
-control. Standalone `connect()` explicitly grants its own directory's pages.
+control. `setDirectoryAuthority(authorize)` grants directory editing separately;
+calling it without an authorizer revokes that grant, including pending asynchronous
+authorization. Watching permits selecting an already observed page; an installed
+directory authorizer may further restrict selection. The component reflects the
+directory grant independently from page control. Releasing
+page input does not revoke directory editing. Standalone `connect()` explicitly
+grants both its own directory operations and page input.
 `releaseControl()` revokes authority synchronously and drains held input while
 leaving observation alive. Hosts complete their own takeover policy before
 acquiring again. `projection(target)` gives trusted AI adapters the same
@@ -199,9 +204,11 @@ Source callbacks, resource replies and media are not sent for removed grants.
 Private takeover must revoke other user/model views through these host grants;
 it is not a physical keyboard lock on the original personal browser.
 
-`audio: false` observes pictures without receiving audio packets. Hosts designate
-one audio-output view and call `setAudio(false)` on its old owner before enabling
-the new one. This advances the observation's media permission generation and
+`audio: false` observes pictures without receiving audio packets. A session's
+`canHear(page)` predicate additionally assigns audio output per source, so different
+windows may own different background pages. Call `refreshGrants()` on the old owner
+before the new one after changing ownership; every delivered audio frame rechecks
+the predicate. `setAudio(false)` mutes all authorized source audio for that view. This advances the observation's media permission generation and
 retires queued decoders, while keeping source collectors and playback alive.
 This policy is independent of the page's actual mute state and input ownership.
 Observers fit the authoritative viewport and cannot race its controller's size.
@@ -384,10 +391,33 @@ Flowersec integration require separate downstream qualification.
 `PlaywrightSourceBrowser` is the optional owner for Playwright pages. Call
 `adopt(page, targetID)` once and share the resulting source with other authorized
 tools through `source.transport`. Its disposal detaches its own debugger sessions
-without closing pages. Passing a raw Playwright `Page` directly is a standalone
+without closing pages. Passing a different explicit identity for an already adopted
+page fails instead of silently aliasing it. Embedded hosts pass an `onPopup(page,
+opener)` constructor callback: the callback runs before any popup debugger is
+attached, and the host explicitly calls `adopt(popup, targetID)` only after its
+admission policy succeeds. Omitting the callback preserves standalone popup
+adoption. Passing a raw Playwright `Page` directly is a standalone
 convenience using this same adapter and projection engine. Source frame mapping
 queries the resolved node's actual owner document, including same-origin children
 recorded by their parent and Chromium frames in separate renderer processes.
+
+## Share a browser with a trusted child window
+
+`serveProjectionPorts({ messages, media }, connect)` bridges a host-owned
+`ProjectionConnection` to `projectionPortConnection({ messages, media }, files)`
+in another trusted document. The host validates the destination window, origin
+and bootstrap capability before transferring two fresh MessagePorts. It closes
+the bridge with that window's lifetime. The bridge starts the source carrier only
+after the child is listening; it has no URL, environment session, credentials,
+reconnect or general host API. Optional upload/download functions remain explicit
+host integrations. Website DOM stays in the existing scriptless replay iframe.
+
+The two ports credit consumption independently. A stalled media receiver cannot
+queue ahead of input or DOM. Promise-aware carriers await `subscribe` and
+`subscribeMedia` listeners before acknowledging upstream consumption. Event-only
+carriers still have hard queue limits: 32 MiB for pending DOM, 256 KiB for input
+and 8 MiB for media. Overflow ends the affected lane; media failure preserves the
+message/input lane. Input is never replayed after a failed or closed bridge.
 
 ## Own a source browser session
 

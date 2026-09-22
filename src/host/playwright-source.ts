@@ -4,17 +4,29 @@ import { playwrightDownload } from './downloads.js';
 
 const sources = new WeakMap<Page, Promise<CDPSourcePage>>();
 
+export type PlaywrightSourceOptions = {
+  /** Embedded hosts decide whether and under which identity to adopt a popup.
+   * Providing this callback disables implicit debugger adoption. */
+  onPopup?: (page: Page, opener: CDPSourcePage) => void | Promise<void>;
+};
+
 /** Optional Playwright lifecycle owner. Consumers share each returned source
  * and its debugger with AI tools; projections never attach a second debugger. */
 export class PlaywrightSourceBrowser {
   private pages = new Map<Page, Promise<CDPSourcePage>>();
   private disposers = new Set<() => Promise<void>>();
   private closed = false;
+  constructor(private options: PlaywrightSourceOptions = {}) {}
   adopt(page: Page, id?: string): Promise<CDPSourcePage> {
     if (this.closed)
       return Promise.reject(new Error('Source browser adapter disposed'));
     const prior = sources.get(page);
-    if (prior) return prior;
+    if (prior)
+      return prior.then((source) => {
+        if (id !== undefined && id !== source.id)
+          throw new Error('Source target identity changed');
+        return source;
+      });
     const task = this.attach(page, id).catch((error) => {
       this.pages.delete(page);
       sources.delete(page);
@@ -102,6 +114,15 @@ export class PlaywrightSourceBrowser {
       }
     };
     const popup = (page: Page) => {
+      if (this.options.onPopup) {
+        void Promise.resolve()
+          .then(() => {
+            if (!disposed && !this.closed)
+              return this.options.onPopup!(page, source);
+          })
+          .catch(() => {});
+        return;
+      }
       void this.adopt(page)
         .then((popup) => {
           if (!disposed) source.emit('popup', popup);

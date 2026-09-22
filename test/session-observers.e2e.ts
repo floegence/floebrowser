@@ -28,6 +28,7 @@ test(
       media: false,
     });
     const original = view.currentState.active;
+    view.setDirectoryAuthority(() => true);
     assert.equal(await view.acquireControl(() => true), true);
     await view.receive({
       type: 'command',

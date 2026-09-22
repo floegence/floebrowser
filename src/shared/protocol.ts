@@ -353,8 +353,14 @@ export interface ProjectionConnection {
     signal: AbortSignal,
   ): Promise<string>;
   send(message: ClientMessage): void;
-  subscribe(listener: (message: ServerMessage) => void): () => void;
-  subscribeMedia?(listener: (frame: MediaFrame) => void): () => void;
+  /** Credit-aware carriers await listeners before reading or acknowledging more.
+   * Event-only carriers must independently bound their pending delivery. */
+  subscribe(
+    listener: (message: ServerMessage) => void | Promise<void>,
+  ): () => void;
+  subscribeMedia?(
+    listener: (frame: MediaFrame) => void | Promise<void>,
+  ): () => void;
   onDisconnect(listener: (reason?: DisconnectReason) => void): () => void;
   close(): void;
 }

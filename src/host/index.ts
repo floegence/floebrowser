@@ -44,7 +44,10 @@ export {
   type CDPSourceOptions,
   type SourceContext,
 } from './cdp-source.js';
-export { PlaywrightSourceBrowser } from './playwright-source.js';
+export {
+  PlaywrightSourceBrowser,
+  type PlaywrightSourceOptions,
+} from './playwright-source.js';
 export type {
   SourcePage,
   SourceDialog,

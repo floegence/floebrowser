@@ -31,6 +31,8 @@ export interface SessionViewOptions extends ObservationOptions {
   initialTab?: string;
   /** Synchronous host grant predicate. Call refreshGrants after changing it. */
   canObserve?: (page: SourcePage) => boolean;
+  /** Independent per-source audio-output grant. Refresh after ownership changes. */
+  canHear?: (page: SourcePage) => boolean;
 }
 type Viewer = {
   transfers: DownloadTransfers;
@@ -47,6 +49,7 @@ type Viewer = {
   observation?: Observation;
   observations: Map<string, Observation>;
   authorize?: AttachOptions['authorize'];
+  directoryAuthorize?: AttachOptions['authorize'];
   canControl?: (page: SourcePage) => boolean;
   mediaEnabled: boolean;
   lastID: number;
@@ -59,9 +62,14 @@ export interface SessionConnection extends Controller {
   setMedia(enabled: boolean): Promise<void>;
   setAudio(enabled: boolean): Promise<void>;
   setVisible(visible: boolean): Promise<void>;
+  /** Explicit directory authority, independent of page input. Watching permits
+   * selecting an observed page; an installed predicate may further restrict it.
+   * Clearing this predicate
+   * fences pending directory authorization and updates the browser chrome. */
+  setDirectoryAuthority(authorize?: AttachOptions['authorize']): void;
   /** Host-only grant. By default it covers only the currently selected source.
-   * A dynamic predicate must reflect the host's target leases. Directory grants
-   * remain usable without page input. Returns false instead of stealing control. */
+   * A dynamic predicate must reflect the host's target leases. This never grants
+   * directory editing. Returns false instead of stealing control. */
   acquireControl(
     authorize: AttachOptions['authorize'],
     canControl?: (page: SourcePage) => boolean,
@@ -190,6 +198,11 @@ export class BrowserSession {
         viewer.observations.delete(id);
         if (viewer.observation === observation) this.retire(viewer);
         this.trackRetirement(viewer, observation.close());
+      } else {
+        this.trackRetirement(
+          viewer,
+          observation.setAudio(this.canHear(viewer, id)),
+        );
       }
     let next = viewer.selected;
     if (!ids.includes(next)) {
@@ -283,6 +296,14 @@ export class BrowserSession {
       if (viewer.active)
         viewer.send({ type: 'tabs', state: this.state(viewer) });
     } else for (const view of this.viewers) this.publish(view);
+  }
+  private canHear(viewer: Viewer, id: string): boolean {
+    const page = this.tabs.get(id)?.page;
+    return Boolean(
+      page &&
+      viewer.options.audio !== false &&
+      (!viewer.options.canHear || viewer.options.canHear(page)),
+    );
   }
   private enqueue(viewer: Viewer, work: () => Promise<void>): Promise<void> {
     const result = viewer.queue.then(work);
@@ -434,12 +455,14 @@ export class BrowserSession {
         {
           ...viewer.options,
           media: viewer.mediaEnabled,
+          audio: this.canHear(viewer, id),
           visible: viewer.visible,
           onMediaFrame: viewer.options.onMediaFrame
             ? (frame) => {
                 if (
                   viewer.active &&
-                  this.entries(viewer).some((entry) => entry.page.id === id)
+                  this.entries(viewer).some((entry) => entry.page.id === id) &&
+                  (frame.header.track !== 'audio' || this.canHear(viewer, id))
                 )
                   viewer.options.onMediaFrame?.(frame);
               }
@@ -555,8 +578,8 @@ export class BrowserSession {
         if (!viewer.active) return;
         viewer.options.audio = enabled;
         await Promise.all(
-          [...viewer.observations.values()].map((observation) =>
-            observation.setAudio(enabled),
+          [...viewer.observations].map(([id, observation]) =>
+            observation.setAudio(this.canHear(viewer, id)),
           ),
         );
       },
@@ -566,6 +589,11 @@ export class BrowserSession {
         if (!visible) this.retire(viewer);
         else if (viewer.selected) await this.select(viewer, viewer.selected);
       },
+      setDirectoryAuthority: (authorize) => {
+        if (!viewer.active) return;
+        viewer.directoryAuthorize = authorize;
+        send({ type: 'session_access', editTabs: Boolean(authorize) });
+      },
       acquireControl: async (authorize, canControl) => {
         if (!viewer.active) return false;
         const selected = this.tabs.get(viewer.selected)?.page;
@@ -574,7 +602,6 @@ export class BrowserSession {
         viewer.controller = undefined;
         viewer.authorize = authorize;
         viewer.canControl = grant;
-        send({ type: 'session_access', editTabs: true });
         if (previous) await previous.close();
         if (viewer.authorize !== authorize || viewer.canControl !== grant)
           return false;
@@ -583,7 +610,6 @@ export class BrowserSession {
       releaseControl: () => {
         viewer.authorize = undefined;
         viewer.canControl = undefined;
-        if (viewer.active) send({ type: 'session_access', editTabs: false });
         const control = viewer.controller;
         viewer.controller = undefined;
         return control?.close() ?? Promise.resolve();
@@ -605,6 +631,7 @@ export class BrowserSession {
           viewer.active = false;
           viewer.authorize = undefined;
           viewer.canControl = undefined;
+          viewer.directoryAuthorize = undefined;
           this.closeObservations(viewer);
           this.viewers.delete(viewer);
           await viewer.queue;
@@ -633,6 +660,7 @@ export class BrowserSession {
     }
     this.standaloneViewer = viewer;
     this.resumeTab = viewer.selected;
+    connection.setDirectoryAuthority(this.options.authorize);
     await connection.acquireControl(this.options.authorize, () => true);
     return connection;
   }
@@ -673,7 +701,7 @@ export class BrowserSession {
       ack('not_allowed');
       return Promise.resolve();
     }
-    if (!viewer.authorize && message.action.kind !== 'tab_select') {
+    if (!viewer.directoryAuthorize && message.action.kind !== 'tab_select') {
       ack('not_allowed');
       return Promise.resolve();
     }
@@ -693,18 +721,25 @@ export class BrowserSession {
         return;
       }
       const action = message.action,
-        authorize = viewer.authorize;
-      if (authorize && !(await authorize(action))) {
+        authorize = viewer.directoryAuthorize;
+      if (
+        (action.kind !== 'tab_select' && !authorize) ||
+        (authorize && !(await authorize(action)))
+      ) {
         ack('not_allowed');
         return;
       }
       if (
         !viewer.active ||
         message.tab !== viewer.selected ||
-        viewer.authorize !== authorize
+        viewer.directoryAuthorize !== authorize
       ) {
         if (viewer.active)
-          ack(viewer.authorize !== authorize ? 'not_allowed' : 'stale_view');
+          ack(
+            viewer.directoryAuthorize !== authorize
+              ? 'not_allowed'
+              : 'stale_view',
+          );
         return;
       }
       operation = (async () => {
@@ -778,6 +813,7 @@ export class BrowserSession {
       for (const viewer of this.viewers) {
         viewer.active = false;
         viewer.authorize = undefined;
+        viewer.directoryAuthorize = undefined;
         this.closeObservations(viewer);
       }
       await Promise.all(
