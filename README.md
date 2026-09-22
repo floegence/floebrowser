@@ -716,7 +716,7 @@ The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exerci
 
 ## Published Flowersec transport qualification
 
-`test/flowersec.e2e.ts` uses the published TypeScript SDK 5.2.3 and Go SDK v5.2.2
+`test/flowersec.e2e.ts` uses the published TypeScript SDK 5.4.1 and Go SDK v5.4.1
 through public ByteStream APIs. The disposable Go acceptor binds numeric loopback,
 issues one test artifact and checks a host-only session cookie before upgrade.
 The test uses the SDK's explicit `flowersec-private-loopback/1` profile; it does

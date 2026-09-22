@@ -87,7 +87,7 @@ func serve() error {
 	err = handlers.HandleStream("qualification/media", func(ctx context.Context, incoming flowersec.IncomingStream) error {
 		prefix := make([]byte, 4)
 		ack := make([]byte, 8)
-		var sequence uint64
+		var consumed uint64
 		for {
 			gateMu.Lock()
 			current := gate
@@ -120,8 +120,10 @@ func serve() error {
 			if _, err := io.CopyN(io.Discard, incoming.Stream, int64(header.Bytes)); err != nil {
 				return err
 			}
-			sequence++
-			binary.BigEndian.PutUint64(ack, sequence)
+			// MediaSender credit is cumulative encoded-byte consumption, including
+			// the length prefix and metadata carried on this qualification stream.
+			consumed += uint64(4) + uint64(length) + uint64(header.Bytes)
+			binary.BigEndian.PutUint64(ack, consumed)
 			if _, err := incoming.Stream.Write(ack); err != nil {
 				return err
 			}
