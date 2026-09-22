@@ -70,6 +70,8 @@ flowchart LR
 
 rrweb records and reconstructs DOM state. FloeBrowser supplies the return input path, document generations, resource capture, projection sanitization and controller lifecycle.
 
+The shared source adapter observes top-document titles in an isolated world, independently of projection. Background title changes update the browser directory without starting DOM recording or media capture. Disposal removes the observer and its binding while leaving the website and host debugger usable.
+
 The client runs trusted viewer code, but never the website's JavaScript. Website resources are read from Chromium's response buffer and the inspected document's resource cache through CDP. There is no host HTTP fetch fallback, credential export, raw CDP endpoint, or screen capture. A source-host-only loopback collector receives captured element media. Encoded video, Opus audio and Canvas images use independently scheduled host-authorized byte streams; SDP stays on the source host. The viewer has no WebRTC connection. Redeven integrations carry every cross-host lane through Flowersec.
 
 When attaching to an existing page or a fast-loading popup, resource capture also inspects the source frame tree and reads retained stylesheets, images and fonts. Document load completion revisits resources that were still loading during attachment. These reads run outside the input queue, use the same bounded per-tab cache as network capture, and cannot overwrite a newer captured response or survive navigation or detachment. Only URLs observed in that source page and its frames are eligible; resource caches are not shared between tabs. Chromium may already have discarded a body, particularly a decoded font, in which case it remains unavailable.
@@ -84,19 +86,27 @@ SVG style text updates retain their SVG namespace. MathML elements are rebuilt i
 
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
+The viewer retains up to three recently completed inert tab documents in memory.
+Selecting a cached tab shows it immediately while fresh source selection and input
+authority are pending. Cached pages never receive input or new source updates;
+only a fully rebuilt current view becomes interactive. Source removal, changed
+URLs, revoked directory grants and disconnect discard corresponding caches.
+State-preserving DOM moves retain iframe documents and loaded resources. Browsers
+without that API rebuild normally and do not advertise a cached presentation.
+
 ## Source media
 
-Media remains source-owned: the website obtains and decodes content at the source. `HTMLMediaElement.captureStream()` sends individual tracks to the Go `media` module's Pion collector on the same host. It binds only `127.0.0.1`, advertises only loopback candidates, uses ICE-lite, and has no STUN/TURN configuration. The optional Node adapter uses the packaged native helper; embedding Go hosts can use the collector directly. The helper uses standard input for requests, standard error for structured replies, and standard output for binary media; it has no inherited descriptor-number requirement or diagnostic output. The SDK verifies the packaged native artifact checksum and negotiates matching SDK/media wire versions before accepting a collector. Neither route captures a display, tab, camera or microphone.
+Media remains source-owned: the website obtains and decodes content at the source. Existing `srcObject` media streams are borrowed directly and their tracks are cloned; other elements use `HTMLMediaElement.captureStream()`. These individual tracks are sent to the Go `media` module's Pion collector on the same host. It binds only `127.0.0.1`, advertises only loopback candidates, uses ICE-lite, and has no STUN/TURN configuration. The optional Node adapter uses the packaged native helper; embedding Go hosts can use the collector directly. The helper uses standard input for requests, standard error for structured replies, and standard output for binary media; it has no inherited descriptor-number requirement or diagnostic output. The SDK verifies the packaged native artifact checksum and negotiates matching SDK/media wire versions before accepting a collector. Neither route captures a display, tab, camera or microphone.
 
-The collector emits bounded packets containing target, subscription, element, stream, track, timestamp, codec and keyframe identity. The remote viewer receives encoded bytes through `ProjectionConnection.subscribeMedia`, decodes video and Opus in Workers using WebCodecs, and schedules PCM through AudioWorklet. Canvas uses complete WebP element images. The client never needs source website access or a route to the collection port. Resource and replay restrictions remain unchanged.
+The collector emits bounded packets containing target, subscription, element, stream, track, timestamp, codec and keyframe identity. RTP assembly retains up to 2,048 packets so detailed keyframes fit before depacketization; its 100 ms timestamp window and 20 ms idle flush after a complete frame remain independent of that size bound. The remote viewer receives encoded bytes through `ProjectionConnection.subscribeMedia`, decodes video and Opus in Workers using WebCodecs, and schedules PCM through AudioWorklet. Canvas uses complete WebP element images. The client never needs source website access or a route to the collection port. Resource and replay restrictions remain unchanged.
 
-`AttachOptions.mediaBridge` supplies the source-local collector. `onMediaFrame` delivers encoded packets to an independently authorized carrier and `onMediaRetired` retires its queued lanes. `MediaSender` provides bounded per-track queues, fair scheduling, 16 KiB writes and a finite consumer-credit window. A carrier returns cumulative frame acknowledgements only after complete packet receipt. Video reference loss requests a fresh keyframe instead of decoding dependent deltas. Canvas retains its newest complete image; DOM increments retain their ordered path and use checkpoints for recovery. Reliable transport still incurs network retransmission latency.
+`AttachOptions.mediaBridge` supplies the source-local collector. `onMediaFrame` delivers encoded packets to an independently authorized carrier and `onMediaRetired` retires its queued lanes. `MediaSender` provides bounded per-track queues, fair scheduling, 16 KiB writes and a finite consumer-credit window. A carrier returns cumulative byte acknowledgements after each chunk is consumed by its bounded packet reader and any completed frames are delivered. The 64 KiB outstanding-byte limit applies within large frames too; complete-frame acknowledgements must not be used. Video reference loss requests a fresh keyframe instead of decoding dependent deltas. Canvas retains its newest complete image; DOM increments retain their ordered path and use checkpoints for recovery. Reliable transport still incurs network retransmission latency.
 
 Use the website's projected playback controls as usual. Optional **Media controls** in the browser toolbar provide source play/pause, per-player mute and seeking in a compact panel with media titles, playback state, icon controls and an elapsed/duration timeline; the popup opens only on request, closes with Escape or a click outside, and never opens itself on media errors. Hidden idle media does not surface controls or failure notices, while playing background audio remains controllable. The viewer follows source mute/volume settings and attempts normal audio playback. If the client browser blocks autoplay, video continues muted and the next page click or key press attempts to unlock audio; **Unmute audio** is also available in the toolbar popup. An explicit client mute is preserved across page gestures. Each player’s mute button separately changes that real source element under its current control lease; it neither starts playback nor changes another player. Its pressed state follows source events, including changes made by a local user. The panel’s top-level sound control affects only this viewing window. The panel reflects source playback, including website autoplay; opening it never starts source media. Muted playback is labeled explicitly. **Show on page** scrolls the source to the corresponding visible player, including nested scroll containers and cross-origin frames, then briefly highlights its projection. Locating never clicks, focuses, plays or seeks the media. Audio without a visible player remains controllable and is labeled accordingly. Seeking changes the original element at the source. A play acknowledgement confirms that the source received the request; playback state and errors arrive independently, so buffering never holds the input queue. Capture and re-encoding add cost and latency; this is not a lossless relay.
 
 Source senders cap each video at 24 fps and 1.5 Mbit/s, scale source video wider than 1280 pixels down at capture start, and cap audio at 64 kbit/s. These are ceilings, not bandwidth or latency guarantees. A slow consumer has at most eight in-flight packets and a 256 KiB credit window (one oversized keyframe may cross that window); queued media has a separate 4 MiB hard bound. Queued video older than 250 ms is discarded with its dependents. Workers bound encoded decode work, retain at most one pending decoded picture, and bound unconsumed PCM to 12,000 samples per channel. Static Canvas retains one latest complete image.
 
-DOM removal retires media by stream identity, so reinserting an element establishes a fresh stream. Replacing a source document retires its old streams; DOM checkpoints preserve valid streams and paused pictures. Page-owned `srcObject` tracks are cloned before forwarding and are never stopped by projection teardown. Media subscription generations are separate from DOM epochs. Decoder keyframe feedback is fenced by current viewer, target, subscription and stream identity; it cannot carry SDP or authorize website actions. At most eight media/Canvas nodes per tab are admitted.
+DOM removal retires media by stream identity, so reinserting an element establishes a fresh stream. Replacing a source document retires its old streams; DOM checkpoints preserve valid streams and paused pictures. Page-owned `srcObject` tracks are cloned before forwarding and are never stopped by projection teardown. Recapturing a stream-backed element is avoided because Chromium can replace its original Canvas track wrapper and stop the website’s producer when that wrapper is collected. Media subscription generations are separate from DOM epochs. Decoder keyframe feedback is fenced by current viewer, target, subscription and stream identity; it cannot carry SDP or authorize website actions. At most eight media/Canvas nodes per tab are admitted.
 
 The standalone loopback server creates a second private WebSocket for encoded media and consumer acknowledgements. Its token belongs to the admitted viewer and expires with that viewer; it does not transfer control authority. An SSH TCP tunnel carries both connections. Product integrations supply authenticated byte streams and HTTPS client origins supporting WebCodecs, Workers and AudioWorklet. DRM, origin restrictions, source autoplay policy, unsupported codecs and client platform support can still prevent playback; these cases are explicit rather than replaced with screen capture.
 
@@ -159,6 +169,18 @@ await projection.close();
 await context.close();
 ```
 
+Resource references on the wire are inert, host-scoped identities. Source capture
+announces available response bodies and their revisions; the trusted viewer
+fetches only those same-origin host URLs and supplies Blob URLs to the scriptless
+replay. This also works when replay-frame HTTP would bypass a host's Service
+Worker. `ViewOptions.fetchResource(url, signal)` can supply a host-owned resource
+reader. CSS imports, fonts, SVG references and later CSSOM updates share this
+path. Unused or unavailable fonts never trigger a website request or hold first
+paint; fonts retain the 200 ms fallback budget. Resource reads run independently
+of DOM/input, with eight concurrent reads, a 512-entry wait queue, 2,048 cached
+identities, 8 MiB per body, a 64 MiB retained/read budget and ten-second read
+deadlines. Rebuilding or retiring a replay aborts reads and revokes its blobs.
+
 `authorize` is checked immediately before an effect. It is not a target mutex or a site-navigation firewall. The host must preserve its existing tab ownership, network policies, origin grants and user/AI takeover rules for the controller's entire lifetime. Attaching does not authorize sibling tabs. Page-originated navigation, redirects and popups remain website behavior at the source.
 
 Hosts can construct `new NativeMediaBridge()` from the public package to use its
@@ -212,6 +234,16 @@ the predicate. `setAudio(false)` mutes all authorized source audio for that view
 retires queued decoders, while keeping source collectors and playback alive.
 This policy is independent of the page's actual mute state and input ownership.
 Observers fit the authoritative viewport and cannot race its controller's size.
+`closeCDPPage(page, transport)` supplies the shared source-scoped native close
+lifecycle for host adapters: it waits for physical page closure or a declined
+`beforeunload` decision without closing the surrounding browser context. Hosts
+expose it only for an explicitly authorized page.
+
+Hosts with asynchronous input leases can provide `onRequestControl(target, signal)`
+to admit a submitted address only after the idle-control token is ready. This
+callback must not take over another controller. Tab changes, a newer submission,
+disconnection and destruction cancel unsubmitted navigation; no input is replayed.
+
 The component exposes `onTakeControl` for a product-owned takeover action; no
 remote input message can manufacture this grant.
 
@@ -307,6 +339,33 @@ cancellation, and an abortable byte iterator for that exact file. Projection nev
 configures a browser-wide download directory, scans personal files, or repeats
 the website request. The source adapter retains at most 128 download records,
 evicting older terminal records before accepting more.
+
+`ResponseDownloads` is an optional source-owner adapter for CDP/extension hosts
+without native file handles. The host's existing Fetch owner enables response
+pauses for Document requests and passes them to `handle(transport, event)`.
+The adapter consumes successful `Content-Disposition: attachment` responses and
+explicit `application/octet-stream` Document responses, streams its original bytes into private temporary storage, and reports
+a `SourceDownload`. The owner continues every unhandled response normally and
+closes the adapter with its source. This preserves cookies and POST semantics
+without a second request, browser-wide download settings or personal-directory
+access. Limits are four receiving files, 128 retained records, 256 MiB per file,
+512 MiB total and five minutes per receive. Explicit cancellation closes the
+source stream; source disposal aborts reads and removes owned files.
+
+Calling `ResponseDownloads.observe(source, onUnavailable)` additionally observes
+Blob object URLs created in that admitted source after observation is ready.
+Native download notifications select the exact immutable Blob, whose CDP IO
+handle supplies the original bytes even after immediate URL revocation. No Blob
+URL is fetched and the browser's native personal download behavior is unchanged.
+Capture retains at most sixteen current frame contexts, 128 Blob references and
+32 MiB per context (512 MiB per source); unclaimed revoked references expire
+after thirty seconds. Source disposal restores the observed URL functions and
+releases references. Blobs created before observation, in unobserved workers or
+frames, or beyond these bounds remain explicitly unavailable. Other native
+responses without an attachment header or the explicit binary MIME type require
+a native file handle; the adapter never infers ownership from a personal download
+list. A `PlaywrightSourceBrowser` host supplying this adapter sets
+`nativeDownloads: false` to avoid reporting an unrelated unusable native handle.
 
 The browser's download panel lists authorized source downloads, including
 background tabs after viewer refresh, without attaching their renderers or
@@ -505,6 +564,23 @@ host store, never send each keystroke to a third-party search service. `searchUR
 customizes only explicitly submitted search terms. Neither callback permits
 active schemes or URLs containing credentials.
 
+`library` accepts host-owned `list(kind, query, signal)`, `saveBookmark(entry,
+signal)`, `removeBookmark(url, signal)` and `clearHistory(signal)` operations.
+It enables the shared bookmarks/history panel, bounded to 100 visible results,
+with explicit history-clear confirmation and canceled stale searches. The host
+supplies only records in the current authenticated profile; the component never
+reads native browser history or maintains a second persistent library.
+`zoomPreferences.load(origin, signal)` and `save(origin, factor, signal)` retain
+per-origin zoom through the host store. Restoration requires current input
+authority. Navigation, takeover and newer explicit zoom cancel stale reads;
+rejected source actions are neither saved nor retried.
+
+Hosts that manage selected external pages can set
+`SessionViewOptions.restoreClosedTabs: false` while granting live tab editing.
+The session rejects closed-tab restoration and the viewer disables its restore
+menu and shortcut. Creating, selecting, reordering, pinning and explicitly
+closing admitted pages retain their separate directory authorization.
+
 For a host that already supplies browser chrome, use the lower-level projection:
 
 ```ts
@@ -536,7 +612,7 @@ The standalone viewer always adapts automatically and has no manual size selecto
 
 Embedding hosts can pass a `mediaControls` element in `DOMBrowserView` options to place these optional controls in their browser chrome, outside the projection container. Without that mount, the viewer adds no media UI; website controls and media forwarding still work. The host should provide the toolbar mount when users need auxiliary playback controls and availability details.
 
-Use the same FloeBrowser release on both sides. Protocol version 20 identifies
+Use the same FloeBrowser release on both sides. Protocol version 22 identifies
 directory-authorized close decisions separately from page input. It includes explicit held-input release, source-element mute, dialogs,
 find, zoom, scoped file selection and downloads, independent observation/media
 subscriptions, source-local encoded media collection, Canvas images, tab ordering,

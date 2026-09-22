@@ -36,6 +36,8 @@ type DirectoryClose = {
 };
 export interface SessionViewOptions extends ObservationOptions {
   initialTab?: string;
+  /** External browser hosts can edit live tabs without granting URL restoration. */
+  restoreClosedTabs?: boolean;
   /** Synchronous host grant predicate. Call refreshGrants after changing it. */
   canObserve?: (page: SourcePage) => boolean;
   /** Independent per-source audio-output grant. Refresh after ownership changes. */
@@ -659,7 +661,12 @@ export class BrowserSession {
         for (const close of this.directoryClosures.values())
           if (close.viewer === viewer && close.authorize !== authorize)
             this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
-        send({ type: 'session_access', editTabs: Boolean(authorize) });
+        send({
+          type: 'session_access',
+          editTabs: Boolean(authorize),
+          restoreTabs:
+            Boolean(authorize) && viewer.options.restoreClosedTabs !== false,
+        });
       },
       acquireControl: async (authorize, canControl) => {
         if (!viewer.active) return false;
@@ -799,7 +806,11 @@ export class BrowserSession {
       ack('not_allowed');
       return Promise.resolve();
     }
-    if (!viewer.directoryAuthorize && message.action.kind !== 'tab_select') {
+    if (
+      (!viewer.directoryAuthorize && message.action.kind !== 'tab_select') ||
+      (message.action.kind === 'tab_restore' &&
+        viewer.options.restoreClosedTabs === false)
+    ) {
       ack('not_allowed');
       return Promise.resolve();
     }

@@ -13,6 +13,8 @@ import { InputFonts } from './input-fonts.js';
 import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
 import { replayHit, styleInputProxy } from './input-geometry.js';
 import { ReplayPresentation } from './presentation.js';
+import { ReplayPages } from './replay-pages.js';
+import { ReplayResources, type ResourceFetch } from './resources.js';
 import {
   liveEvents,
   liveFrameDocuments,
@@ -51,6 +53,9 @@ import {
 export type ViewportMode = 'responsive' | 'fit' | 'actual';
 
 export type ViewOptions = {
+  /** Reads only host-issued same-origin resource URLs in the trusted document.
+   * Defaults to fetch; authenticated hosts may route it through their carrier. */
+  fetchResource?: ResourceFetch;
   messages?: BrowserMessages;
   /** Mount optional media controls in host browser chrome, outside the page. */
   mediaControls?: HTMLElement;
@@ -63,7 +68,7 @@ export type ViewOptions = {
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
   onControl?: (controlling: boolean) => void;
-  onSessionAccess?: (editTabs: boolean) => void;
+  onSessionAccess?: (editTabs: boolean, restoreTabs: boolean) => void;
   onAddressFocus?: () => void;
   /** Return true for a browser-chrome shortcut consumed by the embedding host. */
   onShortcut?: (event: KeyboardEvent, phase: 'down' | 'up') => boolean;
@@ -95,7 +100,12 @@ const modifiers = (event: MouseEvent | KeyboardEvent) =>
 /** Renders inert DOM and returns user intent through a host-provided connection. */
 export class DOMBrowserView {
   private replayer?: Replayer;
+  private pages: ReplayPages;
+  private tabURLs = new Map<string, string>();
+  private documentURL = '';
+  private previewTarget?: string;
   private presentation?: ReplayPresentation;
+  private resources?: ReplayResources;
   private media: MediaView;
   private text: BrowserText;
   private epoch = '';
@@ -108,6 +118,7 @@ export class DOMBrowserView {
   private incompatible = false;
   private controlled = false;
   private editTabs = true;
+  private restoreTabs = true;
   private tabCommands = 0;
   private disconnectReason?: DisconnectReason;
   private ready = false;
@@ -154,8 +165,8 @@ export class DOMBrowserView {
   ) {
     this.text = browserText(options.messages);
     container.classList.add('floe-viewport');
-    this.surface = document.createElement('div');
-    this.surface.className = 'floe-projection';
+    this.pages = new ReplayPages(container);
+    this.surface = this.pages.create();
     this.sink = document.createElement('textarea');
     this.sink.className = 'floe-input-sink';
     this.sink.setAttribute('aria-label', this.text('page.input'));
@@ -164,7 +175,7 @@ export class DOMBrowserView {
     this.sink.spellcheck = false;
     this.inputSurface = document.createElement('div');
     this.inputSurface.className = 'floe-input-surface';
-    container.append(this.surface, this.inputSurface, this.sink);
+    container.append(this.inputSurface, this.sink);
     this.pageError = document.createElement('section');
     this.pageError.className = 'floe-page-error';
     this.pageError.hidden = true;
@@ -544,12 +555,18 @@ export class DOMBrowserView {
     }
     if (message.type === 'session_access') {
       this.editTabs = message.editTabs;
+      this.restoreTabs = message.editTabs && message.restoreTabs !== false;
       if (!this.editTabs && this.directoryDialog) {
         this.directoryDialog = undefined;
         this.dialogOpen = false;
         this.options.onDialog?.(null);
       }
-      this.options.onSessionAccess?.(message.editTabs);
+      this.options.onSessionAccess?.(message.editTabs, this.restoreTabs);
+      return;
+    }
+    if (message.type === 'resource') {
+      if (message.target === this.tab)
+        this.resources?.available(message.resource);
       return;
     }
     if (message.type === 'control') {
@@ -585,6 +602,10 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'tabs') {
+      this.pages.reconcile(message.state.tabs);
+      this.tabURLs = new Map(
+        message.state.tabs.map((tab) => [tab.id, tab.url]),
+      );
       this.tabTitles = new Map(
         message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
       );
@@ -602,13 +623,10 @@ export class DOMBrowserView {
           this.pending.delete(id);
           pending.resolve(false);
         }
+        this.prepareFrame();
         this.ready = false;
         this.pageError.hidden = true;
         this.queuedWheel = undefined;
-        this.clearFrame();
-        this.presentation?.dispose();
-        this.replayer?.destroy();
-        this.replayer = undefined;
         this.tab = message.state.active;
         this.media.select(this.tab);
         this.epoch = '';
@@ -665,6 +683,8 @@ export class DOMBrowserView {
         this.replayer?.destroy();
         this.replayer = undefined;
         this.surface.replaceChildren();
+        this.pages.drop(this.tab);
+        this.pages.present(this.surface);
         // The connection and browser chrome remain usable without website DOM.
         this.options.onStatus?.('live');
       }
@@ -677,21 +697,26 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'snapshot') {
+      this.prepareFrame();
       this.ready = false;
       this.pageError.hidden = true;
       this.queuedWheel = undefined;
       this.epoch = message.epoch;
+      this.documentURL = this.tabURLs.get(this.tab) ?? '';
       this.sequence = message.sequence;
       this.resyncing = false;
       this.eventBytes = 0;
       this.sourceFocus = undefined;
-      this.clearFrame();
-      this.presentation?.dispose();
-      this.replayer?.destroy();
       this.surface.style.opacity = '0';
       this.surface.style.visibility = 'hidden';
       this.surface.inert = true;
       this.options.onStatus?.('refreshing');
+      const resources = new ReplayResources(
+        () => this.options.onNotice?.(this.text('notice.resource_limit')),
+        this.options.fetchResource,
+      );
+      this.resources = resources;
+      for (const resource of message.resources) resources.available(resource);
       const presentation = new ReplayPresentation(
         async () => {
           const current = () =>
@@ -715,11 +740,18 @@ export class DOMBrowserView {
           this.surface.style.opacity = '';
           this.surface.style.visibility = '';
           this.surface.inert = false;
+          if (!this.previewTarget || this.previewTarget === this.tab) {
+            this.pages.present(this.surface);
+            this.previewTarget = undefined;
+          }
+          this.pages.drop(this.tab);
           this.applyFocus();
           this.options.onStatus?.('live');
           for (const changed of this.readiness) changed();
         },
         () => this.options.onNotice?.(this.text('page.stylesSlow')),
+        () => resources.pending,
+        () => resources.fontsPending,
       );
       this.presentation = presentation;
       const now = Date.now();
@@ -740,7 +772,10 @@ export class DOMBrowserView {
           mathElements,
           {
             onBuild: (node) => {
-              if ('getRootNode' in node) presentation.build(node as Node);
+              if ('getRootNode' in node) {
+                resources.build(node as Node);
+                presentation.build(node as Node);
+              }
             },
           },
         ],
@@ -754,8 +789,19 @@ export class DOMBrowserView {
       this.replayer.on(ReplayerEvents.FullsnapshotRebuilded, () => {
         presentation.start();
       });
+      const rendered = this.replayer;
       this.replayer.on(ReplayerEvents.EventCast, (raw) => {
+        if (this.replayer !== rendered) return;
         const event = raw as eventWithTime;
+        if (
+          event.type === EventType.IncrementalSnapshot &&
+          [
+            IncrementalSource.StyleSheetRule,
+            IncrementalSource.StyleDeclaration,
+            IncrementalSource.AdoptedStyleSheet,
+          ].includes(event.data.source)
+        )
+          resources.styles();
         this.inputFonts.event(event, this.replayer?.iframe.contentDocument);
         if (
           event.type === EventType.FullSnapshot ||
@@ -771,8 +817,7 @@ export class DOMBrowserView {
         }
       });
       this.replayer.startLive(now);
-      for (const event of message.events)
-        for (const next of liveEvents(event, now)) this.replayer.addEvent(next);
+      for (const event of message.events) this.applyEvent(event, now);
       return;
     }
     if (message.type === 'events') {
@@ -787,8 +832,7 @@ export class DOMBrowserView {
       }
       this.sequence = message.sequence;
       const now = Date.now();
-      for (const event of message.events)
-        for (const next of liveEvents(event, now)) this.replayer.addEvent(next);
+      for (const event of message.events) this.applyEvent(event, now);
       this.eventBytes += JSON.stringify(message.events).length;
       if (this.eventBytes > 8 * 1024 * 1024 || this.sequence > 4000)
         this.resync();
@@ -836,6 +880,29 @@ export class DOMBrowserView {
       this.options.onNotice?.(this.text(`notice.${message.code}`));
   }
 
+  private applyEvent(event: eventWithTime, timestamp: number): void {
+    const replayer = this.replayer;
+    if (!replayer) return;
+    if (
+      event.type === EventType.IncrementalSnapshot &&
+      event.data.source === IncrementalSource.Font &&
+      !event.data.buffer &&
+      this.resources
+    ) {
+      const data = event.data;
+      this.resources.font(data.fontSource, (fontSource) => {
+        if (this.replayer !== replayer) return;
+        for (const next of liveEvents(
+          { ...event, data: { ...data, fontSource } },
+          timestamp,
+        ))
+          replayer.addEvent(next);
+      });
+      return;
+    }
+    for (const next of liveEvents(event, timestamp)) replayer.addEvent(next);
+  }
+
   private resync(): void {
     if (this.resyncing || !this.connected) return;
     this.resyncing = true;
@@ -843,6 +910,19 @@ export class DOMBrowserView {
     this.queuedWheel = undefined;
     this.options.onStatus?.(this.replayer ? 'refreshing' : 'connecting');
     this.connection.send({ type: 'resync' });
+  }
+
+  /** Preview remains inert until the source selects and rebuilds this tab. */
+  previewTab(target: string): void {
+    this.cancelInput();
+    this.clearProxy();
+    if (target === this.tab && this.ready) {
+      this.previewTarget = undefined;
+      this.pages.present(this.surface);
+    } else {
+      this.previewTarget = target;
+      this.pages.preview(target);
+    }
   }
 
   dispatch(action: Action): Promise<boolean> {
@@ -903,6 +983,12 @@ export class DOMBrowserView {
   private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
+      (this.previewTarget &&
+        this.previewTarget !== this.tab &&
+        !action.kind.startsWith('tab_') &&
+        action.kind !== 'release_input' &&
+        action.kind !== 'dialog_reply') ||
+      (action.kind === 'tab_restore' && !this.restoreTabs) ||
       (!this.controlled &&
         !action.kind.startsWith('tab_') &&
         !(
@@ -1353,6 +1439,7 @@ export class DOMBrowserView {
   }
 
   private disconnected(reason?: DisconnectReason): void {
+    this.resources?.dispose();
     this.fileChooser = null;
     this.options.onFileChooser?.(null);
     this.dialogOpen = false;
@@ -1368,6 +1455,8 @@ export class DOMBrowserView {
     this.ready = false;
     this.dragging = false;
     this.presentation?.dispose();
+    this.pages.clear();
+    this.previewTarget = undefined;
     this.options.onStatus?.('disconnected', this.disconnectReason);
     for (const changed of this.readiness) changed();
     if (this.pending.size)
@@ -1378,7 +1467,42 @@ export class DOMBrowserView {
     }
     this.pending.clear();
   }
+  private prepareFrame(): void {
+    const replayer = this.replayer,
+      resources = this.resources;
+    if (
+      this.pages.enabled &&
+      this.ready &&
+      replayer &&
+      resources &&
+      this.tab &&
+      this.documentURL === this.tabURLs.get(this.tab)
+    ) {
+      replayer.pause();
+      this.pages.retain(
+        this.tab,
+        this.documentURL,
+        this.tabTitles.get(this.tab) ?? this.documentURL,
+        this.surface,
+        () => {
+          resources.dispose();
+          replayer.destroy();
+        },
+      );
+      this.resources = undefined;
+    } else {
+      replayer?.destroy();
+      this.surface.remove();
+    }
+    this.replayer = undefined;
+    this.presentation?.dispose();
+    this.clearFrame();
+    this.surface = this.pages.create();
+  }
+
   private clearFrame(): void {
+    this.resources?.dispose();
+    this.resources = undefined;
     cancelAnimationFrame(this.focusFrame);
     this.focusFrame = 0;
     this.cancelInput();
@@ -1393,6 +1517,7 @@ export class DOMBrowserView {
     this.resize.disconnect();
     this.media.destroy();
     this.replayer?.destroy();
+    this.pages.destroy();
     this.connection.close();
     this.container.replaceChildren();
   }
@@ -1440,10 +1565,11 @@ export function webSocketConnection(url: string): ProjectionConnection {
           try {
             for (const frame of reader.push(new Uint8Array(data))) {
               for (const listener of mediaListeners) listener(frame);
-              const ack = new Uint8Array(8);
-              new DataView(ack.buffer).setBigUint64(0, BigInt(++consumed));
-              media!.send(ack);
             }
+            consumed += data.byteLength;
+            const ack = new Uint8Array(8);
+            new DataView(ack.buffer).setBigUint64(0, BigInt(consumed));
+            media!.send(ack);
           } catch {
             media?.close(1008);
           }

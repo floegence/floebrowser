@@ -45,7 +45,10 @@ test('reconstructed HTML cannot navigate, submit, execute scripts, or directly l
   } as unknown as eventWithTime;
   const output: any = projection.event(event, 'https://private.test/');
   const nodes = output.data.node.childNodes;
-  assert.match(nodes[0].attributes.src, /^\/_floe\/assets\//);
+  assert.match(
+    nodes[0].attributes.src,
+    /^floebrowser-resource:%2F_floe%2Fassets%2F/,
+  );
   assert.equal(nodes[0].attributes.srcset, null);
   assert.equal(nodes[0].attributes.onload, null);
   assert.equal(nodes[1].attributes.href, null);
@@ -73,7 +76,7 @@ test('rewrites stylesheet imports and URLs without issuing network requests', as
     'https://private.test/css/main.css',
   );
   assert.doesNotMatch(css, /https:|fonts\.css/);
-  assert.match(css, /@import "\/_floe\/assets\//);
+  assert.match(css, /@import "floebrowser-resource:%2F_floe%2Fassets%2F/);
   assert.match(css, /url\("#filter"\)/);
   assert.equal(
     resources.reference('javascript:alert(1)', 'https://private.test'),
@@ -96,8 +99,11 @@ for (const invalid of ['width::564px', 'zoom;1']) {
       assert.match(css, /\.before\s*\{\s*color: red/);
       assert.match(css, /padding: 1px 0/);
       assert.match(css, /\.after\s*\{\s*color: green/);
-      assert.match(css, /@import "\/_floe\/assets\//);
-      assert.match(css, /background: url\("\/_floe\/assets\//);
+      assert.match(css, /@import "floebrowser-resource:%2F_floe%2Fassets%2F/);
+      assert.match(
+        css,
+        /background: url\("floebrowser-resource:%2F_floe%2Fassets%2F/,
+      );
       assert.doesNotMatch(css, /theme\.css|image\.png|https?:/);
     } finally {
       resources.close();

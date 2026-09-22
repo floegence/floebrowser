@@ -231,7 +231,7 @@ test('image-set strings and CSS escapes resolve through source resources', async
       const value = await root
         .locator(selector)
         .evaluate((node) => getComputedStyle(node).backgroundImage);
-      assert.match(value, /\/session\/.*\/assets\//);
+      assert.match(value, /blob:/u);
       assert.doesNotMatch(value, /\/styles\/|\.svg/);
     });
     await root.locator(selector).evaluate(async (node) => {
@@ -256,6 +256,10 @@ test('constructed stylesheets keep resource and selector rewriting through repla
     shadow.innerHTML='<a id="shadow-link" href="/article">Shadow link</a>';
     shadow.adoptedStyleSheets=[sheet];
   </script>`,
+    {
+      '/page/second.svg':
+        '<svg xmlns="http://www.w3.org/2000/svg" width="41" height="31"><rect width="41" height="31" fill="blue"/></svg>',
+    },
   );
   for (const method of ['replaceSync', 'replace'] as const) {
     await source.evaluate(async (method) => {
@@ -274,7 +278,7 @@ test('constructed stylesheets keep resource and selector rewriting through repla
         await root
           .locator('#card')
           .evaluate((node) => getComputedStyle(node).backgroundImage),
-        /\/session\/.*\/assets\//,
+        /blob:/u,
       );
     });
   }
@@ -289,15 +293,22 @@ test('constructed stylesheets keep resource and selector rewriting through repla
       await root
         .locator('#card')
         .evaluate((node) => getComputedStyle(node).backgroundImage),
-      /\/session\/.*\/assets\//,
+      /blob:/u,
     ),
   );
-  await root.locator('#card').evaluate(async (node) => {
-    const image = new Image();
-    image.src = /url\("([^"]+)"\)/.exec(
-      getComputedStyle(node).backgroundImage,
-    )![1]!;
-    await image.decode();
+  await eventually(async () => {
+    assert.equal(
+      await root.locator('#card').evaluate(async (node) => {
+        const image = new Image();
+        image.src = /url\("([^"]+)"\)/.exec(
+          getComputedStyle(node).backgroundImage,
+        )![1]!;
+        await image.decode();
+        return image.naturalWidth;
+      }),
+      41,
+      'The replacement source response reaches the final constructed style',
+    );
   });
   await viewer.reload();
   await viewer.locator('#status.live').waitFor();
@@ -328,7 +339,7 @@ test('external CSSOM edits resolve relative URLs against the stylesheet director
       await root
         .locator('#card')
         .evaluate((node) => getComputedStyle(node).backgroundImage),
-      /\/session\/.*\/assets\//,
+      /blob:/u,
     ),
   );
   await root.locator('#card').evaluate(async (node) => {

@@ -27,7 +27,12 @@ function setup(
   });
   const store = new ResourceStore(cdp as unknown as CDPSession);
   t.after(() => store.close());
-  const id = (value = url) => store.reference(value, url).split('/').at(-1)!;
+  const id = (value = url) =>
+    decodeURIComponent(
+      store.reference(value, url).slice('floebrowser-resource:'.length, -1),
+    )
+      .split('/')
+      .at(-1)!;
   return { cdp, store, id, calls };
 }
 

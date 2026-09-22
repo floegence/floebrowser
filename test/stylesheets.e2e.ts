@@ -140,7 +140,7 @@ test(
     const background = await root
       .locator('#legacy')
       .evaluate((node) => getComputedStyle(node).backgroundImage);
-    assert.match(background, /\/session\/.*\/assets\//);
+    assert.match(background, /blob:/u);
     assert.equal(
       await root
         .locator('#image')

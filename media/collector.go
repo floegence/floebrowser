@@ -214,7 +214,11 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 			}
 		}
 	}()
-	build := samplebuilder.New(16, depacketizer, codec.ClockRate, samplebuilder.WithMaxTimeDelay(100*time.Millisecond))
+	// The sequence window must hold a complete encoded picture, not just its
+	// reorder tail. Sixteen RTP packets truncated ordinary detailed keyframes.
+	// Bound retention to 2048 packets (at most 3 MiB with Pion's 1500-byte MTU),
+	// while the timestamp and idle deadlines still bound waiting independently.
+	build := samplebuilder.New(2048, depacketizer, codec.ClockRate, samplebuilder.WithMaxTimeDelay(100*time.Millisecond))
 	header := c.header(kind, name)
 	if kind == "audio" {
 		header.Width, header.Height = 0, 0
@@ -232,7 +236,14 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 			_ = remote.SetReadDeadline(time.Time{})
 		} else {
 			build.Push(packet)
-			_ = remote.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+			// The short idle flush is only for a completed access unit. Chromium
+			// can pause between paced RTP bursts within one detailed picture.
+			// Give an incomplete picture the full bounded reorder interval.
+			idle := 100 * time.Millisecond
+			if packet.Marker || kind == "audio" {
+				idle = 20 * time.Millisecond
+			}
+			_ = remote.SetReadDeadline(time.Now().Add(idle))
 		}
 		for sample := build.Pop(); sample != nil; sample = build.Pop() {
 			if len(sample.Data) == 0 || len(sample.Data) > MaxPacketBytes {

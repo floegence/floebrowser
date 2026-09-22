@@ -157,7 +157,7 @@ async function verify(
     await projected
       .locator('#picture')
       .evaluate((node) => getComputedStyle(node).backgroundImage),
-    /\/session\/.*\/assets\//,
+    /blob:/u,
   );
   assert.equal(await source.evaluate(() => (window as any).sourceRuns), 1);
   assert.equal(

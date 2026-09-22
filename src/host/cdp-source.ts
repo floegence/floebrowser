@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { observeSourceTitle } from './source-title.js';
 import type {
   SourceElement,
   SourceDialog,
@@ -48,6 +49,8 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   private closed = false;
   private navigations = new Set<() => void>();
   private disposed = false;
+  private stopTitle?: () => void;
+  private documentTitle = '';
   private interceptFiles = false;
   private chooserGeneration = 0;
   private downloadMap = new Map<
@@ -66,6 +69,10 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     const page = new CDPSourcePage(options);
     try {
       await page.addSession(options.transport, options.contexts);
+      page.stopTitle = await observeSourceTitle(options.transport, (title) => {
+        page.documentTitle = title;
+        page.emit('titlechanged', title);
+      });
       return page;
     } catch (error) {
       page.dispose();
@@ -370,7 +377,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
     return this.frameMap.get(this.mainID)?.address ?? 'about:blank';
   }
   title(): Promise<string> {
-    return this.mainFrame().evaluate(() => document.title);
+    return Promise.resolve(this.documentTitle);
   }
   viewportSize(): SourceViewport | null {
     return this.size && { ...this.size };
@@ -552,6 +559,7 @@ export class CDPSourcePage extends EventEmitter implements SourcePage {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopTitle?.();
     for (const cancel of this.navigations) cancel();
     if (!this.closed) {
       this.closed = true;

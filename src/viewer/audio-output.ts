@@ -16,6 +16,18 @@ export class AudioOutput {
   get running(): boolean {
     return this.context?.state === 'running';
   }
+  /** Convert an audible presentation deadline to the context's render clock. */
+  private presentationLatency(): number {
+    if (!this.context || !this.running) return 0;
+    const clock = this.context.getOutputTimestamp();
+    if (!clock.contextTime || !clock.performanceTime) return 0;
+    return Math.max(
+      0,
+      clock.performanceTime +
+        (this.context.currentTime - clock.contextTime) * 1000 -
+        performance.now(),
+    );
+  }
   async unlock(): Promise<void> {
     if (this.context?.state === 'suspended') {
       try {
@@ -59,7 +71,9 @@ export class AudioOutput {
       {
         type: 'samples',
         channels,
-        at: this.context.currentTime + Math.max(0, delayMs) / 1000,
+        at:
+          this.context.currentTime +
+          Math.max(0, delayMs - this.presentationLatency()) / 1000,
       },
       channels.map((c) => c.buffer),
     );

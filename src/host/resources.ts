@@ -1,4 +1,8 @@
 import { randomBytes } from 'node:crypto';
+import {
+  resourceReference,
+  type ResourceAvailable,
+} from '../shared/resources.js';
 import type { SourceTransport } from './source.js';
 import type { NoticeCode } from '../shared/protocol.js';
 import parseCSS from 'postcss-safe-parser';
@@ -81,6 +85,7 @@ type Resource = {
   url: string;
   body?: Buffer;
   type?: string;
+  revision: number;
   waiters: Set<() => void>;
 };
 type ResponseMetadata = { url: string; kind: string; type: string };
@@ -131,6 +136,7 @@ export class ResourceStore {
     private cdp: SourceTransport,
     private notice: (code: NoticeCode) => void = () => {},
     private resourceURL: (id: string) => string = (id) => `/_floe/assets/${id}`,
+    private available: (resource: ResourceAvailable) => void = () => {},
   ) {}
 
   async start(cdp = this.cdp): Promise<void> {
@@ -315,6 +321,7 @@ export class ResourceStore {
       resource = {
         id: randomBytes(18).toString('base64url'),
         url: url.href,
+        revision: 0,
         waiters: new Set(),
       };
       this.byURL.set(url.href, resource);
@@ -322,7 +329,7 @@ export class ResourceStore {
     }
     this.byURL.delete(resource.url);
     this.byURL.set(resource.url, resource);
-    return `${this.resourceURL(resource.id)}${fragment}`;
+    return `${resourceReference(this.resourceURL(resource.id))}${fragment}`;
   }
 
   value(css: string, base: string): string {
@@ -452,8 +459,24 @@ export class ResourceStore {
             : 'application/octet-stream'
           : type;
     this.bytes += data.length;
+    resource.revision++;
+    this.available(this.descriptor(resource));
     for (const resolve of resource.waiters) resolve();
     resource.waiters.clear();
+  }
+
+  private descriptor(resource: Resource): ResourceAvailable {
+    return {
+      reference: resourceReference(this.resourceURL(resource.id)),
+      type: resource.type!,
+      revision: resource.revision,
+    };
+  }
+
+  availableResources(): ResourceAvailable[] {
+    return [...this.byID.values()]
+      .filter((resource) => resource.body && resource.type)
+      .map((resource) => this.descriptor(resource));
   }
 
   private evict(resource: Resource): void {

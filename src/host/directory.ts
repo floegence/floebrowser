@@ -56,6 +56,13 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     )
       return;
     if (page.isClosed()) throw new Error('Source tab is closed');
+    const entry: SourceTab = { page, pinned };
+    let observedTitle = false;
+    const titleChanged = (title: string) => {
+      observedTitle = true;
+      entry.title = title;
+      this.publish();
+    };
     const closed = () => {
       this.remove(page.id);
       if (!this.entries.length && !this.disposed)
@@ -67,11 +74,20 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     };
     page.on('close', closed);
     page.on('popup', popup);
+    page.on('titlechanged', titleChanged);
     this.disposers.set(page.id, () => {
       page.off('close', closed);
       page.off('popup', popup);
+      page.off('titlechanged', titleChanged);
     });
-    this.entries.splice(position ?? this.entries.length, 0, { page, pinned });
+    this.entries.splice(position ?? this.entries.length, 0, entry);
+    void page
+      .title()
+      .then((title) => {
+        if (!observedTitle && this.entries.includes(entry))
+          titleChanged(title.slice(0, 512));
+      })
+      .catch(() => {});
     this.publish();
   }
   private remove(id: string): void {

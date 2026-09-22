@@ -62,7 +62,9 @@ export interface SourcePage {
   readonly id: string;
   readonly transport: SourceTransport;
   /** Emit framecontext(frame) whenever a frame's new default execution context
-   * becomes available, even when its navigation event has already fired. */
+   * becomes available, even when its navigation event has already fired.
+   * Emit titlechanged(title) for top-document title changes independently of
+   * projection. Titles are bounded to 512 characters. */
   on(event: string, listener: (...args: any[]) => void): unknown;
   off(event: string, listener: (...args: any[]) => void): unknown;
   frames(): SourceFrame[];

@@ -86,7 +86,7 @@ export async function createProjectionServer(
     'Cross-Origin-Resource-Policy': 'same-origin',
     'X-Frame-Options': 'DENY',
     'Content-Security-Policy':
-      "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; media-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; object-src 'none'; media-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
   const respond = (
     response: ServerResponse,

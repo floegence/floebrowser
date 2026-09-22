@@ -1,6 +1,18 @@
 /** Hosts supplying translations must provide the complete catalog. Source page
  * text, addresses, filenames and protocol fields are never translated here. */
 export const englishMessages = {
+  'library.label': 'Bookmarks and history',
+  'library.bookmarks': 'Bookmarks',
+  'library.history': 'History',
+  'library.close': 'Close library',
+  'library.search': 'Search bookmarks and history',
+  'library.save': 'Bookmark this page',
+  'library.remove': 'Remove bookmark: {title}',
+  'library.clear': 'Clear browsing history',
+  'library.confirmClear': 'Confirm clearing history',
+  'library.loading': 'Loading saved pages…',
+  'library.empty': 'No saved pages match.',
+  'library.failed': 'Saved pages could not be updated. Try again.',
   'tabs.list': 'Source browser tabs',
   'tabs.new': 'New tab',
   'tabs.menu': 'Tab actions',
@@ -22,6 +34,8 @@ export const englishMessages = {
   'find.close': 'Close find',
   'find.none': 'No matches',
   'zoom.label': 'Page zoom',
+  'zoom.preferenceFailed':
+    'The zoom preference could not be saved or restored.',
   'zoom.in': 'Zoom in',
   'zoom.out': 'Zoom out',
   'zoom.reset': 'Reset zoom',

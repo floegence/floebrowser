@@ -216,3 +216,87 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
   );
   assert.deepEqual(errors, []);
 });
+
+test('a submitted address waits for host input admission and never moves to a superseding tab', async (t) => {
+  const bundle = await build({
+    stdin: {
+      resolveDir: process.cwd(),
+      contents: `
+    import { mountBrowser } from './src/viewer/index.js';
+    import { PROTOCOL_VERSION } from './src/shared/protocol.js';
+    let receive; window.sent=[]; window.admissions=[];
+    const tabs = active => ({ type:'tabs',state:{active,tabs:['first','second'].map(id=>({id,title:id,url:'about:blank'}))}});
+    window.deliver = active => receive(tabs(active));
+    window.control = target => receive({type:'control',target,active:true});
+    window.view = mountBrowser(document.body, {
+      connect: () => ({send: m => {window.sent.push(m); if(m.type==='command') queueMicrotask(()=>receive({type:'ack',id:m.id,ok:true}));},
+        subscribe: callback => { receive=callback; queueMicrotask(()=>{receive({type:'hello',version:PROTOCOL_VERSION,mediaWireVersion:1});receive(tabs('first'));});return()=>{}; },
+        onDisconnect:()=>()=>{},close:()=>{}}),
+      onRequestControl: (target, signal) => new Promise((resolve,reject) => window.admissions.push({target,signal,grant:resolve,reject})),
+    });
+  `,
+    },
+    bundle: true,
+    format: 'iife',
+    write: false,
+  });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3000);
+  await page.route('http://127.0.0.1/admission', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<body style="height:700px"></body>',
+    }),
+  );
+  await page.goto('http://127.0.0.1/admission');
+  await page.addStyleTag({
+    content: await readFile('src/viewer/style.css', 'utf8'),
+  });
+  await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
+  await page.getByRole('tab', { name: 'first', exact: true }).waitFor();
+  await page.evaluate(() =>
+    (window as any).view.navigate('https://admitted.test/'),
+  );
+  await page.waitForFunction(() => (window as any).admissions.length === 1);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        (window as any).sent.filter((m: any) => m.action?.kind === 'navigate')
+          .length,
+    ),
+    0,
+  );
+  await page.evaluate(() => (window as any).admissions[0].grant());
+  assert.equal(
+    await page.evaluate(() =>
+      (window as any).sent.some((m: any) => m.action?.kind === 'navigate'),
+    ),
+    false,
+    'Host HTTP response can arrive before the control stream',
+  );
+  await page.evaluate(() => (window as any).control('first'));
+  await page.waitForFunction(() =>
+    (window as any).sent.some(
+      (m: any) => m.action?.url === 'https://admitted.test/',
+    ),
+  );
+  await page.evaluate(() => {
+    (window as any).view.navigate('https://must-not-replay.test/');
+  });
+  await page.waitForFunction(() => (window as any).admissions.length === 2);
+  await page.evaluate(() => {
+    (window as any).deliver('second');
+    (window as any).admissions[1].grant();
+  });
+  assert.equal(
+    await page.evaluate(() =>
+      (window as any).sent.some(
+        (m: any) => m.action?.url === 'https://must-not-replay.test/',
+      ),
+    ),
+    false,
+  );
+  await page.evaluate(() => (window as any).view.destroy());
+});

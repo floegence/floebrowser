@@ -1,5 +1,6 @@
 import type { MediaFrame } from '../shared/media-wire.js';
 import type { DecoderEvent } from './media-decoder.js';
+import { alignMediaTimestamp, type MediaClock } from './media-clock.js';
 
 const scope = globalThis as unknown as {
   onmessage: (event: MessageEvent) => void;
@@ -15,6 +16,9 @@ let audioFrames = 0;
 const MAX_DECODE_FAILURES = 3;
 let videoFailures = 0;
 let audioFailures = 0;
+const mediaClock: MediaClock = {};
+let firstAudioInputTimestamp: number | undefined;
+let audioDecodeOffset: number | undefined;
 const unavailable = new Set<'video' | 'audio'>();
 const send = (event: DecoderEvent, transfer?: Transferable[]) =>
   scope.postMessage(event, transfer);
@@ -35,6 +39,8 @@ function failed(track: 'video' | 'audio', error?: unknown) {
   else {
     if (audio && audio.state !== 'closed') audio.close();
     audio = undefined;
+    firstAudioInputTimestamp = undefined;
+    audioDecodeOffset = undefined;
   }
   const count = track === 'video' ? ++videoFailures : ++audioFailures;
   const unsupported =
@@ -81,6 +87,7 @@ function videoCodec(frame: MediaFrame): string {
 function decode(frame: MediaFrame) {
   const h = frame.header;
   if (h.track === 'canvas' || unavailable.has(h.track)) return;
+  const timestamp = alignMediaTimestamp(mediaClock, h.track, h.timestamp_us);
   if (h.track === 'video') {
     if (typeof VideoDecoder !== 'function') {
       failed('video');
@@ -124,7 +131,7 @@ function decode(frame: MediaFrame) {
     video!.decode(
       new EncodedVideoChunk({
         type: h.keyframe ? 'key' : 'delta',
-        timestamp: h.timestamp_us,
+        timestamp,
         duration: h.duration_us || undefined,
         data: frame.data,
       }),
@@ -152,11 +159,13 @@ function decode(frame: MediaFrame) {
               },
             );
             audioFrames += data.numberOfFrames;
+            audioDecodeOffset ??=
+              (firstAudioInputTimestamp ?? data.timestamp) - data.timestamp;
             send(
               {
                 type: 'audio',
                 channels,
-                timestamp: data.timestamp,
+                timestamp: data.timestamp + audioDecodeOffset,
                 rate: data.sampleRate,
               },
               channels.map((c) => c.buffer),
@@ -176,15 +185,17 @@ function decode(frame: MediaFrame) {
         numberOfChannels: 2,
       });
     }
-    if (audio.decodeQueueSize < 12)
+    if (audio.decodeQueueSize < 12) {
+      firstAudioInputTimestamp ??= timestamp;
       audio.decode(
         new EncodedAudioChunk({
           type: 'key',
-          timestamp: h.timestamp_us,
+          timestamp,
           duration: h.duration_us || undefined,
           data: frame.data,
         }),
       );
+    }
   }
 }
 

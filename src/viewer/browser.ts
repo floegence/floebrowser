@@ -5,6 +5,8 @@ import { browserText } from './messages.js';
 import { WebsiteDialog } from './dialog.js';
 import { PageFind } from './find.js';
 import { PageZoom } from './zoom.js';
+import { PageLibrary, type BrowserLibrary } from './library.js';
+import { OriginZoom, type ZoomPreferences } from './zoom-preferences.js';
 import { FilePicker, type ChooseFiles } from './files.js';
 import { Downloads } from './downloads.js';
 import { browserTemplate } from './template.js';
@@ -27,6 +29,8 @@ export type BrowserOptions = Omit<
 > & {
   connect: (request: { takeover: boolean }) => ProjectionConnection;
   title?: string;
+  library?: BrowserLibrary;
+  zoomPreferences?: ZoomPreferences;
   /** Host-owned authorized history/bookmarks/tabs; never contact a search engine
    * on each keystroke. Omission uses this view's bounded in-memory visits. */
   suggest?: (
@@ -37,6 +41,11 @@ export type BrowserOptions = Omit<
   searchURL?: (query: string) => string;
   /** Native host selection and upload, canceled with the source chooser. */
   chooseFiles?: ChooseFiles;
+  /** Admit an address submission through the host's idle-control path. This
+   * must never take over another controller. Resolution admits the request;
+   * the matching control notification is still required before dispatch.
+   * Rejection leaves the page untouched. Canceled submissions are not replayed. */
+  onRequestControl?: (target: string, signal: AbortSignal) => Promise<void>;
   /** The product performs user/AI takeover through its authorized host API. */
   onTakeControl?: (target: string) => void | Promise<void>;
   /** User-selected update entry point after a source/viewer protocol mismatch.
@@ -86,8 +95,11 @@ export function mountBrowser(
   let tabState: TabState = { active: '', tabs: [] };
   let connected = false;
   let controlling = false;
+  let navigationAdmission: AbortController | undefined;
+  const controlWaiters = new Set<() => void>();
   let takingControl = false;
   let editTabs = true;
+  let restoreTabs = true;
   let ready = false;
   let changingTab = false;
   let loading = false;
@@ -99,11 +111,23 @@ export function mountBrowser(
   let updateRequired = false;
   let checkingUpdates = false;
   let toastTimer: ReturnType<typeof setTimeout>;
+  const originZoom = new OriginZoom(
+    options.zoomPreferences,
+    (action) => command(action),
+    () => notice(text('zoom.preferenceFailed')),
+  );
   const zoom = new PageZoom(
     element<HTMLButtonElement>('zoom'),
     stage,
     text,
-    (action) => command(action),
+    (action) => originZoom.change(action),
+  );
+  const library = new PageLibrary(
+    element<HTMLButtonElement>('library'),
+    stage,
+    text,
+    options.library,
+    navigate,
   );
   const find = new PageFind(
     stage,
@@ -187,6 +211,15 @@ export function mountBrowser(
     );
   }
   function updateChrome(): void {
+    library.enableNavigation(connected && controlling && !switching());
+    originZoom.enable(
+      connected &&
+        controlling &&
+        ready &&
+        !switching() &&
+        !dialogOpen &&
+        !filePickerOpen,
+    );
     downloads.enable(connected, controlling, view?.canDownload ?? false);
     if (!connected) tabOrder.cancel();
     const selected = desiredTab();
@@ -243,6 +276,17 @@ export function mountBrowser(
     welcome.hidden = !connected || pending || target?.url !== 'about:blank';
   }
   function command(action: Action): Promise<boolean> {
+    if (
+      [
+        'tab_select',
+        'tab_new',
+        'tab_restore',
+        'tab_close',
+        'navigate',
+        'stop',
+      ].includes(action.kind)
+    )
+      navigationAdmission?.abort();
     if (!connected || destroyed) return Promise.resolve(false);
     return new Promise((resolve) => {
       const tail = commands.at(-1);
@@ -264,7 +308,7 @@ export function mountBrowser(
       if (!work.action.kind.startsWith('tab_')) {
         // Dispatch in intent order, but page completion never holds browser
         // chrome. A subsequent tab command can revoke this page immediately.
-        void view!.dispatch(work.action).then(work.resolve);
+        void dispatchPage(work.action).then(work.resolve);
         current = undefined;
         continue;
       }
@@ -276,12 +320,65 @@ export function mountBrowser(
       if (destroyed || generation !== admittedGeneration) return;
       current = undefined;
       if (!ok) {
+        view?.previewTab(tabState.active);
         for (const pending of commands.splice(0)) pending.resolve(false);
         break;
       }
     }
     updateChrome();
     if (document.activeElement !== address) setAddress();
+  }
+  async function dispatchPage(action: Action): Promise<boolean> {
+    if (action.kind !== 'navigate' || !options.onRequestControl)
+      return view!.dispatch(action);
+    const target = tabState.active,
+      admittedGeneration = generation;
+    const admission = (navigationAdmission = new AbortController());
+    const signal = AbortSignal.any([admission.signal, lifetime.signal]);
+    try {
+      await options.onRequestControl(target, signal);
+      signal.throwIfAborted();
+      if (!controlling)
+        await new Promise<void>((resolve, reject) => {
+          const dispose = () => {
+            clearTimeout(timer);
+            controlWaiters.delete(check);
+            signal.removeEventListener('abort', cancel);
+          };
+          const check = () => {
+            if (controlling) {
+              dispose();
+              resolve();
+            }
+          };
+          const cancel = () => {
+            dispose();
+            reject(new Error('Control admission canceled'));
+          };
+          const timer = setTimeout(cancel, 10000);
+          controlWaiters.add(check);
+          signal.addEventListener('abort', cancel, { once: true });
+          check();
+        });
+      if (
+        signal.aborted ||
+        generation !== admittedGeneration ||
+        target !== tabState.active ||
+        target !== desiredTab()
+      )
+        return false;
+      return view!.dispatch(action);
+    } catch {
+      if (
+        !signal.aborted &&
+        generation === admittedGeneration &&
+        target === tabState.active
+      )
+        notice(text('control.failed'));
+      return false;
+    } finally {
+      if (navigationAdmission === admission) navigationAdmission = undefined;
+    }
   }
   function setAddress(): void {
     const target = tabState.tabs.find((tab) => tab.id === desiredTab());
@@ -311,6 +408,7 @@ export function mountBrowser(
     }
     addressEditing = false;
     hideSuggestions();
+    view?.previewTab(id);
     void command({ kind: 'tab_select', tab: id });
     setAddress();
     rows
@@ -334,6 +432,7 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
+    if (previous !== state.active) navigationAdmission?.abort();
     if (previous !== state.active) find.close();
     if (previous !== state.active)
       loading = !!state.tabs.find((tab) => tab.id === state.active)?.loading;
@@ -437,6 +536,7 @@ export function mountBrowser(
   }
   function connect(takeover = false): void {
     if (destroyed) return;
+    navigationAdmission?.abort();
     const admittedGeneration = ++generation;
     for (const pending of commands.splice(0)) pending.resolve(false);
     current?.resolve(false);
@@ -467,16 +567,19 @@ export function mountBrowser(
       },
       onControl: (active) => {
         controlling = active;
+        for (const ready of controlWaiters) ready();
         options.onControl?.(active);
         updateChrome();
       },
-      onSessionAccess: (allowed) => {
+      onSessionAccess: (allowed, restore) => {
         editTabs = allowed;
-        options.onSessionAccess?.(allowed);
+        restoreTabs = restore;
+        options.onSessionAccess?.(allowed, restore);
         updateChrome();
       },
       mediaControls: element('media-controls'),
       onTabs: (state) => {
+        library.selected(state.active);
         downloads.tabs(state);
         if (generation === admittedGeneration && !destroyed) renderTabs(state);
       },
@@ -484,6 +587,8 @@ export function mountBrowser(
         if (generation !== admittedGeneration || destroyed) return;
         options.onState?.(state);
         zoom.state(state);
+        originZoom.state(state);
+        library.state(state);
         if (state.status === 'error') element('toast').hidden = true;
         const changedTab = sourceID !== state.id;
         sourceID = state.id;
@@ -507,6 +612,7 @@ export function mountBrowser(
         ready = status === 'live';
         if (ready || status === 'disconnected') changingTab = false;
         if (status === 'disconnected') {
+          navigationAdmission?.abort();
           find.close();
           dialog.show(null);
           for (const pending of commands.splice(0)) pending.resolve(false);
@@ -820,8 +926,9 @@ export function mountBrowser(
     else if (key === 'f') find.open();
     else if (key === 'r') void command({ kind: 'reload' });
     else if (key === 't') {
-      if (event.shiftKey) void command({ kind: 'tab_restore' });
-      else newTab();
+      if (event.shiftKey) {
+        if (restoreTabs) void command({ kind: 'tab_restore' });
+      } else newTab();
     } else if (key === 'w' && desiredTab()) void closeTab(desiredTab());
     else if (key === 'tab' && tabState.tabs.length) {
       const index = tabState.tabs.findIndex((tab) => tab.id === desiredTab());
@@ -868,7 +975,8 @@ export function mountBrowser(
     const target = tabState.tabs.find((tab) => tab.id === menuTab);
     element<HTMLButtonElement>('tab-pin').disabled = !target || !editTabs;
     element<HTMLButtonElement>('tab-close').disabled = !target || !editTabs;
-    element<HTMLButtonElement>('tab-restore').disabled = !editTabs;
+    element<HTMLButtonElement>('tab-restore').disabled =
+      !editTabs || !restoreTabs;
     element('tab-pin').textContent = text(
       target?.pinned ? 'tabs.unpin' : 'tabs.pin',
     );
@@ -889,7 +997,7 @@ export function mountBrowser(
   });
   element('tab-restore').addEventListener('click', () => {
     tabMenu.hidePopover();
-    void command({ kind: 'tab_restore' });
+    if (restoreTabs) void command({ kind: 'tab_restore' });
   });
   tabMenu.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -929,6 +1037,8 @@ export function mountBrowser(
     dialog.destroy();
     find.destroy();
     zoom.destroy();
+    originZoom.destroy();
+    library.destroy();
     files.destroy();
     downloads.destroy();
     view?.destroy();

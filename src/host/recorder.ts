@@ -42,7 +42,6 @@ export function installRecorder(binding: string, key: string): void {
   const serializeSheet = (sheet: CSSStyleSheet) =>
     Array.from(sheet.cssRules, (rule) => rule.cssText).join('\n');
   let styleIDs = new WeakMap<CSSStyleSheet, number>();
-  let lastTitle = document.title;
   let mediaActive = false;
   let picturesActive = true;
   let projecting = true;
@@ -253,14 +252,6 @@ export function installRecorder(binding: string, key: string): void {
         };
       }
     }
-    if (
-      window === window.top &&
-      event.type === 3 &&
-      document.title !== lastTitle
-    ) {
-      lastTitle = document.title;
-      record.addCustomEvent('floebrowser:title', { title: lastTitle });
-    }
     return event;
   };
   const emit = (event: any) => {
@@ -270,8 +261,8 @@ export function installRecorder(binding: string, key: string): void {
       event.type !== 4 &&
       !(
         event.type === 5 &&
-        (event.data.tag === 'floebrowser:title' ||
-          (mediaActive && event.data.tag === 'floebrowser:media'))
+        mediaActive &&
+        event.data.tag === 'floebrowser:media'
       )
     )
       return;

@@ -37,6 +37,8 @@ export class ReplayPresentation {
   constructor(
     private ready: () => void,
     private timeout: () => void,
+    private resourcesPending: () => boolean = () => false,
+    private fontsPending: () => boolean = () => false,
   ) {}
 
   get active(): boolean {
@@ -87,29 +89,34 @@ export class ReplayPresentation {
     let fontsUntil = Infinity;
     const check = () => {
       if (this.disposed || view.complete) return;
-      const pending = [...view.styles].some((node) => {
-        if (
-          !node.isConnected ||
-          node.disabled ||
-          (node.type && node.type !== 'text/css')
-        )
-          return false;
-        const failed = view.failed.get(node);
-        if (
-          failed &&
-          failed.sheet === node.sheet &&
-          failed.text === node.textContent
-        )
-          return false;
-        if (
-          node.nodeName === 'LINK' &&
-          !(node as HTMLLinkElement).relList.contains('stylesheet')
-        )
-          return false;
-        if (node.media && !document.defaultView?.matchMedia(node.media).matches)
-          return false;
-        return loading(node.sheet);
-      });
+      const pending =
+        this.resourcesPending() ||
+        [...view.styles].some((node) => {
+          if (
+            !node.isConnected ||
+            node.disabled ||
+            (node.type && node.type !== 'text/css')
+          )
+            return false;
+          const failed = view.failed.get(node);
+          if (
+            failed &&
+            failed.sheet === node.sheet &&
+            failed.text === node.textContent
+          )
+            return false;
+          if (
+            node.nodeName === 'LINK' &&
+            !(node as HTMLLinkElement).relList.contains('stylesheet')
+          )
+            return false;
+          if (
+            node.media &&
+            !document.defaultView?.matchMedia(node.media).matches
+          )
+            return false;
+          return loading(node.sheet);
+        });
       // Force style/layout before checking fonts; a new stylesheet may have
       // introduced a font that the browser has not requested yet.
       void document.documentElement?.offsetHeight;
@@ -117,7 +124,8 @@ export class ReplayPresentation {
       else if (fontsUntil === Infinity) fontsUntil = performance.now() + 200;
       stable =
         !pending &&
-        (document.fonts.status === 'loaded' || performance.now() >= fontsUntil)
+        ((document.fonts.status === 'loaded' && !this.fontsPending()) ||
+          performance.now() >= fontsUntil)
           ? stable + 1
           : 0;
       if (stable >= 2) this.finish(view);

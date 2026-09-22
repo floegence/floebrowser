@@ -18,7 +18,10 @@ export {
 } from './messages.js';
 export { addressURL, type AddressSuggestion } from './address.js';
 export type { MediaAssets } from './media.js';
+export type { ResourceFetch } from './resources.js';
 export type { ChooseFiles } from './files.js';
+export type { BrowserLibrary, LibraryEntry, LibraryKind } from './library.js';
+export type { ZoomPreferences } from './zoom-preferences.js';
 export {
   projectionPortConnection,
   serveProjectionPorts,

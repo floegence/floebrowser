@@ -80,6 +80,7 @@ const template = `    <main class="floe-browser browser-window">
         </form>
         <button data-floe-ui="take-control" class="take-control" hidden></button>
         <button class="zoom-toggle" data-floe-ui="zoom"></button>
+        <button class="icon-button" data-floe-ui="library" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3h10v14l-5-3-5 3z"/></svg></button>
         <button class="icon-button" data-floe-ui="find">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
         </button>
@@ -169,6 +170,7 @@ export function browserTemplate(
     reload: 'navigation.reloadPage',
     find: 'find.label',
     zoom: 'zoom.label',
+    library: 'library.label',
     downloads: 'downloads.title',
     'dismiss-toast': 'notice.dismiss',
   };

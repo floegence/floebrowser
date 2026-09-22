@@ -96,7 +96,7 @@ test('projects authenticated DOM, images, CSS and fonts without client website r
     await projected
       .locator('.private-card')
       .evaluate((node) => getComputedStyle(node).backgroundImage),
-    /\/session\/.*\/assets\//,
+    /url\("blob:/u,
   );
   await eventually(
     () =>

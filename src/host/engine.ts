@@ -198,6 +198,7 @@ export class BrowserProjection {
       options.resourceURL
         ? (id) => options.resourceURL!(id, this.id)
         : undefined,
+      (resource) => this.send({ type: 'resource', target: this.id, resource }),
     );
     this.projection = new DOMProjection(this.resources);
     const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
@@ -264,6 +265,9 @@ export class BrowserProjection {
   }
 
   private async initialize(): Promise<void> {
+    this.listen(this.page, 'titlechanged', (title: string) =>
+      this.updateState({ title }),
+    );
     this.mainFrameID = (
       await this.cdp.send('Page.getFrameTree')
     ).frameTree.frame.id;
@@ -553,14 +557,6 @@ export class BrowserProjection {
       if (width !== this.state.width || height !== this.state.height)
         this.updateState({ width, height });
     }
-    if (
-      event.type === EventType.Custom &&
-      event.data.tag === 'floebrowser:title'
-    ) {
-      const title = (event.data.payload as { title?: unknown }).title;
-      if (typeof title === 'string') this.updateState({ title });
-      return;
-    }
     if (!this.watchers.size) {
       if (event.type === EventType.FullSnapshot) void this.setMedia(false);
       return;
@@ -763,6 +759,7 @@ export class BrowserProjection {
         };
       this.send({
         type: 'snapshot',
+        resources: this.resources.availableResources(),
         epoch: this.epoch,
         sequence: 0,
         events: [meta, projected],

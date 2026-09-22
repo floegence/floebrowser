@@ -67,3 +67,7 @@ export {
   type SourceTab,
   type DirectoryChange,
 } from './directory.js';
+
+export { ResponseDownloads } from './response-downloads.js';
+
+export { closeCDPPage } from './close-page.js';

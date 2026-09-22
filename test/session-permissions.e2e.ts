@@ -31,6 +31,7 @@ test(
     const messages: ServerMessage[] = [];
     const view = await session.observe((message) => messages.push(message), {
       media: false,
+      restoreClosedTabs: false,
     });
     await view.acquireControl(() => true);
     assert.equal(
@@ -64,6 +65,12 @@ test(
     );
     await send({ kind: 'tab_new' });
     assert.equal(context.pages().length, 2);
+    await send({ kind: 'tab_restore' });
+    assert.equal(
+      messages.findLast((message) => message.type === 'ack')?.code,
+      'not_allowed',
+      'A host that cannot restore external sources must deny URL replay independently of tab editing',
+    );
     assert.equal(
       (await session.projection(view.currentState.active)).hasController,
       false,

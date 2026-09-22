@@ -20,6 +20,90 @@
 .floe-browser [hidden] {
   display: none !important;
 }
+.floe-browser .browser-library {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 36;
+  width: min(420px, calc(100% - 24px));
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--floe-background);
+  box-shadow: 0 5px 20px #17263e1a;
+  font-size: 13px;
+  overflow: auto;
+}
+.floe-browser .browser-library header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.floe-browser .browser-library button {
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: var(--floe-field);
+  text-align: start;
+}
+.floe-browser .browser-library button:hover {
+  background: var(--floe-surface);
+}
+.floe-browser .browser-library button[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--floe-surface);
+}
+.floe-browser .browser-library header button:last-child {
+  margin-left: auto;
+}
+.floe-browser .browser-library input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  background: var(--floe-field);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+.floe-browser .browser-library input:focus {
+  border-color: var(--accent);
+}
+.floe-browser .browser-library p {
+  margin: 0;
+  color: var(--muted);
+}
+.floe-browser .browser-library-entries {
+  min-height: 0;
+  overflow: auto;
+}
+.floe-browser .browser-library-entries > div {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.floe-browser .browser-library-entries button:first-child {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+}
+.floe-browser .browser-library-entries strong,
+.floe-browser .browser-library-entries small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floe-browser .browser-library-entries strong {
+  font-weight: 500;
+}
+.floe-browser .browser-library-entries small {
+  margin-top: 3px;
+  color: var(--muted);
+}
 .floe-browser button,
 .floe-browser input {
   font: inherit;

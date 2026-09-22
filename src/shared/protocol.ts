@@ -1,8 +1,9 @@
+import type { ResourceAvailable } from './resources.js';
 import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 22;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -294,6 +295,7 @@ export type NoticeCode =
   | 'resource_limit'
   | 'tab_unavailable';
 export type ServerMessage =
+  | { type: 'resource'; target: string; resource: ResourceAvailable }
   | { type: 'downloads'; target: string; items: DownloadState[] }
   | { type: 'file_chooser'; target: string; chooser: FileChooserState | null }
   | {
@@ -305,7 +307,7 @@ export type ServerMessage =
     }
   | { type: 'dialog'; target: string; dialog: DialogState | null }
   | { type: 'control'; target: string; active: boolean }
-  | { type: 'session_access'; editTabs: boolean }
+  | { type: 'session_access'; editTabs: boolean; restoreTabs?: boolean }
   | { type: 'media_end'; target: string; view: string }
   | {
       type: 'media';
@@ -324,6 +326,7 @@ export type ServerMessage =
   | { type: 'state'; state: BrowserState }
   | {
       type: 'snapshot';
+      resources: ResourceAvailable[];
       epoch: string;
       sequence: number;
       events: eventWithTime[];

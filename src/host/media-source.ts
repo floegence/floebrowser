@@ -247,19 +247,16 @@ export function observeMedia(
       return;
     }
     try {
-      const observed = element.captureStream();
       const sourceObject = element.srcObject;
       const borrowed =
-        sourceObject && 'getTracks' in sourceObject
-          ? sourceObject.getTracks()
-          : [];
-      // Chromium may return the page's original srcObject tracks. Own clones
-      // of those tracks so teardown cannot stop the website's media source.
-      const stream = new MediaStream(
-        observed
-          .getTracks()
-          .map((track) => (borrowed.includes(track) ? track.clone() : track)),
-      );
+        sourceObject && 'getTracks' in sourceObject ? sourceObject : undefined;
+      // Recapturing a stream-backed element replaces Chromium's original track
+      // wrappers. Collecting a Canvas track wrapper can then stop the website's
+      // producer. Borrow its existing stream and own only cloned tracks.
+      const observed = borrowed ?? element.captureStream();
+      const stream = borrowed
+        ? new MediaStream(observed.getTracks().map((track) => track.clone()))
+        : observed;
       capture.stream = stream;
       if (!stream.getTracks().length) return;
       const peer = new RTCPeerConnection({ iceServers: [] });

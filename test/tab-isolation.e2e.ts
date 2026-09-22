@@ -351,10 +351,14 @@ test(
     const s = await setup(t);
     const cdp = (s.service.engine as any).cdp;
     let mutations = 0;
-    cdp.on('Runtime.bindingCalled', (event: { payload: string }) => {
-      const data = JSON.parse(event.payload);
-      if (data.type === 3 && data.data.source === 0) mutations++;
-    });
+    cdp.on(
+      'Runtime.bindingCalled',
+      (event: { name: string; payload: string }) => {
+        if (event.name !== (s.service.engine as any).binding) return;
+        const data = JSON.parse(event.payload);
+        if (data.type === 3 && data.data.source === 0) mutations++;
+      },
+    );
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     await s.viewer.frameLocator('#viewport iframe').locator('#count').waitFor();
     // A source round trip follows the suspension request before measuring traffic.
