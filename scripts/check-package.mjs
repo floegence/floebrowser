@@ -52,7 +52,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import { createProjectionServer, launchSourceBrowser, PROTOCOL_VERSION } from '@floegence/floebrowser';
+import { createProjectionServer, launchSourceBrowser, NativeMediaBridge, PROTOCOL_VERSION } from '@floegence/floebrowser';
 import { clientMessageSchema } from '@floegence/floebrowser/protocol';
 const packageRoot = new URL('./node_modules/@floegence/floebrowser/', import.meta.url);
 const bundle = JSON.parse(await readFile(new URL('dist/bin/manifest.json', packageRoot), 'utf8'));
@@ -67,6 +67,9 @@ for (const artifact of bundle.artifacts) {
 }
 assert.equal(PROTOCOL_VERSION, 19);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
+// Embedding hosts use the public SDK without reaching into private package paths.
+const nativeBridge = new NativeMediaBridge();
+await nativeBridge.close();
 const browser = await chromium.launch({ chromiumSandbox: true });
 let server, context;
 try {
@@ -89,6 +92,7 @@ try {
   try {
     const changed=Buffer.from(original);changed[0]^=255;
     await writeFile(nativeURL,changed);
+    assert.throws(()=>new NativeMediaBridge(),/integrity verification/);
     await assert.rejects(()=>createProjectionServer(source,{authorize:()=>true}),/integrity verification/);
   } finally { await writeFile(nativeURL,original); }
 } finally { await server?.close(); await context?.close(); await browser.close(); }

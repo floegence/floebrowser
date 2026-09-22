@@ -15,7 +15,6 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { type AttachOptions } from './engine.js';
 import { BrowserSession, type SessionConnection } from './session.js';
 import { NativeMediaBridge, type SourceMediaBridge } from './media-bridge.js';
-import { mediaExecutable } from './media-executable.js';
 import { MediaSender } from './media-carrier.js';
 import {
   MAX_COMMAND_BYTES,
@@ -38,8 +37,7 @@ export async function createProjectionServer(
   options: ProjectionServerOptions,
 ) {
   const base = `/session/${randomBytes(32).toString('base64url')}/`;
-  const mediaBridge =
-    options.mediaBridge ?? new NativeMediaBridge(mediaExecutable());
+  const mediaBridge = options.mediaBridge ?? new NativeMediaBridge();
   const session = await ('list' in page
     ? BrowserSession.open(page, {
         uploadLimits: options.uploadLimits,

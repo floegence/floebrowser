@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
+import { mediaExecutable } from './media-executable.js';
 import { MediaPacketReader, type MediaFrame } from '../shared/media-wire.js';
 
 export type MediaScope = {
@@ -48,7 +49,8 @@ export class NativeMediaBridge implements SourceMediaBridge {
   private ended = false;
   private stopped: Promise<void>;
   private ready: Promise<void>;
-  constructor(executablePath: string) {
+  /** Use the integrity-checked released helper unless the host supplies its own. */
+  constructor(executablePath = mediaExecutable()) {
     const { version } = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
     );

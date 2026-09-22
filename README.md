@@ -121,7 +121,7 @@ Qualification covers static and changing Canvas 2D/WebGL2, transparency, resizin
 
 ## Embed the engine
 
-The public package name is `@floegence/floebrowser`. Version `0.1.0` in this repository is not automatically an npm release.
+The public package name is `@floegence/floebrowser`. A version in this repository is not automatically an npm release.
 
 ```ts
 import { BrowserProjection, launchSourceBrowser } from '@floegence/floebrowser';
@@ -160,6 +160,13 @@ await context.close();
 ```
 
 `authorize` is checked immediately before an effect. It is not a target mutex or a site-navigation firewall. The host must preserve its existing tab ownership, network policies, origin grants and user/AI takeover rules for the controller's entire lifetime. Attaching does not authorize sibling tabs. Page-originated navigation, redirects and popups remain website behavior at the source.
+
+Hosts can construct `new NativeMediaBridge()` from the public package to use its
+bundled media collector. The SDK resolves the current platform's helper and
+verifies its release version, size and SHA-256 before starting it; hosts do not
+need private package paths or a helper on `PATH`. Pass this bridge as
+`mediaBridge` and forward its encoded frames through the host's authorized
+media carrier. The host must close the bridge when its owning session ends.
 
 `BrowserProjection.observe(send, options)` creates a viewing grant without input authority. `acquireControl(observation, authorize)` creates the page's sole input handle only after host authorization; it never steals another handle. Releasing input leaves authorized DOM and media observation alive. Closing an observation revokes its input handle and media delivery synchronously, then drains held input. Each observation has a separate media subscription generation; disabling its media with `setMedia(false)` sends `media_end`, retires queued packets, and leaves other viewers and input unaffected. Multiple viewers share one source element collector. The source stops collection when the last media subscription ends. `setVisible(false)` immediately revokes that observation's input, suppresses its DOM and picture delivery, and preserves its authorized audio. With no visible observation, source DOM emission stops and video sender encodings become inactive; website execution and playback continue. Returning requests a new DOM snapshot and independent video keyframe without recreating the audio collector.
 
