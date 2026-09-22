@@ -145,6 +145,7 @@ export class DOMBrowserView {
   private inputFonts = new InputFonts();
   private focusFrame = 0;
   private dialogOpen = false;
+  private directoryDialog?: string;
 
   constructor(
     private container: HTMLElement,
@@ -519,8 +520,19 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'dialog') {
-      if (message.target === this.tab && (!message.dialog || this.controlled)) {
+      if (
+        message.target === this.tab &&
+        (!message.dialog ||
+          this.controlled ||
+          (this.editTabs &&
+            message.dialog.authority === 'directory' &&
+            message.dialog.type === 'beforeunload'))
+      ) {
         this.dialogOpen = !!message.dialog;
+        this.directoryDialog =
+          message.dialog?.authority === 'directory'
+            ? message.dialog.id
+            : undefined;
         for (const pending of this.pending.values()) {
           clearTimeout(pending.timer);
           if (!this.dialogOpen)
@@ -532,6 +544,11 @@ export class DOMBrowserView {
     }
     if (message.type === 'session_access') {
       this.editTabs = message.editTabs;
+      if (!this.editTabs && this.directoryDialog) {
+        this.directoryDialog = undefined;
+        this.dialogOpen = false;
+        this.options.onDialog?.(null);
+      }
       this.options.onSessionAccess?.(message.editTabs);
       return;
     }
@@ -539,8 +556,10 @@ export class DOMBrowserView {
       if (message.target === this.tab) {
         this.controlled = message.active;
         if (!message.active) {
-          this.dialogOpen = false;
-          this.options.onDialog?.(null);
+          if (!this.directoryDialog) {
+            this.dialogOpen = false;
+            this.options.onDialog?.(null);
+          }
           this.fileChooser = null;
           this.options.onFileChooser?.(null);
           this.queuedWheel = undefined;
@@ -571,6 +590,7 @@ export class DOMBrowserView {
       );
       if (message.state.active !== this.tab) {
         this.dialogOpen = false;
+        this.directoryDialog = undefined;
         this.options.onDialog?.(null);
         this.fileChooser = null;
         this.options.onFileChooser?.(null);
@@ -883,7 +903,13 @@ export class DOMBrowserView {
   private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
-      (!this.controlled && !action.kind.startsWith('tab_')) ||
+      (!this.controlled &&
+        !action.kind.startsWith('tab_') &&
+        !(
+          action.kind === 'dialog_reply' &&
+          this.editTabs &&
+          action.dialog === this.directoryDialog
+        )) ||
       (!this.editTabs &&
         action.kind.startsWith('tab_') &&
         action.kind !== 'tab_select') ||
@@ -1330,6 +1356,7 @@ export class DOMBrowserView {
     this.fileChooser = null;
     this.options.onFileChooser?.(null);
     this.dialogOpen = false;
+    this.directoryDialog = undefined;
     this.options.onDialog?.(null);
     clearTimeout(this.viewportTimer);
     this.queuedWheel = undefined;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -230,6 +230,8 @@ export type BrowserState = {
 };
 export type DialogState = {
   id: string;
+  /** Only a host-authorized tab close may request this decision without input. */
+  authority?: 'directory';
   type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
   url: string;
   message: string;

@@ -323,7 +323,7 @@ the source target grant or adapter lifetime. The standalone carrier streams
 attachments to the browser's native save UI without buffering entire files in
 viewer JavaScript.
 
-`connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously and returns a promise for the drain of submitted work and held-input cleanup. Hosts releasing a target-control lease must still await that promise.
+`connect()` admits the controller without waiting for source rendering. Consume the `snapshot` message before issuing DOM-dependent input; browser controls can remain available while a page loads. `Controller.close()` revokes synchronously, cancels navigation submitted by that controller, and returns a promise for the drain of submitted work and held-input cleanup. Every held key and button is released even if an earlier release fails. A failed drain rejects consistently and blocks subsequent controllers for that source engine; hosts must retain that failure at their target-control boundary. Hosts releasing a target-control lease must await this promise. Carrier admission must not await each command's completed source effect: deliver subsequent ordered commands so stop and dialog replies can resolve pending work, and consume the engine's acknowledgement when completion matters. Hiding a tab revokes further input while already submitted navigation may finish in the background; an explicit control release or view closure cancels pending navigation, including hidden tabs. A terminal drain failure keeps the page visibly unavailable and disables input without disabling the session’s other tabs.
 
 For a standalone loopback carrier:
 
@@ -432,6 +432,15 @@ immediately revokes its observation and input, including its resource access,
 without requiring the host to close the physical page. Creating a projection is
 lazy so a background page does not delay the initial directory.
 
+A directory-authorized tab close can ask for its source `beforeunload` decision
+without acquiring page input. The session routes that decision only to the
+requesting view, labels its dialog with `authority: 'directory'`, and verifies the
+same close grant and opaque decision identity before responding. Revocation,
+selection change or view closure dismisses the pending decision. Hosts that gate
+all page input may call `receiveDirectoryDecision(message)` first: it handles only
+that pending close decision and returns false for every other operation. Ordinary
+website dialogs still require input authority or an explicit host handler.
+
 `StandaloneSourceDirectory` is the explicit standalone policy used by `attach`:
 one initial page, its source popups and newly created tabs. Closing the last tab
 creates a blank page. It retains up to 25 closed URLs in memory for explicit
@@ -527,8 +536,8 @@ The standalone viewer always adapts automatically and has no manual size selecto
 
 Embedding hosts can pass a `mediaControls` element in `DOMBrowserView` options to place these optional controls in their browser chrome, outside the projection container. Without that mount, the viewer adds no media UI; website controls and media forwarding still work. The host should provide the toolbar mount when users need auxiliary playback controls and availability details.
 
-Use the same FloeBrowser release on both sides. Protocol version 19 adds explicit held-input release to the host-authorized
-operations, including source-element mute. It includes dialogs,
+Use the same FloeBrowser release on both sides. Protocol version 20 identifies
+directory-authorized close decisions separately from page input. It includes explicit held-input release, source-element mute, dialogs,
 find, zoom, scoped file selection and downloads, independent observation/media
 subscriptions, source-local encoded media collection, Canvas images, tab ordering,
 viewport commands and epoch-fenced input. It is not compatible with earlier

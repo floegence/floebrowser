@@ -117,7 +117,7 @@ type Watcher = ObservationOptions & {
   visible: boolean;
   send: (message: ServerMessage) => void;
   resyncPending: boolean;
-  control?: Controller;
+  control?: Controller & { suspend(): Promise<void> };
   closing?: Promise<void>;
 };
 type Viewer = {
@@ -145,9 +145,11 @@ export class BrowserProjection {
   private mainFrameID = '';
   private generation = 0;
   private epoch = '';
+  private inputDrainFailure?: AggregateError;
   private sequence = 0;
   private metadata?: eventWithTime;
   private viewer?: Viewer;
+  private navigating?: Viewer;
   private dialog?: { source: SourceDialog; state: DialogState; viewer: Viewer };
   private chooser?: {
     source: SourceFileChooser;
@@ -467,7 +469,7 @@ export class BrowserProjection {
       });
   }
   private updateState(state: Partial<BrowserState>): void {
-    if (this.controlFault && this.hasController && state.status === 'ready')
+    if (this.controlFault && state.status === 'ready')
       state = { ...state, status: 'error' };
     this.state = { ...this.state, ...state };
     this.send({ type: 'state', state: this.currentState });
@@ -810,7 +812,7 @@ export class BrowserProjection {
         if (!watcher.active || watcher.visible === visible) return;
         watcher.visible = visible;
         if (!this.domWatched) this.epoch = '';
-        if (!visible) await watcher.control?.close();
+        if (!visible) await watcher.control?.suspend();
         if (visible) {
           watcher.send({ type: 'state', state: this.currentState });
           await this.snapshot();
@@ -904,6 +906,7 @@ export class BrowserProjection {
       !watcher.visible ||
       this.closed ||
       this.closing ||
+      this.controlFault ||
       this.hasController
     )
       throw new Error('Source control unavailable');
@@ -918,7 +921,70 @@ export class BrowserProjection {
     };
     this.viewer = viewer;
     let retiring: Promise<void> | undefined;
-    const controller: Controller = {
+    let navigationStop: Promise<void> | undefined;
+    const retire = (cancelNavigation: boolean): Promise<void> => {
+      // Hiding a tab revokes further input while its submitted navigation may
+      // finish in the background. Explicit release/closure also cancels that
+      // navigation, including when a prior hide is already draining it.
+      if (
+        cancelNavigation &&
+        this.navigating &&
+        (this.navigating === viewer || this.viewer === viewer) &&
+        !navigationStop
+      ) {
+        navigationStop = this.page.stop();
+        void navigationStop.catch(() => {});
+      }
+      if (retiring) return retiring;
+      viewer.active = false;
+      const dialogDrain = this.dismissDialog(viewer);
+      const fileDrain = this.dismissFiles(viewer);
+      const interception = this.page.setFileChooserIntercepted(false);
+      this.find = new SourceFind(this.page);
+      try {
+        watcher.send({ type: 'control', target: this.id, active: false });
+      } catch {
+        /* Disconnected carrier. */
+      }
+      retiring = Promise.allSettled([
+        this.queue,
+        dialogDrain,
+        fileDrain,
+        interception,
+      ])
+        .then(async (results) => {
+          const failures = results
+            .filter((result) => result.status === 'rejected')
+            .map((result) => result.reason);
+          try {
+            await navigationStop;
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            await this.releaseInput();
+          } catch (error) {
+            failures.push(error);
+          }
+          if (failures.length && !this.page.isClosed())
+            throw new AggregateError(failures, 'Source input drain failed');
+          if (this.viewer === viewer) this.viewer = undefined;
+        })
+        .catch((error) => {
+          this.controlFault = true;
+          this.updateState({ status: 'error', loading: false });
+          throw error;
+        })
+        .finally(() => {
+          if (!this.controlFault && watcher.control === controller)
+            watcher.control = undefined;
+        });
+      // The ordered queue settles for teardown; the controller retains the
+      // rejected drain forever and controlFault fences later controllers.
+      this.queue = retiring.catch(() => {});
+      return retiring;
+    };
+    const controller: Controller & { suspend(): Promise<void> } = {
       receive: (message) => this.receive(viewer, message),
       upload: async (id, file, body, signal) => {
         const chooser = this.chooser;
@@ -935,34 +1001,8 @@ export class BrowserProjection {
         if (!current()) throw new Error('File chooser expired');
         return result;
       },
-      close: () => {
-        if (retiring) return retiring;
-        viewer.active = false;
-        const dialogDrain = this.dismissDialog(viewer);
-        const fileDrain = this.dismissFiles(viewer);
-        const interception = this.page.setFileChooserIntercepted(false);
-        this.find = new SourceFind(this.page);
-        try {
-          watcher.send({ type: 'control', target: this.id, active: false });
-        } catch {
-          /* Disconnected carrier. */
-        }
-        if (watcher.control === controller) watcher.control = undefined;
-        retiring = this.queue = Promise.all([
-          this.queue,
-          dialogDrain,
-          fileDrain,
-          interception,
-        ])
-          .then(async () => {
-            await this.releaseInput();
-            if (this.viewer === viewer) this.viewer = undefined;
-          })
-          .catch(() => {
-            this.controlFault = true;
-          });
-        return retiring;
-      },
+      close: () => retire(true),
+      suspend: () => retire(false),
     };
     watcher.control = controller;
     watcher.send({ type: 'control', target: this.id, active: true });
@@ -1509,20 +1549,15 @@ export class BrowserProjection {
       void this.refreshState();
       return;
     }
-    if (action.kind === 'navigate') {
-      await this.page.navigate(action.url);
-      return;
-    }
-    if (action.kind === 'back') {
-      await this.page.traverse(-1);
-      return;
-    }
-    if (action.kind === 'forward') {
-      await this.page.traverse(1);
-      return;
-    }
-    if (action.kind === 'reload') {
-      await this.page.reload();
+    if (['navigate', 'back', 'forward', 'reload'].includes(action.kind)) {
+      this.navigating = viewer;
+      try {
+        if (action.kind === 'navigate') await this.page.navigate(action.url);
+        else if (action.kind === 'reload') await this.page.reload();
+        else await this.page.traverse(action.kind === 'back' ? -1 : 1);
+      } finally {
+        if (this.navigating === viewer) this.navigating = undefined;
+      }
       return;
     }
     if (action.kind === 'pointer' || action.kind === 'wheel') {
@@ -1728,21 +1763,34 @@ export class BrowserProjection {
   }
 
   private async releaseInput(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed || this.page.isClosed()) {
+      this.heldKeys.clear();
+      this.heldButtons.clear();
+      return;
+    }
+    if (this.inputDrainFailure) throw this.inputDrainFailure;
+    const failures: unknown[] = [];
+    const release = async (method: string, parameters: object) => {
+      try {
+        await this.cdp.send(method, parameters);
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     for (const parameters of this.heldKeys.values())
-      await this.cdp.send('Input.dispatchKeyEvent', {
+      await release('Input.dispatchKeyEvent', {
         type: 'keyUp',
         ...parameters,
       });
     if (this.heldButtons.size)
-      await this.cdp.send('Input.dispatchMouseEvent', {
+      await release('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
         x: -1,
         y: -1,
         button: 'none',
       });
     for (const button of this.heldButtons)
-      await this.cdp.send('Input.dispatchMouseEvent', {
+      await release('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
         button: button as 'left',
         x: -1,
@@ -1750,6 +1798,13 @@ export class BrowserProjection {
       });
     this.heldKeys.clear();
     this.heldButtons.clear();
+    if (failures.length) {
+      this.inputDrainFailure = new AggregateError(
+        failures,
+        'Source input release failed',
+      );
+      throw this.inputDrainFailure;
+    }
   }
 
   private clearDialog(): void {
@@ -1802,7 +1857,16 @@ export class BrowserProjection {
 
   private async dispose(): Promise<void> {
     if (this.closed) return;
+    const failures: unknown[] = [];
     if (this.viewer) this.viewer.active = false;
+    // Cancellation must be sent before renderer configuration, which Chromium
+    // can hold behind the same unfinished navigation.
+    const navigationStop = this.navigating
+      ? this.page.stop().catch((error) => {
+          this.controlFault = true;
+          failures.push(error);
+        })
+      : Promise.resolve();
     for (const watcher of this.watchers) {
       try {
         watcher.send({
@@ -1823,9 +1887,11 @@ export class BrowserProjection {
     await this.dismissDialog();
     await this.dismissFiles();
     await this.page.setFileChooserIntercepted(false).catch(() => {});
+    await navigationStop;
     await this.queue;
-    await this.releaseInput().catch(() => {
+    await this.releaseInput().catch((error) => {
       this.controlFault = true;
+      failures.push(error);
     });
     await this.frames?.close();
     await this.evaluate(
@@ -1844,6 +1910,8 @@ export class BrowserProjection {
       .catch(() => {});
     await this.ownedSource?.dispose();
     this.resources.close();
+    if (failures.length && !this.page.isClosed())
+      throw new AggregateError(failures, 'Source input drain failed');
     attachedPages.delete(this.page);
   }
 }

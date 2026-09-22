@@ -471,11 +471,14 @@ test(
       .getByRole('heading', { name: 'This page couldn’t be loaded' })
       .waitFor();
     const before = s.other.url();
-    await s.viewer.locator('#address').fill(s.site.url);
-    await s.viewer.locator('#address').press('Enter');
-    await s.viewer
-      .getByText('The source page is unavailable.', { exact: true })
-      .waitFor();
+    assert.equal(
+      await s.viewer
+        .locator('#address')
+        .evaluate((input: HTMLInputElement) => input.readOnly),
+      true,
+      'A terminal input drain must not advertise editable page controls',
+    );
+    assert.equal(await s.viewer.locator('#reload').isDisabled(), true);
     assert.equal(
       s.other.url(),
       before,

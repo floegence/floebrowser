@@ -117,7 +117,7 @@ test('projection ports credit each consumer independently and carry no environme
     });
   });
   await wait(() => state.opened === 1);
-  await state.emit({ type: 'hello', version: 19, mediaWireVersion: 1 });
+  await state.emit({ type: 'hello', version: 20, mediaWireVersion: 1 });
   assert.equal(received.length, 1);
   let consumed = false;
   const sending = Promise.resolve(state.frame(frame())).then(() => {

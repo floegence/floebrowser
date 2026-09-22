@@ -66,6 +66,7 @@ export async function createProjectionServer(
   });
   let origin = '';
   let closing = false;
+  let disposal: Promise<void> | undefined;
   let admission = Promise.resolve();
   let active:
     | {
@@ -333,7 +334,9 @@ export async function createProjectionServer(
     });
     ws.on('close', () => {
       disconnected = true;
-      if (controller) void viewer.release();
+      // The engine retains a terminal drain fault. A disconnected carrier has
+      // no recipient for the rejection and must not crash healthy sessions.
+      if (controller) void viewer.release().catch(() => {});
     });
     ws.on('message', (data) => {
       let input: unknown;
@@ -371,7 +374,7 @@ export async function createProjectionServer(
               'Control moved to another window',
             );
           }
-          void active.release();
+          void active.release().catch(() => {});
         }
         if (closing || disconnected || ws.readyState !== WebSocket.OPEN) return;
         controller = await session.connect(
@@ -439,17 +442,22 @@ export async function createProjectionServer(
       return session.activeProjection;
     },
     url: `${origin}${base}`,
-    async close(): Promise<void> {
-      if (closing) return;
-      closing = true;
-      for (const client of sockets.clients) client.terminate();
-      sockets.close();
-      await admission;
-      await active?.release();
-      await session.close();
-      if (!options.mediaBridge) await mediaBridge.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+    close(): Promise<void> {
+      return (disposal ??= (async () => {
+        closing = true;
+        const failures: unknown[] = [];
+        for (const client of sockets.clients) client.terminate();
+        sockets.close();
+        await admission;
+        await active?.release().catch((error) => failures.push(error));
+        await session.close().catch((error) => failures.push(error));
+        if (!options.mediaBridge)
+          await mediaBridge.close().catch((error) => failures.push(error));
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        if (failures.length)
+          throw new AggregateError(failures, 'Source cleanup failed');
+      })());
     },
   };
 }

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { MEDIA_WIRE_VERSION } from '../shared/media-wire.js';
 import type { Page } from 'playwright';
-import type { SourcePage } from './source.js';
+import type { SourceDialog, SourcePage } from './source.js';
 import {
   StandaloneSourceDirectory,
   type SourceDirectory,
@@ -27,6 +27,13 @@ import {
 } from '../shared/protocol.js';
 
 type Tab = { page: SourcePage; engine: BrowserProjection };
+type DirectoryClose = {
+  viewer: Viewer;
+  page: SourcePage;
+  authorize: AttachOptions['authorize'];
+  dialog?: SourceDialog;
+  id?: string;
+};
 export interface SessionViewOptions extends ObservationOptions {
   initialTab?: string;
   /** Synchronous host grant predicate. Call refreshGrants after changing it. */
@@ -54,7 +61,8 @@ type Viewer = {
   mediaEnabled: boolean;
   lastID: number;
   pending: number;
-  retiring: Set<Promise<void>>;
+  retiring: Map<Promise<void>, Controller | undefined>;
+  retirementFailure?: unknown;
 };
 export interface SessionConnection extends Controller {
   readonly id: string;
@@ -75,6 +83,9 @@ export interface SessionConnection extends Controller {
     canControl?: (page: SourcePage) => boolean,
   ): Promise<boolean>;
   releaseControl(): Promise<void>;
+  /** Handles only a pending directory-owned close decision. Hosts may route
+   * this separately from page input; false grants no other action authority. */
+  receiveDirectoryDecision(message: ClientMessage): Promise<boolean>;
   download(
     tab: string,
     id: string,
@@ -100,6 +111,7 @@ export class BrowserSession {
   private directoryOrder: string[] = [];
   private unsubscribe?: () => void;
   private closing?: Promise<void>;
+  private directoryClosures = new Map<string, DirectoryClose>();
   private constructor(
     private directory: SourceDirectory,
     private options: AttachOptions,
@@ -173,7 +185,9 @@ export class BrowserSession {
     this.directoryOrder = ids;
     for (const id of this.tabs.keys()) if (!ids.includes(id)) this.drop(id);
     for (const viewer of this.viewers)
-      void this.refreshGrants(viewer, change, previous);
+      void this.refreshGrants(viewer, change, previous).catch(() =>
+        this.unavailable(viewer),
+      );
     if (!ids.includes(this.resumeTab)) this.resumeTab = ids[0] ?? '';
   }
   private refreshGrants(
@@ -192,6 +206,9 @@ export class BrowserSession {
       this.trackRetirement(viewer, control.close());
     }
     const ids = this.entries(viewer).map((entry) => entry.page.id);
+    for (const close of this.directoryClosures.values())
+      if (close.viewer === viewer && !ids.includes(close.page.id))
+        this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
     viewer.transfers.retain((page) => ids.includes(page.id));
     for (const [id, observation] of viewer.observations)
       if (!ids.includes(id)) {
@@ -229,7 +246,7 @@ export class BrowserSession {
     }
     this.publish(viewer);
     this.publishDownloads(viewer);
-    return Promise.all([viewer.directoryWork, ...viewer.retiring]).then(
+    return Promise.all([viewer.directoryWork, ...viewer.retiring.keys()]).then(
       () => {},
     );
   }
@@ -329,6 +346,8 @@ export class BrowserSession {
           else this.publish();
         },
         onPopup: () => {}, // Only the directory owner can admit popups.
+        onUncontrolledDialog: (dialog, source) =>
+          this.directoryDialog(dialog, source),
       });
       if (
         this.closing ||
@@ -355,18 +374,37 @@ export class BrowserSession {
   private unavailable(viewer: Viewer): void {
     if (viewer.active) viewer.send({ type: 'notice', code: 'tab_unavailable' });
   }
-  private trackRetirement(viewer: Viewer, work: Promise<void>): void {
-    viewer.retiring.add(work);
-    void work.finally(() => viewer.retiring.delete(work)).catch(() => {});
+  private trackRetirement(
+    viewer: Viewer,
+    work: Promise<void>,
+    controller?: Controller,
+  ): void {
+    viewer.retiring.set(work, controller);
+    void work
+      .catch((error) => {
+        viewer.retirementFailure ??= error;
+      })
+      .finally(() => viewer.retiring.delete(work));
+  }
+  private async drainRetirements(viewer: Viewer): Promise<void> {
+    await Promise.allSettled(viewer.retiring.keys());
+    if (viewer.retirementFailure) throw viewer.retirementFailure;
   }
   private retire(viewer: Viewer): void {
+    for (const close of this.directoryClosures.values())
+      if (close.viewer === viewer && close.dialog)
+        this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
     const observation = viewer.observation;
+    const controller = viewer.controller;
     viewer.controller = undefined;
     viewer.observation = undefined;
     if (observation)
-      this.trackRetirement(viewer, observation.setVisible(false));
+      this.trackRetirement(viewer, observation.setVisible(false), controller);
   }
   private closeObservations(viewer: Viewer): void {
+    for (const close of this.directoryClosures.values())
+      if (close.viewer === viewer)
+        this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
     viewer.transfers.close();
     viewer.controller = undefined;
     viewer.observation = undefined;
@@ -398,11 +436,18 @@ export class BrowserSession {
       viewer.canControl === canControl &&
       canControl(tab.page) &&
       this.entries(viewer).some((entry) => entry.page === tab.page);
-    const controller = await tab.engine.acquireControl(
-      observation,
-      authorize,
-      admitted,
-    );
+    let controller: Controller;
+    try {
+      controller = await tab.engine.acquireControl(
+        observation,
+        authorize,
+        admitted,
+      );
+    } catch {
+      // A terminal source-control fault does not revoke authorized viewing or
+      // the session directory. A healthy tab can still be selected.
+      return false;
+    }
     if (!admitted()) {
       this.trackRetirement(viewer, controller.close());
       return false;
@@ -518,7 +563,7 @@ export class BrowserSession {
       mediaEnabled: options.media !== false,
       lastID: 0,
       pending: 0,
-      retiring: new Set(),
+      retiring: new Map(),
     };
     const entries = this.entries(viewer);
     viewer.selected =
@@ -554,6 +599,25 @@ export class BrowserSession {
         return session.state(viewer);
       },
       receive: (message) => this.receive(viewer, message),
+      receiveDirectoryDecision: async (input) => {
+        const parsed = clientMessageSchema.safeParse(input);
+        if (!parsed.success) return false;
+        const message = parsed.data;
+        if (
+          message.type !== 'command' ||
+          message.action.kind !== 'dialog_reply'
+        )
+          return false;
+        const close = this.directoryClosures.get(message.tab);
+        if (
+          close?.viewer !== viewer ||
+          !close.dialog ||
+          close.id !== message.action.dialog
+        )
+          return false;
+        await this.receive(viewer, message);
+        return true;
+      },
       upload: (id, file, body, signal) => {
         if (
           !viewer.active ||
@@ -592,6 +656,9 @@ export class BrowserSession {
       setDirectoryAuthority: (authorize) => {
         if (!viewer.active) return;
         viewer.directoryAuthorize = authorize;
+        for (const close of this.directoryClosures.values())
+          if (close.viewer === viewer && close.authorize !== authorize)
+            this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
         send({ type: 'session_access', editTabs: Boolean(authorize) });
       },
       acquireControl: async (authorize, canControl) => {
@@ -607,12 +674,14 @@ export class BrowserSession {
           return false;
         return this.control(viewer);
       },
-      releaseControl: () => {
+      releaseControl: async () => {
         viewer.authorize = undefined;
         viewer.canControl = undefined;
         const control = viewer.controller;
         viewer.controller = undefined;
-        return control?.close() ?? Promise.resolve();
+        for (const retiring of new Set([control, ...viewer.retiring.values()]))
+          if (retiring) this.trackRetirement(viewer, retiring.close());
+        await this.drainRetirements(viewer);
       },
       refreshGrants: () => this.refreshGrants(viewer),
       readResource: (tab, id) => this.readViewerResource(viewer, tab, id),
@@ -635,7 +704,7 @@ export class BrowserSession {
           this.closeObservations(viewer);
           this.viewers.delete(viewer);
           await viewer.queue;
-          await Promise.all(viewer.retiring);
+          await this.drainRetirements(viewer);
         })()),
     };
   }
@@ -673,7 +742,7 @@ export class BrowserSession {
       viewer.selected &&
       !this.entries(viewer).some((entry) => entry.page.id === viewer.selected)
     )
-      void this.refreshGrants(viewer);
+      void this.refreshGrants(viewer).catch(() => this.unavailable(viewer));
     if (message.type === 'media_keyframe')
       return (
         viewer.observations.get(message.tab)?.receive(message) ??
@@ -695,6 +764,35 @@ export class BrowserSession {
     if (message.tab !== viewer.selected) {
       ack('stale_view');
       return Promise.resolve();
+    }
+    const closing = this.directoryClosures.get(message.tab);
+    const action = message.action;
+    if (
+      action.kind === 'dialog_reply' &&
+      closing?.viewer === viewer &&
+      closing.id === action.dialog &&
+      closing.dialog
+    ) {
+      const dialog = closing.dialog;
+      return (async () => {
+        const permitted = await closing.authorize({
+          kind: 'tab_close',
+          tab: message.tab,
+        });
+        if (
+          !permitted ||
+          !viewer.active ||
+          viewer.directoryAuthorize !== closing.authorize ||
+          closing.dialog !== dialog ||
+          !this.entries(viewer).some((entry) => entry.page === closing.page)
+        ) {
+          ack('not_allowed');
+          return;
+        }
+        this.clearDirectoryDialog(closing);
+        await dialog.respond(action.accept);
+        ack();
+      })().catch(() => ack('action_failed'));
     }
     if (!message.action.kind.startsWith('tab_')) {
       if (viewer.controller) return viewer.controller.receive(message);
@@ -768,8 +866,26 @@ export class BrowserSession {
           else if (action.kind === 'tab_select')
             await this.select(viewer, action.tab);
           else if (action.kind === 'tab_close') {
-            await this.directory.close(action.tab);
-            await viewer.directoryWork;
+            if (this.directoryClosures.has(action.tab)) {
+              ack('busy');
+              return;
+            }
+            const page = this.entries(viewer).find(
+              (entry) => entry.page.id === action.tab,
+            )!.page;
+            const closing: DirectoryClose = {
+              viewer,
+              page,
+              authorize: authorize!,
+            };
+            this.directoryClosures.set(action.tab, closing);
+            try {
+              await this.directory.close(action.tab);
+              await viewer.directoryWork;
+            } finally {
+              await this.dismissDirectoryDialog(closing);
+              this.directoryClosures.delete(action.tab);
+            }
           }
         }
         ack();
@@ -782,6 +898,70 @@ export class BrowserSession {
       .finally(() => {
         viewer.pending--;
       });
+  }
+  private clearDirectoryDialog(close: DirectoryClose): void {
+    const pending = close.dialog;
+    close.dialog = undefined;
+    close.id = undefined;
+    if (pending) {
+      try {
+        close.viewer.send({
+          type: 'dialog',
+          target: close.page.id,
+          dialog: null,
+        });
+      } catch {
+        /* The former carrier may have closed. */
+      }
+    }
+  }
+  private async dismissDirectoryDialog(close: DirectoryClose): Promise<void> {
+    const dialog = close.dialog;
+    this.clearDirectoryDialog(close);
+    await dialog?.respond(false);
+  }
+  private directoryDialog(dialog: SourceDialog, page: SourcePage): void {
+    const close = this.directoryClosures.get(page.id);
+    const permitted = () =>
+      close &&
+      close.viewer.active &&
+      close.viewer.directoryAuthorize === close.authorize &&
+      this.entries(close.viewer).some((entry) => entry.page === page);
+    if (!close || dialog.type !== 'beforeunload') {
+      if (this.options.onUncontrolledDialog)
+        this.options.onUncontrolledDialog(dialog, page);
+      else void dialog.respond(false).catch(() => {});
+      return;
+    }
+    void (async () => {
+      if (!permitted()) {
+        await dialog.respond(false);
+        return;
+      }
+      if (close.viewer.selected !== page.id)
+        await this.select(close.viewer, page.id);
+      if (!permitted()) {
+        await dialog.respond(false);
+        return;
+      }
+      close.dialog = dialog;
+      close.id = randomBytes(18).toString('base64url');
+      close.viewer.send({
+        type: 'dialog',
+        target: page.id,
+        dialog: {
+          id: close.id,
+          type: 'beforeunload',
+          authority: 'directory',
+          url: dialog.url.slice(0, 8192),
+          message: dialog.message.slice(0, 16000),
+          defaultPrompt: '',
+          truncated: dialog.message.length > 16000,
+        },
+      });
+    })().catch(() => {
+      void dialog.respond(false).catch(() => {});
+    });
   }
   requestMediaKeyframe(scope: {
     target: string;
@@ -816,19 +996,24 @@ export class BrowserSession {
         viewer.directoryAuthorize = undefined;
         this.closeObservations(viewer);
       }
-      await Promise.all(
-        [...this.viewers].flatMap((viewer) => [
-          viewer.queue,
-          ...viewer.retiring,
-        ]),
+      const retirements = await Promise.allSettled(
+        [...this.viewers].map(async (viewer) => {
+          await viewer.queue;
+          await this.drainRetirements(viewer);
+        }),
       );
       this.viewers.clear();
       await Promise.allSettled(this.adding.values());
-      await Promise.all(
+      const engines = await Promise.allSettled(
         [...this.tabs.values()].map(({ engine }) => engine.close()),
       );
       this.tabs.clear();
-      await this.owner?.dispose();
+      const owners = await Promise.allSettled([this.owner?.dispose()]);
+      const failures = [...retirements, ...engines, ...owners]
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (failures.length)
+        throw new AggregateError(failures, 'Session source cleanup failed');
     })());
   }
 }

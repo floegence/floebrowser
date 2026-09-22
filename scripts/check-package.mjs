@@ -66,7 +66,7 @@ for (const artifact of bundle.artifacts) {
   assert.equal(bytes.length, artifact.bytes);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
 }
-assert.equal(PROTOCOL_VERSION, 19);
+assert.equal(PROTOCOL_VERSION, 20);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 assert.equal(typeof projectionPortConnection, 'function');
 assert.equal(typeof serveProjectionPorts, 'function');
@@ -83,6 +83,7 @@ try {
   const observer = await embedded.observe(message => { if (message.type === 'session_access') access.push(message.editTabs); }, { media: false, canHear: () => false });
   assert.equal(access.at(-1), false);
   observer.setDirectoryAuthority(() => true);
+  assert.equal(await observer.receiveDirectoryDecision({ type:'command', id:1, tab:observer.currentState.active, epoch:'', action:{kind:'dialog_reply',dialog:'not-pending',accept:true} }), false);
   assert.equal(access.at(-1), true);
   observer.setDirectoryAuthority();
   assert.equal(await observer.acquireControl(() => true, () => false), false);
