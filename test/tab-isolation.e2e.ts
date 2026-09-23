@@ -349,12 +349,13 @@ test(
   { timeout: 15000 },
   async (t) => {
     const s = await setup(t);
-    const cdp = (s.service.engine as any).cdp;
+    const engine = s.service.engine as any;
+    const cdp = engine.cdp;
     let mutations = 0;
     cdp.on(
       'Runtime.bindingCalled',
       (event: { name: string; payload: string }) => {
-        if (event.name !== (s.service.engine as any).binding) return;
+        if (event.name !== engine.binding) return;
         const data = JSON.parse(event.payload);
         if (data.type === 3 && data.data.source === 0) mutations++;
       },

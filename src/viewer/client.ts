@@ -697,11 +697,13 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'snapshot') {
+      // The source has already advanced its epoch. Cleanup releases held input
+      // through the current controller before the replacement becomes usable.
+      this.epoch = message.epoch;
       this.prepareFrame();
       this.ready = false;
       this.pageError.hidden = true;
       this.queuedWheel = undefined;
-      this.epoch = message.epoch;
       this.documentURL = this.tabURLs.get(this.tab) ?? '';
       this.sequence = message.sequence;
       this.resyncing = false;

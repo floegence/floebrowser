@@ -69,6 +69,7 @@ for (const context of ['2d', 'webgl2'] as const)
       const viewer = await clientBrowser.newPage();
       viewer.setDefaultTimeout(5000);
       const failures: unknown[] = [];
+      const commands = new Map<number, unknown>();
       await viewer.addInitScript(() => {
         const Socket = WebSocket;
         (window as any).WebSocket = class extends Socket {
@@ -87,13 +88,19 @@ for (const context of ['2d', 'webgl2'] as const)
           }
         };
       });
-      viewer.on('websocket', (socket) =>
+      viewer.on('websocket', (socket) => {
+        socket.on('framesent', ({ payload }) => {
+          if (typeof payload !== 'string') return;
+          const message = JSON.parse(payload);
+          if (message.type === 'command') commands.set(message.id, message);
+        });
         socket.on('framereceived', ({ payload }) => {
           if (typeof payload !== 'string') return;
           const m = JSON.parse(String(payload));
-          if (m.type === 'ack' && !m.ok) failures.push(m);
-        }),
-      );
+          if (m.type === 'ack' && !m.ok)
+            failures.push({ ...m, command: commands.get(m.id) });
+        });
+      });
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor({ timeout: 5000 });
       const pixels = () =>

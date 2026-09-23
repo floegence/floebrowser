@@ -4,6 +4,64 @@ import { chromium, firefox, webkit } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 import { clickProjected } from './projected-input.js';
 
+test(
+  'a DOM checkpoint releases held source input using its current epoch',
+  { timeout: 15000 },
+  async (t) => {
+    const browser = await chromium.launch();
+    const source = await browser.newPage();
+    await source.goto(`data:text/html,<input><script>
+    window.shift = false;
+    addEventListener('keydown', e => { if (e.key === 'Shift') window.shift = true; });
+    addEventListener('keyup', e => { if (e.key === 'Shift') window.shift = false; });
+  </script>`);
+    const service = await createProjectionServer(source, {
+      authorize: () => true,
+    });
+    t.after(async () => {
+      await service.close();
+      await browser.close();
+    });
+    const viewer = await browser.newPage();
+    viewer.setDefaultTimeout(4000);
+    const releases = new Set<number>();
+    const acknowledgements: any[] = [];
+    viewer.on('websocket', (socket) => {
+      socket.on('framesent', ({ payload }) => {
+        if (typeof payload !== 'string') return;
+        const message = JSON.parse(payload);
+        if (
+          message.type === 'command' &&
+          message.action.kind === 'release_input'
+        )
+          releases.add(message.id);
+      });
+      socket.on('framereceived', ({ payload }) => {
+        if (typeof payload !== 'string') return;
+        const message = JSON.parse(payload);
+        if (message.type === 'ack' && releases.has(message.id))
+          acknowledgements.push(message);
+      });
+    });
+    await viewer.goto(service.url);
+    await clickProjected(
+      viewer.frameLocator('#viewport iframe').locator('input'),
+    );
+    await viewer.keyboard.down('Shift');
+    await source.waitForFunction(() => (window as any).shift);
+    await (service.engine as any).snapshot();
+    await source.waitForFunction(() => !(window as any).shift);
+    await viewer.locator('#status.live').waitFor();
+    await viewer.keyboard.up('Shift');
+    assert.equal(acknowledgements.length, 1);
+    assert.equal(
+      acknowledgements[0].ok,
+      true,
+      'Checkpoint cleanup must not submit an obsolete epoch',
+    );
+  },
+);
+
 for (const client of [chromium, firefox, webkit])
   test(
     `${client.name()} cancels obsolete composition and releases source input when focus leaves`,
