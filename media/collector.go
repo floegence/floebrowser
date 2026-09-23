@@ -104,7 +104,7 @@ func NewCollector(scope Scope, onTrack func(*Track)) (*Collector, error) {
 		}
 	}
 	registry := &interceptor.Registry{}
-	if err = webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
+	if err = webrtc.RegisterDefaultInterceptorsWithOptions(engine, registry, webrtc.WithInterceptorLoggerFactory(logger)); err != nil {
 		_ = mux.Close()
 		return nil, err
 	}
