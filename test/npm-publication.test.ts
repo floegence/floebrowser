@@ -11,6 +11,8 @@ const environment = {
   GITHUB_ACTIONS: 'true',
   GITHUB_REPOSITORY: 'floegence/floebrowser',
   GITHUB_REF: 'refs/tags/v0.1.9',
+  GITHUB_EVENT_NAME: 'release',
+  RELEASE_TAG: 'v0.1.9',
   ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-only',
 };
@@ -22,6 +24,8 @@ test('npm publication accepts only the matching release artifact and GitHub OIDC
     { GITHUB_REPOSITORY: 'other/floebrowser' },
     { GITHUB_REF: 'refs/heads/main' },
     { GITHUB_REF: 'refs/tags/v0.1.8' },
+    { RELEASE_TAG: 'v0.1.8' },
+    { GITHUB_EVENT_NAME: 'push' },
     { ACTIONS_ID_TOKEN_REQUEST_URL: '' },
     { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' },
     { NODE_AUTH_TOKEN: 'test-only' },
@@ -38,4 +42,22 @@ test('npm publication accepts only the matching release artifact and GitHub OIDC
     assert.throws(() =>
       verifyPublication(pkg, { ...pkg, ...changed }, environment),
     );
+});
+
+test('manual recovery uses the qualified release tag from the main publication workflow', () => {
+  const manual = {
+    ...environment,
+    GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REF: 'refs/heads/main',
+  };
+  assert.doesNotThrow(() => verifyPublication(pkg, pkg, manual));
+  assert.throws(() =>
+    verifyPublication(pkg, pkg, {
+      ...manual,
+      GITHUB_REF: 'refs/heads/feature',
+    }),
+  );
+  assert.throws(() =>
+    verifyPublication(pkg, pkg, { ...manual, RELEASE_TAG: 'v0.1.8' }),
+  );
 });

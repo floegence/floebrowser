@@ -825,6 +825,7 @@ bytes through GitHub OIDC, then verifies npm integrity, tarball bytes and proven
 It uses no persistent npm token or per-version browser authorization. The matching
 `media/vX.Y.Z` tag identifies the same source commit.
 
-To recover a transient publication failure, dispatch that workflow at the same
-release tag. An already published version must match the qualified archive;
+To recover a publication failure, dispatch that workflow from `main`, supplying
+the same existing `release_tag`. It reads package identity from that tag while
+running the current publication workflow. An already published version must match the qualified archive;
 the workflow never replaces a version or silently accepts different bytes.

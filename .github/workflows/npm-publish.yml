@@ -3,20 +3,41 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing qualified release tag to publish
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
   publish:
-    if: github.repository == 'floegence/floebrowser' && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'floegence/floebrowser' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     concurrency:
-      group: npm-publish-${{ github.ref }}
+      group: npm-publish
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve the qualified release
+        id: release
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            tag="$INPUT_RELEASE_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          path: qualified-source
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
@@ -24,16 +45,18 @@ jobs:
       - name: Download the qualified release artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           mkdir release
           gh release download "$RELEASE_TAG" --dir release --pattern 'floegence-floebrowser-*.tgz' --pattern SHA256SUMS
           cd release
           sha256sum --check --strict SHA256SUMS
       - name: Publish with npm Trusted Publisher and verify registry readback
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: node scripts/publish-npm.mjs
       - uses: actions/upload-artifact@v4
         with:
-          name: npm-readback-${{ github.ref_name }}
+          name: npm-readback-${{ steps.release.outputs.tag }}
           path: release/npm-readback.json
           if-no-files-found: error

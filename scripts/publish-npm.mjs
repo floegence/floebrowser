@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 
 export function verifyPublication(source, packed, environment) {
   assert.equal(
@@ -12,7 +13,13 @@ export function verifyPublication(source, packed, environment) {
   );
   assert.equal(environment.GITHUB_REPOSITORY, 'floegence/floebrowser');
   assert.match(source.version, /^\d+\.\d+\.\d+$/u);
-  assert.equal(environment.GITHUB_REF, `refs/tags/v${source.version}`);
+  assert.equal(environment.RELEASE_TAG, `v${source.version}`);
+  if (environment.GITHUB_EVENT_NAME === 'release') {
+    assert.equal(environment.GITHUB_REF, `refs/tags/v${source.version}`);
+  } else {
+    assert.equal(environment.GITHUB_EVENT_NAME, 'workflow_dispatch');
+    assert.equal(environment.GITHUB_REF, 'refs/heads/main');
+  }
   assert.ok(environment.ACTIONS_ID_TOKEN_REQUEST_URL, 'OIDC must be available');
   assert.ok(
     environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
@@ -33,9 +40,13 @@ export function verifyPublication(source, packed, environment) {
 }
 
 export async function publish() {
-  const source = JSON.parse(await readFile('package.json', 'utf8'));
+  const source = JSON.parse(
+    await readFile('qualified-source/package.json', 'utf8'),
+  );
   assert.match(source.version, /^\d+\.\d+\.\d+$/u);
-  const archive = `release/floegence-floebrowser-${source.version}.tgz`;
+  const archive = resolve(
+    `release/floegence-floebrowser-${source.version}.tgz`,
+  );
   const packed = JSON.parse(
     execFileSync('tar', ['-xOf', archive, 'package/package.json'], {
       encoding: 'utf8',
