@@ -693,6 +693,18 @@ for source-selected form and nested-frame text in all three engines. These
 Playwright development-engine tests do not qualify current stable Safari,
 Firefox or Edge.
 
+Audio/video synchronization has a separate acceptance check in
+`test/media-sync.e2e.ts`, including a Firefox viewer. The file-backed capture path
+currently fails its unchanged 100 ms maximum on the tested macOS host. A native
+Chromium 153.0.8010.12 reproduction, without FloeBrowser, RTP encoding or a remote
+viewer, measured approximately 204–208 ms between matching audio/video pulse
+timestamps from `HTMLMediaElement.captureStream()`. The capture path copies
+upcoming audio with a timestamp reduced by device output delay, while captured
+video uses the current capture time. Public captured-track settings do not expose
+that renderer delay. This remains a qualification blocker; decoder coverage does
+not certify synchronization, and neither hardcoded compensation nor source audio
+rerouting is used to conceal the failure.
+
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
 | Website category | Sample and observed outcome                                                                                                              |

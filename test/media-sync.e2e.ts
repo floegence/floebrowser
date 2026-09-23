@@ -3,16 +3,17 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chromium } from 'playwright';
+import { chromium, firefox } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
-for (const { videoDelay, audioStartupDelay } of [
-  { videoDelay: 0, audioStartupDelay: 0 },
-  { videoDelay: 300, audioStartupDelay: 0 },
-  { videoDelay: 300, audioStartupDelay: 180 },
+for (const { videoDelay, audioStartupDelay, viewerEngine } of [
+  { videoDelay: 0, audioStartupDelay: 0, viewerEngine: 'chromium' },
+  { videoDelay: 0, audioStartupDelay: 0, viewerEngine: 'firefox' },
+  { videoDelay: 300, audioStartupDelay: 0, viewerEngine: 'chromium' },
+  { videoDelay: 300, audioStartupDelay: 180, viewerEngine: 'chromium' },
 ])
   test(
-    `displayed video and audible pulses preserve source synchronization after ${videoDelay} ms of initial video loss and ${audioStartupDelay} ms audio startup`,
+    `displayed video and audible pulses in ${viewerEngine} preserve source synchronization after ${videoDelay} ms of initial video loss and ${audioStartupDelay} ms audio startup`,
     { timeout: 30000 },
     async (t) => {
       // Generated VP8/Opus fixture: each second starts with a simultaneous white
@@ -47,7 +48,10 @@ for (const { videoDelay, audioStartupDelay } of [
         await browser.close();
         await new Promise<void>((resolve) => site.close(() => resolve()));
       });
-      const viewer = await browser.newPage();
+      const viewerBrowser =
+        viewerEngine === 'firefox' ? await firefox.launch() : browser;
+      if (viewerBrowser !== browser) t.after(() => viewerBrowser.close());
+      const viewer = await viewerBrowser.newPage();
       viewer.setDefaultTimeout(5000);
       await viewer.addInitScript(
         ({ videoDelay, audioStartupDelay }) => {
