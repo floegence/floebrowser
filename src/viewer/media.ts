@@ -230,8 +230,13 @@ export class MediaView {
         let binary = '';
         for (let i = 0; i < bytes.length; i += 8192)
           binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-        playback.canvasImage = `data:image/webp;base64,${btoa(binary)}`;
-        playback.canvasSize = undefined;
+        const image = `data:image/webp;base64,${btoa(binary)}`;
+        // Sources can repaint or retransmit identical pixels. Keep their decoded
+        // resource instead of allocating another SVG document for every packet.
+        if (playback.canvasImage !== image) {
+          playback.canvasImage = image;
+          playback.canvasSize = undefined;
+        }
         this.update();
       });
       return;

@@ -569,3 +569,81 @@ test(
     });
   },
 );
+
+test(
+  'Canvas retransmissions reuse the decoded resource while changed pixels and dimensions still update',
+  { timeout: 20000 },
+  async (t) => {
+    const browser = await chromium.launch({ channel: 'chromium' });
+    const source = await browser.newPage();
+    await source.goto(
+      'data:text/html,<canvas id="scene" width="160" height="90"></canvas>',
+    );
+    await source.evaluate(() => {
+      const canvas = document.querySelector('canvas')!;
+      (window as any).color = 'lime';
+      setInterval(() => {
+        const context = canvas.getContext('2d')!;
+        context.fillStyle = (window as any).color;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }, 40);
+    });
+    const service = await createProjectionServer(source, {
+      authorize: () => true,
+    });
+    const viewer = await browser.newPage();
+    t.after(async () => {
+      await service.close();
+      await browser.close();
+    });
+    await viewer.goto(service.url);
+    const displayedColor = ({
+      channel,
+      width,
+    }: {
+      channel: number;
+      width: number;
+    }) => {
+      const image = document
+        .querySelector<HTMLIFrameElement>('#viewport iframe')
+        ?.contentDocument?.querySelector<HTMLImageElement>('#scene');
+      if (!image?.complete || image.naturalWidth !== width) return false;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(image, 0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[channel]! > 180;
+    };
+    await viewer.waitForFunction(displayedColor, { channel: 1, width: 160 });
+    const resources = await viewer.evaluate(async () => {
+      const image = document
+        .querySelector<HTMLIFrameElement>('#viewport iframe')!
+        .contentDocument!.querySelector<HTMLImageElement>('#scene')!;
+      const before = image.src;
+      let changes = 0;
+      const observer = new MutationObserver((records) => {
+        changes += records.filter(
+          (record) => record.attributeName === 'src',
+        ).length;
+      });
+      observer.observe(image, { attributes: true });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      observer.disconnect();
+      return { before, after: image.src, changes };
+    });
+    assert.equal(
+      resources.changes,
+      0,
+      'Retransmitting identical pixels must not allocate and decode another image',
+    );
+    assert.equal(resources.after, resources.before);
+    await source.evaluate(() => {
+      (window as any).color = 'blue';
+    });
+    await viewer.waitForFunction(displayedColor, { channel: 2, width: 160 });
+    await source.evaluate(() => {
+      document.querySelector('canvas')!.width = 320;
+    });
+    await viewer.waitForFunction(displayedColor, { channel: 2, width: 320 });
+  },
+);
