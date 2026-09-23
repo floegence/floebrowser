@@ -201,19 +201,40 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 	}
 	defer track.queue.Close()
 	clock := &trackClock{started: c.started, rate: int64(codec.ClockRate)}
+	synchronized := make(chan struct{})
+	reportsEnded := make(chan struct{})
 	go func() {
+		defer close(reportsEnded)
+		ready := false
 		for {
 			packets, _, err := receiver.ReadRTCP()
 			if err != nil {
 				return
 			}
 			for _, p := range packets {
-				if report, ok := p.(*rtcp.SenderReport); ok {
+				if report, ok := p.(*rtcp.SenderReport); ok && report.SSRC == uint32(remote.SSRC()) {
 					clock.report(report.RTPTime, report.NTPTime)
+					if !ready {
+						ready = true
+						close(synchronized)
+					}
 				}
 			}
 		}
 	}()
+	// Audio and video have independent random RTP origins. Request their
+	// authoritative mapping immediately (RFC 6051), rather than inventing two
+	// clocks from arrival times until the periodic sender reports happen to arrive.
+	// Leave the first RTP packets in the bounded receiver while the report is in
+	// flight, preserving even an isolated paused picture.
+	if err := c.peer.WriteRTCP([]rtcp.Packet{&rtcp.RapidResynchronizationRequest{MediaSSRC: uint32(remote.SSRC())}}); err != nil {
+		return
+	}
+	select {
+	case <-synchronized:
+	case <-reportsEnded:
+		return
+	}
 	// The sequence window must hold a complete encoded picture, not just its
 	// reorder tail. Sixteen RTP packets truncated ordinary detailed keyframes.
 	// Bound retention to 2048 packets (at most 3 MiB with Pion's 1500-byte MTU),
@@ -350,9 +371,7 @@ func (c *trackClock) timestamp(value uint32) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.set {
-		c.set = true
-		c.rtp = value
-		c.at = time.Now()
+		return -1
 	}
 	stamp := c.at.Sub(c.started).Microseconds() + int64(int32(value-c.rtp))*1_000_000/c.rate
 	c.last = max(c.last, stamp, 0)

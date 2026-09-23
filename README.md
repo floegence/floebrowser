@@ -710,6 +710,13 @@ preservation and cleanup; `test/media-presentation.e2e.ts` checks short future
 pictures and their fixed deadlines in Chromium and Firefox. Decoder coverage
 alone does not certify synchronization or qualify a product's transport path.
 
+The loopback collector requests an immediate RTCP sender report when each RTP
+track starts (RFC 6051). It publishes frames only after that track's source clock
+is known, retaining the initial packets in the bounded receiver during the
+handshake. Audio and video never establish independent clocks from packet arrival
+times. Collector tests delay the report explicitly and verify that a paused final
+picture survives with its authoritative source timestamp.
+
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
 | Website category | Sample and observed outcome                                                                                                              |

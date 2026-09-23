@@ -11,6 +11,9 @@ func TestTrackClocksPreserveOneSourceTimeline(t *testing.T) {
 	// reports map them to the same wall clock, including video RTP wraparound.
 	video := &trackClock{started: started, rate: 90000}
 	audio := &trackClock{started: started, rate: 48000}
+	if got := audio.timestamp(7960); got != -1 {
+		t.Fatalf("unsynchronized presentation time = %d, want invalid", got)
+	}
 	ntp := uint64(started.Unix()+2208988800)<<32 | uint64(1)<<30
 	video.report(0xffffff00, ntp)
 	audio.report(7000, ntp)

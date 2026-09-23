@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
@@ -70,7 +72,8 @@ func TestCollectorNegotiatesOnlyLoopbackWithoutRelay(t *testing.T) {
 func TestCollectorDeliversAnIsolatedLastVideoFrame(t *testing.T) {
 	for _, size := range []int{11, 128 * 1024, 40 * 1024} {
 		t.Run(fmt.Sprintf("bytes-%d", size), func(t *testing.T) {
-			sender, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+			// Disable periodic reports so this test controls the first source clock.
+			sender, err := webrtc.NewAPI(webrtc.WithInterceptorRegistry(&interceptor.Registry{})).NewPeerConnection(webrtc.Configuration{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,9 +82,27 @@ func TestCollectorDeliversAnIsolatedLastVideoFrame(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = sender.AddTrack(track); err != nil {
+			rtpSender, err := sender.AddTrack(track)
+			if err != nil {
 				t.Fatal(err)
 			}
+			requested := make(chan uint32, 1)
+			go func() {
+				for {
+					packets, _, err := rtpSender.ReadRTCP()
+					if err != nil {
+						return
+					}
+					for _, packet := range packets {
+						if request, ok := packet.(*rtcp.RapidResynchronizationRequest); ok {
+							select {
+							case requested <- request.MediaSSRC:
+							default:
+							}
+						}
+					}
+				}
+			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			packets := make(chan Packet, 1)
@@ -129,7 +150,9 @@ func TestCollectorDeliversAnIsolatedLastVideoFrame(t *testing.T) {
 			data := make([]byte, size)
 			copy(data, []byte{0, 0, 0, 0x9d, 1, 0x2a, 64, 0, 32, 0, 0})
 			packetizer := rtp.NewPacketizer(1200, 96, 123, &codecs.VP8Payloader{}, rtp.NewFixedSequencer(1), 90000)
+			var timestamp uint32
 			for index, packet := range packetizer.Packetize(data, 3600) {
+				timestamp = packet.Timestamp
 				// Chromium paces detailed pictures in bursts. A short quiet gap
 				// before the final marker must not flush an incomplete picture.
 				if size == 40*1024 && index > 0 && index%8 == 0 {
@@ -139,8 +162,29 @@ func TestCollectorDeliversAnIsolatedLastVideoFrame(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			var sourceSSRC uint32
+			select {
+			case sourceSSRC = <-requested:
+			case <-ctx.Done():
+				t.Fatal("collector did not request the source clock on first RTP")
+			}
+			select {
+			case <-packets:
+				t.Fatal("collector invented a presentation timestamp before the source clock arrived")
+			case <-time.After(50 * time.Millisecond):
+			}
+			// An isolated paused frame must survive clock establishment. Mapping it
+			// one second after collector creation distinguishes source time from arrival.
+			at := collector.started.Add(time.Second)
+			ntp := uint64(at.Unix()+2208988800)<<32 | uint64(at.Nanosecond())<<32/1_000_000_000
+			if err := sender.WriteRTCP([]rtcp.Packet{&rtcp.SenderReport{SSRC: sourceSSRC, NTPTime: ntp, RTPTime: timestamp}}); err != nil {
+				t.Fatal(err)
+			}
 			select {
 			case p := <-packets:
+				if p.Header.TimestampUS < 999999 || p.Header.TimestampUS > 1000000 {
+					t.Fatalf("source timestamp = %d, want 1000000 us", p.Header.TimestampUS)
+				}
 				if !bytes.Equal(p.Data, data) {
 					t.Fatalf("incomplete frame: %d of %d bytes", len(p.Data), len(data))
 				}
