@@ -172,7 +172,16 @@ export function observeCanvas(win: Window & typeof globalThis, key: string) {
     }
     const gpu = win as any;
     if (gpu.GPUCanvasContext && gpu.GPUQueue) {
-      watch(gpu.GPUCanvasContext.prototype, ['getCurrentTexture']);
+      watch(
+        gpu.GPUCanvasContext.prototype,
+        ['getCurrentTexture'],
+        (context) => {
+          // Late attachment may miss getContext(). Texture acquisition identifies
+          // the native context so subsequent asynchronous submission is observed.
+          contexts.set(context.canvas, 'webgpu');
+          return [context.canvas];
+        },
+      );
       // A command buffer may be submitted in a later microtask than texture
       // acquisition. Observe completion of native submission before automatic
       // presentation expires the texture; never record GPU commands or redraw.
