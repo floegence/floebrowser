@@ -65,7 +65,9 @@ export class ReplayPages {
     // Keep pending documents connected in the light DOM.  This preserves the
     // iframe/contentDocument contract for embedders while the presentation
     // curtain controls visibility and input authority.
-    this.container.append(surface);
+    // Insert before the trusted input overlay while the surface is empty, so
+    // presenting it never needs a move that would reload an existing iframe.
+    this.container.prepend(surface);
     return surface;
   }
   present(surface: HTMLElement): void {
@@ -87,9 +89,13 @@ export class ReplayPages {
       child.style.pointerEvents = 'none';
       this.park(child);
     }
-    if (this.enabled)
-      this.container.moveBefore(surface, this.container.firstChild);
-    else this.container.prepend(surface);
+    // A pending document is already attached here. Even prepending it to the
+    // same parent reloads its iframe on engines without state-preserving moves.
+    if (surface.parentElement !== this.container) {
+      if (this.enabled)
+        this.container.moveBefore(surface, this.container.firstChild);
+      else this.container.prepend(surface);
+    }
     surface.inert = false;
     surface.removeAttribute('aria-hidden');
     surface.style.opacity = '';
