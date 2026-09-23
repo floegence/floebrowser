@@ -28,10 +28,15 @@ async function setup(page: Page, prefix = '') {
     }));
     worker.onerror = (event: ErrorEvent) => state.errors.push(event.message);
     worker.onmessage = ({ data }: MessageEvent) => {
-      state.events.push({ type: data.type, track: data.track });
+      state.events.push({
+        type: data.type,
+        track: data.track,
+        timestamp: data.frame?.timestamp,
+        generation: data.generation,
+      });
       if (data.type === 'video') {
         data.frame.close();
-        worker.postMessage({ type: 'painted' });
+        if (!state.holdPictures) worker.postMessage({ type: 'painted' });
       }
       if (data.type === 'audio')
         worker.postMessage({
@@ -104,7 +109,7 @@ async function setup(page: Page, prefix = '') {
             node: 1,
             track,
             codec: track === 'video' ? 'vp8' : 'opus',
-            timestamp_us: 0,
+            timestamp_us: state.timestamp ?? 0,
             duration_us: 20000,
             keyframe: true,
             ...(track === 'video' ? { width: 16, height: 16 } : {}),
@@ -116,6 +121,89 @@ async function setup(page: Page, prefix = '') {
     };
   });
 }
+
+test('decoded pictures use bounded credit across backpressure and reset', async (t) => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await setup(
+    page,
+    `
+    const NativeDecoder = VideoDecoder;
+    globalThis.VideoDecoder = class extends NativeDecoder {
+      constructor(options) {
+        super({...options, output(frame) {
+          options.output(frame);
+          postMessage({type:'probe-decoded'});
+        }});
+      }
+    };
+  `,
+  );
+  await page.evaluate(() => {
+    (window as any).holdPictures = true;
+  });
+  for (let i = 0; i < 16; i++) {
+    await page.evaluate((i) => {
+      (window as any).timestamp = i * 42000;
+      (window as any).send('video');
+    }, i);
+    await page.waitForFunction(
+      (count) =>
+        (window as any).events.filter((e: any) => e.type === 'probe-decoded')
+          .length === count,
+      i + 1,
+    );
+  }
+  const pictures = () =>
+    page.evaluate(() =>
+      (window as any).events.filter((e: any) => e.type === 'video'),
+    );
+  assert.deepEqual(
+    (await pictures()).map((e: any) => e.timestamp),
+    [0, 42000, 84000, 126000, 168000, 210000],
+  );
+  await page.evaluate(() =>
+    (window as any).worker.postMessage({ type: 'painted' }),
+  );
+  await page.waitForFunction(
+    () =>
+      (window as any).events.filter((e: any) => e.type === 'video').length ===
+      7,
+  );
+  assert.equal(
+    (await pictures()).at(-1).timestamp,
+    630000,
+    'Backpressure retains only the newest additional picture',
+  );
+  await page.evaluate(() => {
+    const state = window as any;
+    state.worker.postMessage({ type: 'reset-video', generation: 1 });
+    state.timestamp = 700000;
+    state.send('video');
+  });
+  await page.waitForFunction(
+    () =>
+      (window as any).events.filter((e: any) => e.type === 'probe-decoded')
+        .length === 17,
+  );
+  assert.equal(
+    (await pictures()).length,
+    7,
+    'Reset does not create new credit while old pictures are held',
+  );
+  await page.evaluate(() =>
+    (window as any).worker.postMessage({ type: 'painted' }),
+  );
+  await page.waitForFunction(
+    () =>
+      (window as any).events.filter((e: any) => e.type === 'video').length ===
+      8,
+  );
+  assert.equal((await pictures()).at(-1).timestamp, 700000);
+  assert.equal((await pictures()).at(-1).generation, 1);
+  assert.deepEqual(await page.evaluate(() => (window as any).errors), []);
+});
 
 test('missing audio decoding is reported once while the video track continues', async (t) => {
   const browser = await chromium.launch();

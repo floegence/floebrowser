@@ -27,7 +27,7 @@ type Playback = {
   failed?: boolean;
   closed: boolean;
   clock?: { timestamp: number; at: number };
-  frame?: VideoFrame;
+  frames: { frame: VideoFrame; presentAt: number }[];
   frameAnimation?: number;
 };
 
@@ -181,6 +181,7 @@ export class MediaView {
         token: packet.stream,
         ...scope,
         closed: false,
+        frames: [],
       };
       this.playback.set(key, playback);
       this.keyframe(scope.view, packet.stream, scope.target);
@@ -196,6 +197,7 @@ export class MediaView {
   select(target: string): void {
     for (const playback of this.playback.values()) {
       if (playback.target !== target) continue;
+      this.clearPictures(playback);
       playback.decoder?.resetVideo();
       this.keyframe(playback.view, playback.token, playback.target);
     }
@@ -289,22 +291,32 @@ export class MediaView {
       )
         playback.decoder?.audioConsumed(count);
     } else if (event.type === 'video') {
-      playback.frame?.close();
-      playback.frame = event.frame;
       // Commit this picture's deadline once. A concurrent audio clock
       // correction must not reschedule it on every animation frame forever.
       const presentAt =
         performance.now() +
         Math.max(0, this.delay(playback, event.frame.timestamp));
+      playback.frames.push({ frame: event.frame, presentAt });
+      if (playback.frameAnimation !== undefined) return;
       const paint = () => {
-        if (playback.closed || !playback.frame) return;
-        if (presentAt - performance.now() > 5) {
-          playback.frameAnimation = requestAnimationFrame(paint);
-          return;
-        }
         playback.frameAnimation = undefined;
-        const frame = playback.frame;
-        playback.frame = undefined;
+        if (playback.closed) return;
+        const now = performance.now();
+        let frame: VideoFrame | undefined;
+        // Preserve future pictures. Once behind, consume all due pictures and
+        // draw only the newest, returning every credit without chasing history.
+        playback.frames = playback.frames.filter((pending) => {
+          if (pending.presentAt - now > 5) return true;
+          if (frame) {
+            frame.close();
+            playback.decoder?.painted();
+          }
+          frame = pending.frame;
+          return false;
+        });
+        if (playback.frames.length)
+          playback.frameAnimation = requestAnimationFrame(paint);
+        if (!frame) return;
         playback.paint ??= document.createElement('canvas');
         const canvas = playback.paint;
         if (canvas.width !== frame.displayWidth)
@@ -324,6 +336,16 @@ export class MediaView {
       };
       paint();
     }
+  }
+  private clearPictures(playback: Playback): void {
+    if (playback.frameAnimation !== undefined)
+      cancelAnimationFrame(playback.frameAnimation);
+    playback.frameAnimation = undefined;
+    for (const { frame } of playback.frames) {
+      frame.close();
+      playback.decoder?.painted();
+    }
+    playback.frames = [];
   }
   private volume(playback: Playback) {
     const state = this.states.get(identity(playback.target, playback.token));
@@ -768,10 +790,8 @@ export class MediaView {
     if (playback.canvasAnimation !== undefined)
       cancelAnimationFrame(playback.canvasAnimation);
     playback.canvasBytes = undefined;
+    this.clearPictures(playback);
     playback.decoder?.close();
-    playback.frame?.close();
-    if (playback.frameAnimation !== undefined)
-      cancelAnimationFrame(playback.frameAnimation);
     this.audio.remove(token);
     if (playback.canvasURL) URL.revokeObjectURL(playback.canvasURL);
     if (playback.canvas && playback.canvas.src === playback.canvasURL)

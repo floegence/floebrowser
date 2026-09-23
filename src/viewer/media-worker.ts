@@ -9,7 +9,8 @@ let video: VideoDecoder | undefined;
 let audio: AudioDecoder | undefined;
 let videoConfiguration = '';
 let needsKey = true;
-let painting = false;
+let picturesInFlight = 0;
+let videoGeneration = 0;
 let latest: VideoFrame | undefined;
 let audioFrames = 0;
 const MAX_DECODE_FAILURES = 3;
@@ -52,13 +53,13 @@ function failed(track: 'video' | 'audio', error?: unknown) {
 }
 
 function paint(frame: VideoFrame) {
-  if (painting) {
+  if (picturesInFlight >= 6) {
     latest?.close();
     latest = frame;
     return;
   }
-  painting = true;
-  send({ type: 'video', frame }, [frame]);
+  picturesInFlight++;
+  send({ type: 'video', frame, generation: videoGeneration }, [frame]);
 }
 
 function videoCodec(frame: MediaFrame): string {
@@ -208,9 +209,11 @@ scope.onmessage = ({ data }) => {
     } finally {
       send({ type: 'accepted' });
     }
-  } else if (data.type === 'reset-video') resetVideo();
-  else if (data.type === 'painted') {
-    painting = false;
+  } else if (data.type === 'reset-video') {
+    videoGeneration = data.generation;
+    resetVideo();
+  } else if (data.type === 'painted') {
+    picturesInFlight = Math.max(0, picturesInFlight - 1);
     if (latest) {
       const frame = latest;
       latest = undefined;

@@ -104,7 +104,7 @@ The collector emits bounded packets containing target, subscription, element, st
 
 Use the website's projected playback controls as usual. Optional **Media controls** in the browser toolbar provide source play/pause, per-player mute and seeking in a compact panel with media titles, playback state, icon controls and an elapsed/duration timeline; the popup opens only on request, closes with Escape or a click outside, and never opens itself on media errors. Hidden idle media does not surface controls or failure notices, while playing background audio remains controllable. The viewer follows source mute/volume settings and attempts normal audio playback. If the client browser blocks autoplay, video continues muted and the next page click or key press attempts to unlock audio; **Unmute audio** is also available in the toolbar popup. An explicit client mute is preserved across page gestures. Each player’s mute button separately changes that real source element under its current control lease; it neither starts playback nor changes another player. Its pressed state follows source events, including changes made by a local user. The panel’s top-level sound control affects only this viewing window. The panel reflects source playback, including website autoplay; opening it never starts source media. Muted playback is labeled explicitly. **Show on page** scrolls the source to the corresponding visible player, including nested scroll containers and cross-origin frames, then briefly highlights its projection. Locating never clicks, focuses, plays or seeks the media. Audio without a visible player remains controllable and is labeled accordingly. Seeking changes the original element at the source. A play acknowledgement confirms that the source received the request; playback state and errors arrive independently, so buffering never holds the input queue. Capture and re-encoding add cost and latency; this is not a lossless relay.
 
-Source senders cap each video at 24 fps and 1.5 Mbit/s, scale source video wider than 1280 pixels down at capture start, and cap audio at 64 kbit/s. These are ceilings, not bandwidth or latency guarantees. A slow consumer has at most eight in-flight packets and a 64 KiB outstanding-byte window that also bounds partial frames; queued media has a separate 4 MiB hard bound. Queued video older than 250 ms is discarded with its dependents. Workers bound encoded decode work, retain at most one pending decoded picture, and bound unconsumed PCM to 12,000 samples per channel. Static Canvas retains one latest complete image.
+Source senders cap each video at 24 fps and 1.5 Mbit/s, scale source video wider than 1280 pixels down at capture start, and cap audio at 64 kbit/s. These are ceilings, not bandwidth or latency guarantees. A slow consumer has at most eight in-flight packets and a 64 KiB outstanding-byte window that also bounds partial frames; queued media has a separate 4 MiB hard bound. Queued video older than 250 ms is discarded with its dependents. Workers bound encoded decode work and lend at most six decoded pictures to the presentation queue, retaining only the newest additional picture under backpressure. One animation callback consumes due pictures and preserves future deadlines; it skips obsolete due pictures instead of replaying them. Selection clears queued pictures and fences in-flight decoder output by generation before requesting a fresh keyframe. Unconsumed PCM is bounded to 12,000 samples per channel. Static Canvas retains one latest complete image.
 
 DOM removal retires media by stream identity, so reinserting an element establishes a fresh stream. Replacing a source document retires its old streams; DOM checkpoints preserve valid streams and paused pictures. Page-owned `srcObject` tracks are cloned before forwarding and are never stopped by projection teardown. Recapturing a stream-backed element is avoided because Chromium can replace its original Canvas track wrapper and stop the website’s producer when that wrapper is collected. Media subscription generations are separate from DOM epochs. Decoder keyframe feedback is fenced by current viewer, target, subscription and stream identity; it cannot carry SDP or authorize website actions. At most eight media/Canvas nodes per tab are admitted.
 
@@ -694,16 +694,21 @@ Playwright development-engine tests do not qualify current stable Safari,
 Firefox or Edge.
 
 Audio/video synchronization has a separate acceptance check in
-`test/media-sync.e2e.ts`, including a Firefox viewer. The file-backed capture path
-currently fails its unchanged 100 ms maximum on the tested macOS host. A native
-Chromium 153.0.8010.12 reproduction, without FloeBrowser, RTP encoding or a remote
-viewer, measured approximately 204–208 ms between matching audio/video pulse
-timestamps from `HTMLMediaElement.captureStream()`. The capture path copies
-upcoming audio with a timestamp reduced by device output delay, while captured
-video uses the current capture time. Public captured-track settings do not expose
-that renderer delay. This remains a qualification blocker; decoder coverage does
-not certify synchronization, and neither hardcoded compensation nor source audio
-rerouting is used to conceal the failure.
+`test/media-sync.e2e.ts`, including a Firefox viewer, with an unchanged 100 ms
+maximum. Native Chromium 153 file-backed capture copies upcoming audio while
+subtracting device output delay from its timestamp; video uses current capture
+time. The source audio adapter estimates that delay from the minimum delivery age
+of the last 32 input blocks and restores the samples' presentation timestamps
+before RTP encoding. It preserves PCM, source routing, volume and mute. Already
+future-dated audio receives no correction; website-owned `srcObject` tracks
+bypass the adapter. The rolling estimate rejects isolated dispatch stalls and
+expires old measurements after a device-latency change; it is not an exact device
+latency API. The adapter retains one native input block and one pending write,
+owns only projection tracks, and cancels both stream endpoints on disposal or
+capture failure. `test/media-audio.test.ts` covers timestamp behavior, PCM
+preservation and cleanup; `test/media-presentation.e2e.ts` checks short future
+pictures and their fixed deadlines in Chromium and Firefox. Decoder coverage
+alone does not certify synchronization or qualify a product's transport path.
 
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 

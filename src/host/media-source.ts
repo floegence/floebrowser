@@ -1,4 +1,5 @@
 import { observeCanvas } from './canvas-source.js';
+import { captureAudio } from './media-audio.js';
 import {
   CANVAS_CHANNEL,
   CANVAS_CHUNK_BYTES,
@@ -28,6 +29,7 @@ type Capture = {
   negotiating: boolean;
   retries: number;
   stopWatching?: () => void;
+  stopAudio?: () => void;
   pictureUpdate?: Promise<void>;
 };
 
@@ -69,6 +71,7 @@ export function observeMedia(
   const release = (capture: Capture) => {
     capture.retired = true;
     capture.stopWatching?.();
+    capture.stopAudio?.();
     capture.peer?.close();
     capture.stream?.getTracks().forEach((track) => track.stop());
     delete (capture.element as any)[key];
@@ -256,9 +259,22 @@ export function observeMedia(
       const observed = borrowed ?? element.captureStream();
       const stream = borrowed
         ? new MediaStream(observed.getTracks().map((track) => track.clone()))
-        : observed;
+        : new MediaStream(observed.getTracks());
       capture.stream = stream;
       if (!stream.getTracks().length) return;
+      if (!borrowed) {
+        const audio: ReturnType<typeof captureAudio>[] = [];
+        capture.stopAudio = () => audio.forEach((item) => item.close());
+        for (const original of stream.getAudioTracks()) {
+          const projected = captureAudio(original, () => {
+            if (!capture.retired)
+              unavailable(capture, 'Source audio capture was interrupted.');
+          });
+          audio.push(projected);
+          stream.removeTrack(original);
+          stream.addTrack(projected.track);
+        }
+      }
       const peer = new RTCPeerConnection({ iceServers: [] });
       capture.peer = peer;
       for (const track of stream.getTracks()) {
