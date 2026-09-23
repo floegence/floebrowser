@@ -74,16 +74,34 @@ test(
       }, 33);
       await video.play();
     });
-    await viewer.waitForFunction(
+    const presented = await viewer.waitForFunction(
       () => {
         const video = document
           .querySelector<HTMLIFrameElement>('#viewport iframe')
           ?.contentDocument?.querySelector('video');
-        return video?.videoWidth === 640 && video.readyState >= 2;
+        if (!video?.videoWidth || video.readyState < 2) return false;
+        const bounds = video.getBoundingClientRect();
+        if (bounds.width !== 320 || bounds.height !== 180) return false;
+        // Chromium may reduce encoded resolution to meet the 1.5 Mbit/s
+        // ceiling on this noisy scene. Require current decoded pixels at the
+        // source element's layout size, not an uncontracted codec resolution.
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 18;
+        const context = canvas.getContext('2d')!;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const pixels = context.getImageData(0, 0, 32, 18).data;
+        const red = pixels.filter((_, index) => index % 4 === 0);
+        if (Math.max(...red) - Math.min(...red) < 20) return false;
+        return { width: video.videoWidth, height: video.videoHeight };
       },
       undefined,
       { timeout: 10000 },
     );
+    t.diagnostic(
+      `Decoded noisy video: ${JSON.stringify(await presented.jsonValue())}`,
+    );
+    await presented.dispose();
     assert.equal(
       await source
         .locator('video')

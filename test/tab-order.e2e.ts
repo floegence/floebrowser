@@ -55,6 +55,15 @@ async function setup(t: test.TestContext, count = 3) {
   }
   await viewer.locator(`[data-tab="${original}"]`).click();
   await viewer.frameLocator('#viewport iframe').locator('#count').waitFor();
+  // A cached document appears before fresh source selection finishes. Begin
+  // the gesture only after directory commands are available for that selection.
+  const settled = await viewer.waitForFunction(
+    () =>
+      !document
+        .querySelector('#viewport')
+        ?.parentElement?.classList.contains('switching'),
+  );
+  await settled.dispose();
   return {
     viewer,
     source,
