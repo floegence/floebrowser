@@ -303,6 +303,78 @@ test('media keeps its DOM geometry but cannot load site URLs or replay source pl
   resources.close();
 });
 
+test('canvas interaction updates preserve delivered pixels and intrinsic dimensions', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  const projection = new DOMProjection(resources);
+  try {
+    projection.event(
+      {
+        type: 2,
+        timestamp: 1,
+        data: {
+          node: {
+            type: 0,
+            id: 1,
+            childNodes: [
+              {
+                type: 2,
+                id: 2,
+                tagName: 'canvas',
+                attributes: {},
+                floeCanvas: { width: 930, height: 564 },
+                childNodes: [],
+              },
+            ],
+          },
+          initialOffset: { left: 0, top: 0 },
+        },
+      } as any,
+      'https://source.test',
+    );
+    const update: any = projection.event(
+      {
+        type: 3,
+        timestamp: 2,
+        data: {
+          source: 0,
+          adds: [],
+          removes: [],
+          texts: [],
+          attributes: [
+            {
+              id: 2,
+              attributes: {},
+              floeInteraction: {
+                hover: true,
+                active: false,
+                focus: true,
+                focusVisible: false,
+                focusWithin: true,
+              },
+            },
+          ],
+        },
+      } as any,
+      'https://source.test',
+    );
+    const attributes = update.data.attributes[0].attributes;
+    assert.equal(
+      attributes.src,
+      undefined,
+      'Hover and focus must not replace a delivered Canvas image',
+    );
+    assert.equal(
+      attributes['data-floebrowser-canvas'],
+      undefined,
+      'Interaction has no authority to reset source dimensions',
+    );
+  } finally {
+    resources.close();
+  }
+});
+
 test('canvas projection retains layout attributes without accepting bitmap payloads or fallback scripts', () => {
   const resources = new ResourceStore(
     new EventEmitter() as unknown as CDPSession,
@@ -392,9 +464,10 @@ test('canvas projection retains layout attributes without accepting bitmap paylo
     assert.equal(update.data.attributes[0].attributes.width, 40);
     assert.equal(update.data.attributes[0].attributes.rr_dataURL, undefined);
     assert.equal(update.data.attributes[0].floeCanvas, undefined);
-    assert.match(
-      decodeURIComponent(update.data.attributes[0].attributes.src),
-      /width="40" height="120"/,
+    assert.equal(update.data.attributes[0].attributes.src, undefined);
+    assert.equal(
+      update.data.attributes[0].attributes['data-floebrowser-canvas'],
+      '40,120',
     );
     const malformed: any = projection.event(
       {
@@ -419,11 +492,11 @@ test('canvas projection retains layout attributes without accepting bitmap paylo
       } as any,
       'https://source.test',
     );
-    const placeholder = decodeURIComponent(
-      malformed.data.attributes[0].attributes.src,
+    assert.equal(malformed.data.attributes[0].attributes.src, undefined);
+    assert.equal(
+      malformed.data.attributes[0].attributes['data-floebrowser-canvas'],
+      '300,150',
     );
-    assert.match(placeholder, /width="300" height="150"/);
-    assert.doesNotMatch(placeholder, /script|evil/);
     assert.equal(
       projection.event(
         {

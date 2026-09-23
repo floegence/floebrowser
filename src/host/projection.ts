@@ -61,6 +61,7 @@ export class DOMProjection {
     sheet?: SourceStylesheet,
     canvas?: SourceCanvasSize,
     interaction?: InteractionState,
+    initial = false,
   ): Serialized {
     const result: Serialized = {};
     for (const [name, marker] of Object.entries(styleAttributes)) {
@@ -78,7 +79,8 @@ export class DOMProjection {
         reservedStyleAttributes.has(key)
       )
         continue;
-      if (tag === 'canvas' && key.startsWith('rr_')) continue;
+      if (tag === 'canvas' && (key.startsWith('rr_') || key === 'src'))
+        continue;
       if (
         tag === 'link' &&
         ['href', 'rel', 'as', 'disabled', '_cssText'].includes(key)
@@ -159,9 +161,13 @@ export class DOMProjection {
     if (tag === 'iframe' || tag === 'frame')
       result.sandbox = 'allow-same-origin';
     if (tag === 'canvas') {
-      const { width, height } = canvasSize(canvas);
-      result[CANVAS_ATTRIBUTE] = `${width},${height}`;
-      result.src = canvasPlaceholder(canvas);
+      if (initial || canvas) {
+        const { width, height } = canvasSize(canvas);
+        result[CANVAS_ATTRIBUTE] = `${width},${height}`;
+      }
+      // Only a new node needs a placeholder. Interaction and style mutations
+      // must preserve the media-owned image and the last source dimensions.
+      if (initial) result.src = canvasPlaceholder(canvas);
       result.draggable = 'false';
     }
     if (tag === 'link' || (tag === 'style' && sheet)) {
@@ -225,6 +231,7 @@ export class DOMProjection {
           undefined,
           node.floeCanvas,
           node.floeInteraction,
+          true,
         );
         delete node.floeCanvas;
         delete node.floeAttributes;

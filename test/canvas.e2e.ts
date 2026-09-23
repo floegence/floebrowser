@@ -203,19 +203,23 @@ for (const context of ['2d', 'webgl2'] as const)
         await viewer.locator('#viewport iframe').getAttribute('sandbox'),
         'allow-same-origin',
       );
-      const before = await viewer
-        .frameLocator('#viewport iframe')
-        .locator('#scene')
-        .getAttribute('src');
+      await viewer.evaluate(() => {
+        (window as any).beforeCheckpoint = document
+          .querySelector<HTMLIFrameElement>('#viewport iframe')
+          ?.contentDocument?.querySelector('#scene');
+      });
       await viewer.evaluate(() =>
         (window as any).testSocket.send(JSON.stringify({ type: 'resync' })),
       );
-      await viewer.waitForFunction((previous) => {
+      await viewer.waitForFunction(() => {
         const image = document
           .querySelector<HTMLIFrameElement>('#viewport iframe')
           ?.contentDocument?.querySelector<HTMLImageElement>('#scene');
-        return image?.src !== previous && image?.src.startsWith('blob:');
-      }, before);
+        return (
+          image !== (window as any).beforeCheckpoint &&
+          image?.src.startsWith('blob:')
+        );
+      });
       await pixels();
       await viewer
         .getByRole('button', { name: 'New tab', exact: true })
@@ -577,7 +581,7 @@ test(
     const browser = await chromium.launch({ channel: 'chromium' });
     const source = await browser.newPage();
     await source.goto(
-      'data:text/html,<canvas id="scene" width="160" height="90"></canvas>',
+      'data:text/html,<canvas id="scene" width="160" height="90" tabindex="0"></canvas>',
     );
     await source.evaluate(() => {
       const canvas = document.querySelector('canvas')!;
@@ -637,6 +641,35 @@ test(
       'Retransmitting identical pixels must not allocate and decode another image',
     );
     assert.equal(resources.after, resources.before);
+    await viewer.evaluate(() => {
+      const image = document
+        .querySelector<HTMLIFrameElement>('#viewport iframe')!
+        .contentDocument!.querySelector<HTMLImageElement>('#scene')!;
+      (window as any).canvasMutations = [];
+      const observer = new MutationObserver((records) => {
+        for (const record of records)
+          if (
+            ['src', 'data-floebrowser-canvas'].includes(record.attributeName!)
+          )
+            (window as any).canvasMutations.push(record.attributeName);
+      });
+      observer.observe(image, { attributes: true });
+      (window as any).canvasObserver = observer;
+    });
+    const scene = viewer.frameLocator('#viewport iframe').locator('#scene');
+    await scene.click();
+    await viewer.keyboard.press('ArrowRight');
+    await viewer.mouse.move(900, 500);
+    await source.waitForFunction(() => document.activeElement?.id === 'scene');
+    await viewer.waitForFunction(displayedColor, { channel: 1, width: 160 });
+    assert.deepEqual(
+      await viewer.evaluate(() => {
+        (window as any).canvasObserver.disconnect();
+        return (window as any).canvasMutations;
+      }),
+      [],
+      'Hover, pointer and focus transitions preserve the current Canvas resource and dimensions',
+    );
     await source.evaluate(() => {
       (window as any).color = 'blue';
     });
