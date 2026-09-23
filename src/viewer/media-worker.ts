@@ -16,8 +16,7 @@ let audioFrames = 0;
 const MAX_DECODE_FAILURES = 3;
 let videoFailures = 0;
 let audioFailures = 0;
-let firstAudioInputTimestamp: number | undefined;
-let audioDecodeOffset: number | undefined;
+const audioTimestamps: number[] = [];
 const unavailable = new Set<'video' | 'audio'>();
 const send = (event: DecoderEvent, transfer?: Transferable[]) =>
   scope.postMessage(event, transfer);
@@ -38,8 +37,7 @@ function failed(track: 'video' | 'audio', error?: unknown) {
   else {
     if (audio && audio.state !== 'closed') audio.close();
     audio = undefined;
-    firstAudioInputTimestamp = undefined;
-    audioDecodeOffset = undefined;
+    audioTimestamps.length = 0;
   }
   const count = track === 'video' ? ++videoFailures : ++audioFailures;
   const unsupported =
@@ -148,6 +146,15 @@ function decode(frame: MediaFrame) {
         output: (data) => {
           try {
             if (audio !== decoder) return;
+            // Opus produces one PCM block per packet, but some WebCodecs
+            // implementations synthesize continuous output timestamps. Keep
+            // the corresponding source timestamp across packet loss and RTCP
+            // clock corrections instead of rebuilding a gapless timeline.
+            const timestamp = audioTimestamps.shift();
+            if (timestamp === undefined) {
+              failed('audio');
+              return;
+            }
             audioFailures = 0;
             // Bound even the Worker -> main -> worklet path while the UI is busy.
             if (audioFrames + data.numberOfFrames > 12000) return;
@@ -160,13 +167,11 @@ function decode(frame: MediaFrame) {
               },
             );
             audioFrames += data.numberOfFrames;
-            audioDecodeOffset ??=
-              (firstAudioInputTimestamp ?? data.timestamp) - data.timestamp;
             send(
               {
                 type: 'audio',
                 channels,
-                timestamp: data.timestamp + audioDecodeOffset,
+                timestamp,
                 rate: data.sampleRate,
               },
               channels.map((c) => c.buffer),
@@ -186,8 +191,8 @@ function decode(frame: MediaFrame) {
         numberOfChannels: 2,
       });
     }
-    if (audio.decodeQueueSize < 12) {
-      firstAudioInputTimestamp ??= timestamp;
+    if (audioTimestamps.length < 12) {
+      audioTimestamps.push(timestamp);
       audio.decode(
         new EncodedAudioChunk({
           type: 'key',

@@ -717,6 +717,13 @@ handshake. Audio and video never establish independent clocks from packet arriva
 times. Collector tests delay the report explicitly and verify that a paused final
 picture survives with its authoritative source timestamp.
 
+Opus decoding preserves each packet's source timestamp, including gaps and
+subsequent clock corrections. Some WebCodecs implementations report a continuous
+PCM timeline even when input timestamps jump. The worker therefore pairs each
+Opus output block with its submitted packet using a bounded queue of at most 12
+timestamps; decoder failure clears that queue. `test/audio-timestamps.e2e.ts`
+verifies the same packet gaps and clock corrections in Chromium and Firefox.
+
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
 | Website category | Sample and observed outcome                                                                                                              |
