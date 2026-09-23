@@ -1,6 +1,5 @@
 import type { MediaFrame } from '../shared/media-wire.js';
 import type { DecoderEvent } from './media-decoder.js';
-import { alignMediaTimestamp, type MediaClock } from './media-clock.js';
 
 const scope = globalThis as unknown as {
   onmessage: (event: MessageEvent) => void;
@@ -16,7 +15,6 @@ let audioFrames = 0;
 const MAX_DECODE_FAILURES = 3;
 let videoFailures = 0;
 let audioFailures = 0;
-const mediaClock: MediaClock = {};
 let firstAudioInputTimestamp: number | undefined;
 let audioDecodeOffset: number | undefined;
 const unavailable = new Set<'video' | 'audio'>();
@@ -87,7 +85,9 @@ function videoCodec(frame: MediaFrame): string {
 function decode(frame: MediaFrame) {
   const h = frame.header;
   if (h.track === 'canvas' || unavailable.has(h.track)) return;
-  const timestamp = alignMediaTimestamp(mediaClock, h.track, h.timestamp_us);
+  // The collector already maps both RTP clocks onto one source timeline.
+  // Track startup and delivery can differ; never align their first arrivals.
+  const timestamp = h.timestamp_us;
   if (h.track === 'video') {
     if (typeof VideoDecoder !== 'function') {
       failed('video');

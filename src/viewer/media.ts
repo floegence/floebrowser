@@ -1,7 +1,6 @@
 import { CANVAS_ATTRIBUTE } from '../shared/style.js';
 import { ElementDecoder, type DecoderEvent } from './media-decoder.js';
 import { AudioOutput } from './audio-output.js';
-import { alignMediaTimestamp, type MediaClock } from './media-clock.js';
 import type { MediaFrame } from '../shared/media-wire.js';
 import { setIcon } from './icons.js';
 import { browserText, type BrowserText } from './messages.js';
@@ -28,7 +27,6 @@ type Playback = {
   failed?: boolean;
   closed: boolean;
   clock?: { timestamp: number; at: number };
-  mediaClock?: MediaClock;
   frame?: VideoFrame;
   frameAnimation?: number;
 };
@@ -266,11 +264,6 @@ export class MediaView {
       this.renderControls();
     } else if (event.type === 'audio') {
       const count = event.channels[0]?.length ?? 0;
-      const timestamp = alignMediaTimestamp(
-        (playback.mediaClock ??= {}),
-        'audio',
-        event.timestamp,
-      );
       void this.audio
         .add(identity(playback.target, playback.token), (frames) =>
           playback.decoder?.audioConsumed(frames),
@@ -283,22 +276,18 @@ export class MediaView {
         !this.audio.push(
           identity(playback.target, playback.token),
           event.channels,
-          this.delay(playback, timestamp),
+          this.delay(playback, event.timestamp),
         )
       )
         playback.decoder?.audioConsumed(count);
     } else if (event.type === 'video') {
-      const timestamp = alignMediaTimestamp(
-        (playback.mediaClock ??= {}),
-        'video',
-        event.frame.timestamp,
-      );
       playback.frame?.close();
       playback.frame = event.frame;
       // Commit this picture's deadline once. A concurrent audio clock
       // correction must not reschedule it on every animation frame forever.
       const presentAt =
-        performance.now() + Math.max(0, this.delay(playback, timestamp));
+        performance.now() +
+        Math.max(0, this.delay(playback, event.frame.timestamp));
       const paint = () => {
         if (playback.closed || !playback.frame) return;
         if (presentAt - performance.now() > 5) {
@@ -319,6 +308,9 @@ export class MediaView {
         // Automatic capture of changed pictures works across viewer engines;
         // requestFrame() is absent in Firefox and some WebKit releases.
         playback.stream ??= canvas.captureStream(24);
+        const track = playback.stream.getVideoTracks()[0] as
+          CanvasCaptureMediaStreamTrack | undefined;
+        track?.requestFrame?.();
         playback.decoder?.painted();
         this.update();
       };
