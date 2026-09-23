@@ -822,6 +822,8 @@ npm Trusted Publisher bound to `floegence/floebrowser`, with publishing permissi
 After qualifying the release build, publish its immutable `vX.Y.Z` GitHub release
 with the matching SDK archive and `SHA256SUMS`. The workflow publishes those exact
 bytes through GitHub OIDC, then verifies npm integrity, tarball bytes and provenance.
+After npm acknowledges publication, registry readback allows up to ten minutes for
+version visibility. Only a pending 404 is retried; publication itself is never retried.
 It uses no persistent npm token or per-version browser authorization. The matching
 `media/vX.Y.Z` tag identifies the same source commit.
 

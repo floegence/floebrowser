@@ -4,6 +4,33 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
+
+export async function readPublishedMetadata(
+  endpoint,
+  request = fetch,
+  delay = setTimeout,
+) {
+  // npm acknowledges uploads before the version is visible in the registry.
+  for (let attempt = 0; attempt <= 120; attempt++) {
+    const response = await request(endpoint);
+    if (response.ok) return response.json();
+    assert.equal(
+      response.status,
+      404,
+      `Registry readback failed: ${response.status}`,
+    );
+    assert.ok(
+      attempt < 120,
+      'Published version remained unavailable for 10 minutes',
+    );
+    if (attempt % 6 === 0)
+      console.log(
+        `Waiting for npm registry processing (${attempt * 5}s elapsed)`,
+      );
+    await delay(5000);
+  }
+}
 
 export function verifyPublication(source, packed, environment) {
   assert.equal(
@@ -78,9 +105,7 @@ export async function publish() {
       'An existing version must match the qualified archive',
     );
   }
-  const response = await fetch(endpoint);
-  assert.ok(response.ok, `Registry readback failed: ${response.status}`);
-  const metadata = await response.json();
+  const metadata = await readPublishedMetadata(endpoint);
   assert.equal(metadata.dist?.integrity, integrity);
   const url = new URL(metadata.dist.tarball);
   assert.equal(url.origin, 'https://registry.npmjs.org');

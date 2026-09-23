@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { verifyPublication } from '../scripts/publish-npm.mjs';
+import {
+  readPublishedMetadata,
+  verifyPublication,
+} from '../scripts/publish-npm.mjs';
 
 const pkg = {
   name: '@floegence/floebrowser',
@@ -16,6 +19,50 @@ const environment = {
   ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-only',
 };
+
+test('registry readback waits for acknowledged npm publication to become visible', async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  const metadata = await readPublishedMetadata(
+    'https://registry.npmjs.org/example/1.0.0',
+    async () =>
+      ++calls < 3
+        ? new Response(null, { status: 404 })
+        : Response.json({ version: '1.0.0' }),
+    async (ms: number) => {
+      waits.push(ms);
+    },
+  );
+  assert.deepEqual(metadata, { version: '1.0.0' });
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [5000, 5000]);
+});
+
+test('registry readback fails immediately on other errors and bounds processing time', async () => {
+  await assert.rejects(
+    readPublishedMetadata(
+      'https://registry.npmjs.org/example/1.0.0',
+      async () => new Response(null, { status: 403 }),
+      async () => {
+        assert.fail('Do not wait on authorization errors');
+      },
+    ),
+    /Registry readback failed: 403/,
+  );
+  let calls = 0;
+  await assert.rejects(
+    readPublishedMetadata(
+      'https://registry.npmjs.org/example/1.0.0',
+      async () => {
+        calls++;
+        return new Response(null, { status: 404 });
+      },
+      async () => {},
+    ),
+    /remained unavailable for 10 minutes/,
+  );
+  assert.equal(calls, 121);
+});
 
 test('npm publication accepts only the matching release artifact and GitHub OIDC identity', () => {
   assert.doesNotThrow(() => verifyPublication(pkg, pkg, environment));
