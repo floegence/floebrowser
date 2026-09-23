@@ -1,6 +1,7 @@
 import { CANVAS_ATTRIBUTE } from '../shared/style.js';
 import { ElementDecoder, type DecoderEvent } from './media-decoder.js';
 import { AudioOutput } from './audio-output.js';
+import { MEDIA_SCHEDULING_MARGIN_MS } from './media-limits.js';
 import type { MediaFrame } from '../shared/media-wire.js';
 import { setIcon } from './icons.js';
 import { browserText, type BrowserText } from './messages.js';
@@ -248,7 +249,7 @@ export class MediaView {
     );
     playback.decoder.push(frame);
   }
-  private delay(playback: Playback, timestamp: number): number {
+  private delay(playback: Playback, timestamp: number, maximum = 500): number {
     const now = performance.now();
     let clock = playback.clock;
     if (
@@ -256,8 +257,16 @@ export class MediaView {
       now - (clock.at + (timestamp - clock.timestamp) / 1000) > 250 ||
       clock.at + (timestamp - clock.timestamp) / 1000 - now > 500
     )
-      playback.clock = clock = { timestamp, at: now + 50 };
-    return clock.at + (timestamp - clock.timestamp) / 1000 - now;
+      playback.clock = clock = {
+        timestamp,
+        at: now + MEDIA_SCHEDULING_MARGIN_MS,
+      };
+    const delay = clock.at + (timestamp - clock.timestamp) / 1000 - now;
+    if (delay > maximum) {
+      clock.at -= delay - maximum;
+      return maximum;
+    }
+    return delay;
   }
   private decoded(playback: Playback, event: DecoderEvent): void {
     if (playback.closed) {
@@ -273,7 +282,11 @@ export class MediaView {
       const count = event.channels[0]?.length ?? 0;
       // Creating the audio device can block. Anchor the shared media clock at
       // packet delivery, before that startup cost shifts every video deadline.
-      const delay = this.delay(playback, event.timestamp);
+      const delay = this.delay(
+        playback,
+        event.timestamp,
+        this.audio.maximumDelay(count),
+      );
       void this.audio
         .add(identity(playback.target, playback.token), (frames) =>
           playback.decoder?.audioConsumed(frames),

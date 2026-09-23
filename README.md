@@ -728,6 +728,14 @@ limit: source encoding and the bounded presentation queue already control
 delivery. Adding another capture timer would delay due pictures in viewers
 without `requestFrame()`, including Firefox.
 
+The shared presentation clock cannot schedule audio beyond the bounded PCM
+queue's capacity. Each audio block accounts for device presentation latency,
+its own size, and a 50 ms dispatch margin before limiting the clock's lookahead.
+This keeps a retained older picture from filling the 12,000-frame queue with
+future audio and discarding later pulses. Both decoder and worklet retain their
+existing hard limit. The synchronization test includes a first picture whose
+capture predates the newly flowing tracks by 150 ms.
+
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
 | Website category | Sample and observed outcome                                                                                                              |

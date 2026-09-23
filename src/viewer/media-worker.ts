@@ -1,5 +1,6 @@
 import type { MediaFrame } from '../shared/media-wire.js';
 import type { DecoderEvent } from './media-decoder.js';
+import { AUDIO_BUFFER_FRAMES, AUDIO_SAMPLE_RATE } from './media-limits.js';
 
 const scope = globalThis as unknown as {
   onmessage: (event: MessageEvent) => void;
@@ -157,7 +158,7 @@ function decode(frame: MediaFrame) {
             }
             audioFailures = 0;
             // Bound even the Worker -> main -> worklet path while the UI is busy.
-            if (audioFrames + data.numberOfFrames > 12000) return;
+            if (audioFrames + data.numberOfFrames > AUDIO_BUFFER_FRAMES) return;
             const channels = Array.from(
               { length: data.numberOfChannels },
               (_, planeIndex) => {
@@ -187,7 +188,7 @@ function decode(frame: MediaFrame) {
       audio = decoder;
       audio.configure({
         codec: 'opus',
-        sampleRate: 48000,
+        sampleRate: AUDIO_SAMPLE_RATE,
         numberOfChannels: 2,
       });
     }

@@ -11,6 +11,7 @@ test(
   async (t) => {
     const files: Record<string, string> = {
       '/audio.js': 'dist/viewer/audio-output.js',
+      '/media-limits.js': 'dist/viewer/media-limits.js',
       '/worklet.js': 'dist/assets/audio-worklet.js',
     };
     const server = createServer((req, res) => {

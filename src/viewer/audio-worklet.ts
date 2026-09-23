@@ -1,3 +1,5 @@
+import { AUDIO_BUFFER_FRAMES } from './media-limits.js';
+
 declare const currentTime: number;
 declare const sampleRate: number;
 declare class AudioWorkletProcessor {
@@ -27,7 +29,7 @@ class FloeAudioProcessor extends AudioWorkletProcessor {
         if (
           this.closed ||
           !length ||
-          length > 12000 ||
+          length > AUDIO_BUFFER_FRAMES ||
           !Number.isFinite(item.at) ||
           item.channels.length > 2 ||
           item.channels.some((c) => c.length !== length)
@@ -35,7 +37,7 @@ class FloeAudioProcessor extends AudioWorkletProcessor {
           this.port.postMessage({ consumed: length });
           return;
         }
-        if (this.frames + length > 12000) this.clear();
+        if (this.frames + length > AUDIO_BUFFER_FRAMES) this.clear();
         this.frames += length;
         this.queue.push(item);
       }

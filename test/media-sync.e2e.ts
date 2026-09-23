@@ -6,14 +6,25 @@ import type { AddressInfo } from 'node:net';
 import { chromium, firefox } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
-for (const { videoDelay, audioStartupDelay, viewerEngine } of [
+for (const {
+  videoDelay,
+  audioStartupDelay,
+  viewerEngine,
+  retainedPictureAge = 0,
+} of [
   { videoDelay: 0, audioStartupDelay: 0, viewerEngine: 'chromium' },
   { videoDelay: 0, audioStartupDelay: 0, viewerEngine: 'firefox' },
   { videoDelay: 300, audioStartupDelay: 0, viewerEngine: 'chromium' },
   { videoDelay: 300, audioStartupDelay: 180, viewerEngine: 'chromium' },
+  {
+    videoDelay: 0,
+    audioStartupDelay: 0,
+    viewerEngine: 'firefox',
+    retainedPictureAge: 150,
+  },
 ])
   test(
-    `displayed video and audible pulses in ${viewerEngine} preserve source synchronization after ${videoDelay} ms of initial video loss and ${audioStartupDelay} ms audio startup`,
+    `displayed video and audible pulses in ${viewerEngine} preserve source synchronization after ${videoDelay} ms of initial video loss, ${audioStartupDelay} ms audio startup and ${retainedPictureAge} ms retained picture age`,
     { timeout: 30000 },
     async (t) => {
       // Generated VP8/Opus fixture: each second starts with a simultaneous white
@@ -54,13 +65,24 @@ for (const { videoDelay, audioStartupDelay, viewerEngine } of [
       const viewer = await viewerBrowser.newPage();
       viewer.setDefaultTimeout(5000);
       await viewer.addInitScript(
-        ({ videoDelay, audioStartupDelay }) => {
+        ({ videoDelay, audioStartupDelay, retainedPictureAge }) => {
           // tsx names nested callbacks before Playwright serializes this function.
           (window as any).__name = (value: unknown) => value;
           const NativeWorker = Worker;
           (window as any).Worker = class extends NativeWorker {
             private firstVideo?: number;
             postMessage(message: any, transfer: Transferable[]) {
+              if (retainedPictureAge && message.type === 'frame') {
+                // A retained paused picture can predate the newly flowing audio.
+                // Keep timestamps positive while aging only that first picture.
+                message.frame.header.timestamp_us += 1000000;
+                if (
+                  message.frame.header.track === 'video' &&
+                  this.firstVideo === undefined
+                )
+                  message.frame.header.timestamp_us -=
+                    retainedPictureAge * 1000;
+              }
               if (
                 message.type === 'frame' &&
                 message.frame.header.track === 'video'
@@ -104,7 +126,7 @@ for (const { videoDelay, audioStartupDelay, viewerEngine } of [
             return result;
           };
         },
-        { videoDelay, audioStartupDelay },
+        { videoDelay, audioStartupDelay, retainedPictureAge },
       );
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
@@ -170,6 +192,17 @@ for (const { videoDelay, audioStartupDelay, viewerEngine } of [
         });
         return { audio, video, start, end: performance.now() };
       });
+      // Retain evidence even when a pulse-count assertion fails before skew
+      // calculation, including whether native source playback itself stopped.
+      const sourceState = await source.evaluate(() => {
+        const clip = document.querySelector('video')!;
+        return {
+          paused: clip.paused,
+          currentTime: clip.currentTime,
+          readyState: clip.readyState,
+        };
+      });
+      t.diagnostic(JSON.stringify({ samples, sourceState }));
       assert.ok(
         samples.audio.length >= 8,
         'Audible pulses reach the actual output graph',

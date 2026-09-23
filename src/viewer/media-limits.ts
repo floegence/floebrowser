@@ -1,0 +1,3 @@
+export const AUDIO_SAMPLE_RATE = 48000;
+export const AUDIO_BUFFER_FRAMES = 12000;
+export const MEDIA_SCHEDULING_MARGIN_MS = 50;

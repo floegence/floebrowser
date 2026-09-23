@@ -1,3 +1,9 @@
+import {
+  AUDIO_BUFFER_FRAMES,
+  AUDIO_SAMPLE_RATE,
+  MEDIA_SCHEDULING_MARGIN_MS,
+} from './media-limits.js';
+
 /** Playback is independent of source execution. Resuming this context only
  * unlocks client audio; it never invokes play on a source media element. */
 export class AudioOutput {
@@ -29,6 +35,18 @@ export class AudioOutput {
         performance.now(),
     );
   }
+  maximumDelay(frames: number): number {
+    // Reserve room for this whole block and a dispatch margin. An older first
+    // picture must not anchor playback beyond the bounded PCM queue's horizon.
+    return (
+      this.presentationLatency() +
+      Math.max(
+        0,
+        ((AUDIO_BUFFER_FRAMES - frames) / AUDIO_SAMPLE_RATE) * 1000 -
+          MEDIA_SCHEDULING_MARGIN_MS,
+      )
+    );
+  }
   async unlock(): Promise<void> {
     if (this.context?.state === 'suspended') {
       try {
@@ -44,7 +62,7 @@ export class AudioOutput {
     this.adding.add(id);
     try {
       this.context ??= new AudioContext({
-        sampleRate: 48000,
+        sampleRate: AUDIO_SAMPLE_RATE,
         latencyHint: 'interactive',
       });
       this.context.onstatechange = () => {
