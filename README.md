@@ -723,6 +723,10 @@ PCM timeline even when input timestamps jump. The worker therefore pairs each
 Opus output block with its submitted packet using a bounded queue of at most 12
 timestamps; decoder failure clears that queue. `test/audio-timestamps.e2e.ts`
 verifies the same packet gaps and clock corrections in Chromium and Firefox.
+The presentation canvas captures changed pictures without a second frame-rate
+limit: source encoding and the bounded presentation queue already control
+delivery. Adding another capture timer would delay due pictures in viewers
+without `requestFrame()`, including Firefox.
 
 Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chromium sources and a separate Chromium viewer, blocking viewer requests to website origins. Checks covered selected geometry, source-side interaction, viewer errors and visual inspection; they do not certify entire websites or other Desktop rendering engines.
 
