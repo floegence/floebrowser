@@ -264,6 +264,9 @@ export class MediaView {
       this.renderControls();
     } else if (event.type === 'audio') {
       const count = event.channels[0]?.length ?? 0;
+      // Creating the audio device can block. Anchor the shared media clock at
+      // packet delivery, before that startup cost shifts every video deadline.
+      const delay = this.delay(playback, event.timestamp);
       void this.audio
         .add(identity(playback.target, playback.token), (frames) =>
           playback.decoder?.audioConsumed(frames),
@@ -276,7 +279,7 @@ export class MediaView {
         !this.audio.push(
           identity(playback.target, playback.token),
           event.channels,
-          this.delay(playback, event.timestamp),
+          delay,
         )
       )
         playback.decoder?.audioConsumed(count);

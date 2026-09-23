@@ -6,9 +6,13 @@ import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
-for (const videoDelay of [0, 300])
+for (const { videoDelay, audioStartupDelay } of [
+  { videoDelay: 0, audioStartupDelay: 0 },
+  { videoDelay: 300, audioStartupDelay: 0 },
+  { videoDelay: 300, audioStartupDelay: 180 },
+])
   test(
-    `displayed video and audible pulses preserve source synchronization after ${videoDelay} ms of initial video loss`,
+    `displayed video and audible pulses preserve source synchronization after ${videoDelay} ms of initial video loss and ${audioStartupDelay} ms audio startup`,
     { timeout: 30000 },
     async (t) => {
       // Generated VP8/Opus fixture: each second starts with a simultaneous white
@@ -45,44 +49,59 @@ for (const videoDelay of [0, 300])
       });
       const viewer = await browser.newPage();
       viewer.setDefaultTimeout(5000);
-      await viewer.addInitScript((videoDelay) => {
-        // tsx names nested callbacks before Playwright serializes this function.
-        (window as any).__name = (value: unknown) => value;
-        const NativeWorker = Worker;
-        (window as any).Worker = class extends NativeWorker {
-          private firstVideo?: number;
-          postMessage(message: any, transfer: Transferable[]) {
-            if (
-              message.type === 'frame' &&
-              message.frame.header.track === 'video'
-            ) {
-              this.firstVideo ??= performance.now();
-              if (performance.now() - this.firstVideo < videoDelay) {
-                this.dispatchEvent(
-                  new MessageEvent('message', { data: { type: 'accepted' } }),
-                );
-                this.dispatchEvent(
-                  new MessageEvent('message', { data: { type: 'keyframe' } }),
-                );
-                return;
+      await viewer.addInitScript(
+        ({ videoDelay, audioStartupDelay }) => {
+          // tsx names nested callbacks before Playwright serializes this function.
+          (window as any).__name = (value: unknown) => value;
+          const NativeWorker = Worker;
+          (window as any).Worker = class extends NativeWorker {
+            private firstVideo?: number;
+            postMessage(message: any, transfer: Transferable[]) {
+              if (
+                message.type === 'frame' &&
+                message.frame.header.track === 'video'
+              ) {
+                this.firstVideo ??= performance.now();
+                if (performance.now() - this.firstVideo < videoDelay) {
+                  this.dispatchEvent(
+                    new MessageEvent('message', { data: { type: 'accepted' } }),
+                  );
+                  this.dispatchEvent(
+                    new MessageEvent('message', { data: { type: 'keyframe' } }),
+                  );
+                  return;
+                }
+              }
+              super.postMessage(message, transfer);
+            }
+          };
+          const NativeAudio = AudioContext;
+          (window as any).AudioContext = class extends NativeAudio {
+            constructor(...args: ConstructorParameters<typeof AudioContext>) {
+              const started = performance.now();
+              super(...args);
+              // Audio device initialization is synchronous on real browser hosts.
+              // Model that startup cost without delaying any subsequent packets.
+              while (performance.now() - started < audioStartupDelay) {
+                /* wait */
               }
             }
-            super.postMessage(message, transfer);
-          }
-        };
-        const outputs = ((window as any).audioOutputs = []);
-        const connect = AudioNode.prototype.connect;
-        AudioNode.prototype.connect = function (...args: any[]) {
-          const result = (connect as any).apply(this, args);
-          if (args[0] instanceof AudioDestinationNode) {
-            const analyser = this.context.createAnalyser();
-            analyser.fftSize = 256;
-            connect.call(this, analyser);
-            outputs.push({ analyser, context: this.context });
-          }
-          return result;
-        };
-      }, videoDelay);
+          };
+          const outputs = ((window as any).audioOutputs = []);
+          const connect = AudioNode.prototype.connect;
+          AudioNode.prototype.connect = function (...args: any[]) {
+            const result = (connect as any).apply(this, args);
+            if (args[0] instanceof AudioDestinationNode) {
+              const analyser = this.context.createAnalyser();
+              analyser.fftSize = 256;
+              connect.call(this, analyser);
+              outputs.push({ analyser, context: this.context });
+            }
+            return result;
+          };
+        },
+        { videoDelay, audioStartupDelay },
+      );
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
       await source.evaluate(() => document.querySelector('video')!.play());
