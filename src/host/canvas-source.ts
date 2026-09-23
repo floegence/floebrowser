@@ -49,7 +49,7 @@ export function observeCanvas(win: Window & typeof globalThis, key: string) {
         surface.bitmap.height = height;
       }
       try {
-        if (['webgpu', 'offscreen'].includes(contexts.get(canvas) ?? ''))
+        if (contexts.get(canvas) === 'offscreen')
           throw new Error('This graphics context is not supported.');
         const ctx = surface.bitmap.getContext('2d')!;
         ctx.clearRect(0, 0, width, height);
@@ -72,7 +72,11 @@ export function observeCanvas(win: Window & typeof globalThis, key: string) {
         dirty.clear();
       });
     };
-    const watch = (prototype: any, names: string[]) => {
+    const watch = (
+      prototype: any,
+      names: string[],
+      elements = (context: { canvas: HTMLCanvasElement }) => [context.canvas],
+    ) => {
       for (const name of names) {
         const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
         if (!descriptor?.configurable || typeof descriptor.value !== 'function')
@@ -84,7 +88,7 @@ export function observeCanvas(win: Window & typeof globalThis, key: string) {
         ) {
           const result = Reflect.apply(original, this, args);
           try {
-            changed(this.canvas);
+            for (const canvas of elements(this)) changed(canvas);
           } catch {
             /* Preserve the native result. */
           }
@@ -165,6 +169,18 @@ export function observeCanvas(win: Window & typeof globalThis, key: string) {
         'clearBufferuiv',
         'clearBufferfi',
       ]);
+    }
+    const gpu = win as any;
+    if (gpu.GPUCanvasContext && gpu.GPUQueue) {
+      watch(gpu.GPUCanvasContext.prototype, ['getCurrentTexture']);
+      // A command buffer may be submitted in a later microtask than texture
+      // acquisition. Observe completion of native submission before automatic
+      // presentation expires the texture; never record GPU commands or redraw.
+      watch(gpu.GPUQueue.prototype, ['submit'], () =>
+        [...surfaces.keys()].filter(
+          (canvas) => contexts.get(canvas) === 'webgpu',
+        ),
+      );
     }
     const mutations = new MutationObserver((records) => {
       for (const record of records) {
