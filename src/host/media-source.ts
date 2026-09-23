@@ -10,6 +10,16 @@ import type { SourceMediaPacket, MediaState } from '../shared/protocol.js';
 
 type CaptureElement =
   (HTMLMediaElement & { captureStream(): MediaStream }) | HTMLCanvasElement;
+type CaptureHeaderExtension = {
+  uri: string;
+  direction: RTCRtpTransceiverDirection;
+};
+type CaptureTransceiver = RTCRtpTransceiver & {
+  getHeaderExtensionsToNegotiate?(): CaptureHeaderExtension[];
+  setHeaderExtensionsToNegotiate?(extensions: CaptureHeaderExtension[]): void;
+};
+const CAPTURE_TIME_URI =
+  'http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time';
 const isCanvas = (element: CaptureElement): element is HTMLCanvasElement =>
   element.localName === 'canvas';
 type Capture = {
@@ -281,7 +291,7 @@ export function observeMedia(
         const video = track.kind === 'video';
         const width =
           (element as unknown as HTMLVideoElement).videoWidth || 1280;
-        peer.addTransceiver(track, {
+        const transceiver = peer.addTransceiver(track, {
           direction: 'sendonly',
           streams: [stream],
           sendEncodings: [
@@ -295,6 +305,30 @@ export function observeMedia(
               : { maxBitrate: 64000 },
           ],
         });
+        // Audio RTP counts encoded samples even when the native capture clock
+        // changes. Carry its current mapping with the affected packet instead
+        // of waiting for a periodic RTCP sender report.
+        const timing = transceiver as CaptureTransceiver;
+        const extensions = timing.getHeaderExtensionsToNegotiate?.();
+        if (
+          !timing.setHeaderExtensionsToNegotiate ||
+          !extensions?.some((extension) => extension.uri === CAPTURE_TIME_URI)
+        ) {
+          unavailable(
+            capture,
+            'Update the source browser to support synchronized media capture.',
+          );
+          return;
+        }
+        timing.setHeaderExtensionsToNegotiate(
+          extensions.map((extension) => ({
+            ...extension,
+            direction:
+              extension.uri === CAPTURE_TIME_URI
+                ? 'sendonly'
+                : extension.direction,
+          })),
+        );
       }
       const tracks = () =>
         observed

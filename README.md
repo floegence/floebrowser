@@ -710,12 +710,16 @@ preservation and cleanup; `test/media-presentation.e2e.ts` checks short future
 pictures and their fixed deadlines in Chromium and Firefox. Decoder coverage
 alone does not certify synchronization or qualify a product's transport path.
 
-The loopback collector requests an immediate RTCP sender report when each RTP
-track starts (RFC 6051). It publishes frames only after that track's source clock
-is known, retaining the initial packets in the bounded receiver during the
-handshake. Audio and video never establish independent clocks from packet arrival
-times. Collector tests delay the report explicitly and verify that a paused final
-picture survives with its authoritative source timestamp.
+The source negotiates the RTP absolute-capture-time extension through Chromium's
+transceiver API. The loopback collector applies its capture clock and optional
+offset in complete-sample order, interpolating omitted extensions with the RTP
+sample clock. This preserves capture-device timing changes immediately instead
+of waiting for periodic sender reports. Reports never overwrite a negotiated
+capture clock. Standard RTP senders without this extension establish their
+mapping through an immediate RTCP sender report (RFC 6051), retaining the initial
+packets in the bounded receiver during that handshake. Neither path invents
+audio/video clocks from packet arrival times. Collector tests verify an isolated
+paused picture and a 200 ms capture-clock change between reports.
 
 Opus decoding preserves each packet's source timestamp, including gaps and
 subsequent clock corrections. Some WebCodecs implementations report a continuous

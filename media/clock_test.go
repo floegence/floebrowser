@@ -3,6 +3,8 @@ package media
 import (
 	"testing"
 	"time"
+
+	"github.com/pion/rtp"
 )
 
 func TestTrackClocksPreserveOneSourceTimeline(t *testing.T) {
@@ -27,5 +29,27 @@ func TestTrackClocksPreserveOneSourceTimeline(t *testing.T) {
 	// be rebased to the first decoded video frame by a downstream consumer.
 	if got := audio.timestamp(12760); got != 370000 {
 		t.Fatalf("later audio presentation time = %d, want 370000 us", got)
+	}
+}
+
+func TestCaptureClockPreservesOffsetsAndRejectsMalformedExtensions(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	clock := &trackClock{started: started, rate: 48000}
+	for _, size := range []int{0, 7, 9, 15, 17} {
+		clock.capture(1000, make([]byte, size))
+		if got := clock.timestamp(1000); got != -1 {
+			t.Fatalf("malformed %d-byte extension established time %d", size, got)
+		}
+	}
+	for _, offset := range []time.Duration{-100 * time.Millisecond, 100 * time.Millisecond} {
+		payload, err := rtp.NewAbsCaptureTimeExtensionWithCaptureClockOffset(started.Add(time.Second), offset).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock.capture(0xffffff00, payload)
+		want := (time.Second + offset + 20*time.Millisecond).Microseconds()
+		if got := clock.timestamp(0x000002c0); got < want-1 || got > want {
+			t.Fatalf("capture time with offset %s = %d, want %d us", offset, got, want)
+		}
 	}
 }

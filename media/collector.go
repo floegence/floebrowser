@@ -21,6 +21,8 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
 )
 
+const captureTimeURI = "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time"
+
 type Scope struct {
 	Target string `json:"target"`
 	View   string `json:"view"`
@@ -104,6 +106,12 @@ func NewCollector(scope Scope, onTrack func(*Track)) (*Collector, error) {
 		}
 	}
 	registry := &interceptor.Registry{}
+	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeAudio, webrtc.RTPCodecTypeVideo} {
+		if err = engine.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: captureTimeURI}, kind); err != nil {
+			_ = mux.Close()
+			return nil, err
+		}
+	}
 	if err = webrtc.RegisterDefaultInterceptorsWithOptions(engine, registry, webrtc.WithInterceptorLoggerFactory(logger)); err != nil {
 		_ = mux.Close()
 		return nil, err
@@ -201,6 +209,12 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 	}
 	defer track.queue.Close()
 	clock := &trackClock{started: c.started, rate: int64(codec.ClockRate)}
+	var captureID uint8
+	for _, extension := range receiver.GetParameters().HeaderExtensions {
+		if extension.URI == captureTimeURI {
+			captureID = uint8(extension.ID)
+		}
+	}
 	synchronized := make(chan struct{})
 	reportsEnded := make(chan struct{})
 	go func() {
@@ -212,7 +226,7 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 				return
 			}
 			for _, p := range packets {
-				if report, ok := p.(*rtcp.SenderReport); ok && report.SSRC == uint32(remote.SSRC()) {
+				if report, ok := p.(*rtcp.SenderReport); ok && report.SSRC == uint32(remote.SSRC()) && captureID == 0 {
 					clock.report(report.RTPTime, report.NTPTime)
 					if !ready {
 						ready = true
@@ -222,24 +236,25 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 			}
 		}
 	}()
-	// Audio and video have independent random RTP origins. Request their
-	// authoritative mapping immediately (RFC 6051), rather than inventing two
-	// clocks from arrival times until the periodic sender reports happen to arrive.
-	// Leave the first RTP packets in the bounded receiver while the report is in
-	// flight, preserving even an isolated paused picture.
-	if err := c.peer.WriteRTCP([]rtcp.Packet{&rtcp.RapidResynchronizationRequest{MediaSSRC: uint32(remote.SSRC())}}); err != nil {
-		return
-	}
-	select {
-	case <-synchronized:
-	case <-reportsEnded:
-		return
+	// Standard RTP senders without capture-time negotiation establish their
+	// independent random RTP origins through an immediate report (RFC 6051).
+	// Negotiated capture time is authoritative at each clock change and must not
+	// be overwritten by the sender's slower, periodic report mapping.
+	if captureID == 0 {
+		if err := c.peer.WriteRTCP([]rtcp.Packet{&rtcp.RapidResynchronizationRequest{MediaSSRC: uint32(remote.SSRC())}}); err != nil {
+			return
+		}
+		select {
+		case <-synchronized:
+		case <-reportsEnded:
+			return
+		}
 	}
 	// The sequence window must hold a complete encoded picture, not just its
 	// reorder tail. Sixteen RTP packets truncated ordinary detailed keyframes.
 	// Bound retention to 2048 packets (at most 3 MiB with Pion's 1500-byte MTU),
 	// while the timestamp and idle deadlines still bound waiting independently.
-	build := samplebuilder.New(2048, depacketizer, codec.ClockRate, samplebuilder.WithMaxTimeDelay(100*time.Millisecond))
+	build := samplebuilder.New(2048, depacketizer, codec.ClockRate, samplebuilder.WithMaxTimeDelay(100*time.Millisecond), samplebuilder.WithRTPHeaders(captureID != 0))
 	header := c.header(kind, name)
 	if kind == "audio" {
 		header.Width, header.Height = 0, 0
@@ -270,6 +285,13 @@ func (c *Collector) receiveTrack(remote *webrtc.TrackRemote, receiver *webrtc.RT
 			if len(sample.Data) == 0 || len(sample.Data) > MaxPacketBytes {
 				requestKey()
 				continue
+			}
+			// Inspect complete samples in RTP order, so a clock correction cannot
+			// retime an older picture still waiting in the bounded reorder window.
+			for _, packet := range sample.RTPHeaders {
+				if extension := packet.GetExtension(captureID); extension != nil {
+					clock.capture(packet.Timestamp, extension)
+				}
 			}
 			header.TimestampUS = clock.timestamp(sample.PacketTimestamp)
 			header.DurationUS = min(max(sample.Duration.Microseconds(), 0), 1_000_000)
@@ -366,6 +388,21 @@ func (c *trackClock) report(rtpTime uint32, ntp uint64) {
 	c.rtp = rtpTime
 	c.at = time.Unix(seconds, nanos)
 	c.set = true
+}
+
+func (c *trackClock) capture(rtpTime uint32, payload []byte) {
+	if len(payload) != 8 && len(payload) != 16 {
+		return
+	}
+	var extension rtp.AbsCaptureTimeExtension
+	if extension.Unmarshal(payload) != nil {
+		return
+	}
+	ntp := extension.Timestamp
+	if extension.EstimatedCaptureClockOffset != nil {
+		ntp += uint64(*extension.EstimatedCaptureClockOffset)
+	}
+	c.report(rtpTime, ntp)
 }
 func (c *trackClock) timestamp(value uint32) int64 {
 	c.mu.Lock()

@@ -203,3 +203,121 @@ func TestCollectorRejectsUnboundIdentity(t *testing.T) {
 		t.Fatal("unbound collector admitted")
 	}
 }
+
+func TestCollectorPreservesCaptureClockChangesBetweenSenderReports(t *testing.T) {
+	const uri = "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time"
+	engine := &webrtc.MediaEngine{}
+	if err := engine.RegisterDefaultCodecs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: uri}, webrtc.RTPCodecTypeAudio); err != nil {
+		t.Fatal(err)
+	}
+	sender, err := webrtc.NewAPI(webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(&interceptor.Registry{})).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rtpSender, err := sender.AddTrack(track)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	delivered := make(chan Packet, 8)
+	collector, err := NewCollector(Scope{Target: "t", View: "v", Stream: "s", Node: 1}, func(track *Track) {
+		go func() {
+			for {
+				packet, err := track.Next(ctx)
+				if err != nil {
+					return
+				}
+				delivered <- packet
+			}
+		}()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	// The old collector can establish the initial mapping, but no later report
+	// reveals the capture-device clock change carried by the third packet.
+	go func() {
+		for {
+			packets, _, err := rtpSender.ReadRTCP()
+			if err != nil {
+				return
+			}
+			for _, packet := range packets {
+				if request, ok := packet.(*rtcp.RapidResynchronizationRequest); ok {
+					ntp := rtp.NewAbsCaptureTimeExtension(collector.started.Add(time.Second)).Timestamp
+					_ = sender.WriteRTCP([]rtcp.Packet{&rtcp.SenderReport{SSRC: request.MediaSSRC, NTPTime: ntp, RTPTime: 7000}})
+				}
+			}
+		}
+	}()
+	connected := make(chan struct{}, 1)
+	sender.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateConnected {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+	})
+	offer, err := sender.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := collector.Answer(ctx, offer.SDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-connected:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	var extensionID uint8
+	for _, extension := range rtpSender.GetParameters().HeaderExtensions {
+		if extension.URI == uri {
+			extensionID = uint8(extension.ID)
+		}
+	}
+	if extensionID == 0 {
+		t.Fatal("collector did not negotiate the source capture clock")
+	}
+	for index, want := range []int64{1000000, 1020000, 1240000, 1260000} {
+		packet := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: uint16(index + 1), Timestamp: 7000 + uint32(index)*960, Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}
+		if index == 0 || index == 2 {
+			extension, err := rtp.NewAbsCaptureTimeExtension(collector.started.Add(time.Duration(want) * time.Microsecond)).Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = packet.SetExtension(extensionID, extension); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err = track.WriteRTP(packet); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-delivered:
+			if got.Header.TimestampUS < want-1 || got.Header.TimestampUS > want {
+				t.Fatalf("packet %d capture time = %d, want %d us without another sender report", index, got.Header.TimestampUS, want)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+}
