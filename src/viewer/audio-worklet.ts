@@ -69,7 +69,7 @@ class FloeAudioProcessor extends AudioWorkletProcessor {
       if (item.at + length / sampleRate > end) break;
       this.queue.shift();
       this.frames -= length;
-      this.port.postMessage({ consumed: length });
+      this.port.postMessage({ consumed: length, rendered: true });
     }
     return true;
   }

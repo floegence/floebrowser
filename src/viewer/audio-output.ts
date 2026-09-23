@@ -4,6 +4,7 @@ export class AudioOutput {
   private context?: AudioContext;
   private module?: Promise<void>;
   private closed = false;
+  private clockReady = false;
   private tracks = new Map<
     string,
     { node: AudioWorkletNode; gain: GainNode }
@@ -18,7 +19,7 @@ export class AudioOutput {
   }
   /** Convert an audible presentation deadline to the context's render clock. */
   private presentationLatency(): number {
-    if (!this.context || !this.running) return 0;
+    if (!this.context || !this.running || !this.clockReady) return 0;
     const clock = this.context.getOutputTimestamp();
     if (!clock.contextTime || !clock.performanceTime) return 0;
     return Math.max(
@@ -46,6 +47,9 @@ export class AudioOutput {
         sampleRate: 48000,
         latencyHint: 'interactive',
       });
+      this.context.onstatechange = () => {
+        if (!this.running) this.clockReady = false;
+      };
       this.module ??= this.context.audioWorklet.addModule(this.workletURL);
       await this.module;
       if (this.closed || !this.adding.has(id)) return;
@@ -57,7 +61,13 @@ export class AudioOutput {
       const gain = this.context.createGain();
       gain.gain.value = 0;
       node.connect(gain).connect(this.context.destination);
-      node.port.onmessage = ({ data }) => consumed(data.consumed);
+      node.port.onmessage = ({ data }) => {
+        // Query the device clock only after the graph has rendered samples.
+        // Firefox can deadlock in its synchronous latency query during startup,
+        // even when the context already reports a running, advancing clock.
+        if (data.rendered) this.clockReady = true;
+        consumed(data.consumed);
+      };
       this.tracks.set(id, { node, gain });
       this.blocked(this.context.state !== 'running');
     } finally {

@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 
 test(
-  'decoded PCM reaches AudioWorklet output and mute takes effect without source playback',
+  'PCM starts before device-clock sampling and mute affects actual worklet output',
   { timeout: 15000 },
   async (t) => {
     const files: Record<string, string> = {
@@ -40,7 +40,27 @@ test(
     await page.evaluate(async () => {
       const Original = AudioContext;
       let analyser: AnalyserNode;
+      let rendered = false;
+      (window as any).clockQueries = 0;
+      const Worklet = AudioWorkletNode;
+      (window as any).AudioWorkletNode = class extends Worklet {
+        constructor(...args: ConstructorParameters<typeof AudioWorkletNode>) {
+          super(...args);
+          this.port.addEventListener('message', ({ data }) => {
+            if (data.rendered) rendered = true;
+          });
+          this.port.start();
+        }
+      };
       (window as any).AudioContext = class extends Original {
+        getOutputTimestamp() {
+          if (!rendered)
+            throw new Error(
+              'The audio device clock is not ready during startup',
+            );
+          (window as any).clockQueries++;
+          return super.getOutputTimestamp();
+        }
         createGain() {
           const gain = super.createGain();
           analyser = this.createAnalyser();
@@ -89,6 +109,10 @@ test(
       (window as any).feed();
     });
     await page.waitForFunction(() => (window as any).consumed >= 9600);
+    assert.ok(
+      await page.evaluate(() => (window as any).clockQueries > 0),
+      'Active playback calibrates its deadlines against the audio device clock',
+    );
     assert.ok(
       await page.evaluate(() => (window as any).energy() < 0.001),
       'Mute silences actual worklet output',
