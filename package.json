@@ -1,6 +1,6 @@
 {
   "name": "@floegence/floebrowser",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "A DOM-based remote browser engine. Websites execute at the source; clients receive a live DOM projection.",
   "type": "module",
   "license": "MIT",
