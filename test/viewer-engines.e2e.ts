@@ -28,8 +28,14 @@ async function fixture(
   // Exercise both supported source-local RTP encodings, not just Chromium's
   // default preference. This fixture never changes the production negotiation.
   await source.addInitScript((codec) => {
+    (window as any).__name = (value: unknown) => value;
+    const peers: RTCPeerConnection[] = ((window as any).fixturePeers = []);
     const Native = RTCPeerConnection;
     (window as any).RTCPeerConnection = class extends Native {
+      constructor(configuration?: RTCConfiguration) {
+        super(configuration);
+        peers.push(this);
+      }
       addTransceiver(
         track: MediaStreamTrack | string,
         options?: RTCRtpTransceiverInit,
@@ -285,6 +291,38 @@ for (const client of [chromium, firefox, webkit]) {
             JSON.stringify({
               failures,
               decoded: await viewer.evaluate(() => (window as any).decoded),
+              source: await source.evaluate(async () => {
+                const video = document.querySelector('video')!;
+                const peers: RTCPeerConnection[] = (window as any).fixturePeers;
+                return {
+                  readyState: video.readyState,
+                  paused: video.paused,
+                  dimensions: [video.videoWidth, video.videoHeight],
+                  pictures: video.getVideoPlaybackQuality().totalVideoFrames,
+                  tracks: (video.srcObject as MediaStream)
+                    ?.getTracks()
+                    .map((track) => ({
+                      kind: track.kind,
+                      state: track.readyState,
+                      settings: track.getSettings(),
+                    })),
+                  peers: await Promise.all(
+                    peers.map(async (peer) => ({
+                      connection: peer.connectionState,
+                      senders: peer
+                        .getSenders()
+                        .map((sender) => ({
+                          kind: sender.track?.kind,
+                          state: sender.track?.readyState,
+                          settings: sender.track?.getSettings(),
+                        })),
+                      outbound: [...(await peer.getStats()).values()].filter(
+                        (stat) => stat.type === 'outbound-rtp',
+                      ),
+                    })),
+                  ),
+                };
+              }),
             }),
           );
           throw error;
