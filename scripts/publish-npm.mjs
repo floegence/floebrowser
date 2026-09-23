@@ -85,18 +85,19 @@ export async function publish() {
   const endpoint = `https://registry.npmjs.org/@floegence%2ffloebrowser/${source.version}`;
   const existing = await fetch(endpoint);
   if (existing.status === 404) {
-    execFileSync(
-      'npm',
-      [
-        'publish',
-        archive,
-        '--access=public',
-        '--provenance',
-        '--ignore-scripts',
-        '--registry=https://registry.npmjs.org',
-      ],
-      { stdio: 'inherit' },
-    );
+    if (process.env.VERIFY_ONLY !== 'true')
+      execFileSync(
+        'npm',
+        [
+          'publish',
+          archive,
+          '--access=public',
+          '--provenance',
+          '--ignore-scripts',
+          '--registry=https://registry.npmjs.org',
+        ],
+        { stdio: 'inherit' },
+      );
   } else {
     assert.ok(existing.ok, `Registry lookup failed: ${existing.status}`);
     assert.equal(

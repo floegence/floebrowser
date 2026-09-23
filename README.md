@@ -831,3 +831,5 @@ To recover a publication failure, dispatch that workflow from `main`, supplying
 the same existing `release_tag`. It reads package identity from that tag while
 running the current publication workflow. An already published version must match the qualified archive;
 the workflow never replaces a version or silently accepts different bytes.
+If npm already acknowledged the upload but registry processing is still pending,
+select `verify_only` when dispatching recovery to avoid submitting the same version again.
