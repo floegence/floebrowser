@@ -816,3 +816,15 @@ packaged DOM browser and prove that a modified helper is rejected before executi
 Consumers do not need a Go toolchain or a helper on PATH. Cross-compilation verifies
 artifact construction; supported-platform behavior still requires native runtime
 and browser qualification on each platform.
+
+Formal npm publication uses the `npm-publish.yml` GitHub Actions workflow and an
+npm Trusted Publisher bound to `floegence/floebrowser`, with publishing permission.
+After qualifying the release build, publish its immutable `vX.Y.Z` GitHub release
+with the matching SDK archive and `SHA256SUMS`. The workflow publishes those exact
+bytes through GitHub OIDC, then verifies npm integrity, tarball bytes and provenance.
+It uses no persistent npm token or per-version browser authorization. The matching
+`media/vX.Y.Z` tag identifies the same source commit.
+
+To recover a transient publication failure, dispatch that workflow at the same
+release tag. An already published version must match the qualified archive;
+the workflow never replaces a version or silently accepts different bytes.

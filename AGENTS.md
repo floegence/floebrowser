@@ -65,6 +65,10 @@ disconnect states, keyboard use, accessibility labels and obvious recovery.
   tests. Check the packed artifact when changing exports, assets or packaging.
 - Keep ordinary CI source-only. Browser installation and E2E belong to explicit
   qualification runs rather than every push.
+- Formal npm releases use the `npm-publish.yml` Trusted Publisher workflow and
+  GitHub OIDC. Do not publish locally with per-version authorization or add a
+  persistent npm publishing token. Publish the qualified GitHub release archive
+  unchanged, and verify registry integrity, archive bytes and provenance.
 
 ## Local checks
 

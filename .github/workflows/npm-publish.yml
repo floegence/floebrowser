@@ -1,0 +1,39 @@
+name: Publish npm package
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.repository == 'floegence/floebrowser' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: npm-publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: npm install --global npm@11.19.0 --ignore-scripts
+      - name: Download the qualified release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir release
+          gh release download "$RELEASE_TAG" --dir release --pattern 'floegence-floebrowser-*.tgz' --pattern SHA256SUMS
+          cd release
+          sha256sum --check --strict SHA256SUMS
+      - name: Publish with npm Trusted Publisher and verify registry readback
+        run: node scripts/publish-npm.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-readback-${{ github.ref_name }}
+          path: release/npm-readback.json
+          if-no-files-found: error
