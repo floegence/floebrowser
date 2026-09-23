@@ -309,13 +309,11 @@ for (const client of [chromium, firefox, webkit]) {
                   peers: await Promise.all(
                     peers.map(async (peer) => ({
                       connection: peer.connectionState,
-                      senders: peer
-                        .getSenders()
-                        .map((sender) => ({
-                          kind: sender.track?.kind,
-                          state: sender.track?.readyState,
-                          settings: sender.track?.getSettings(),
-                        })),
+                      senders: peer.getSenders().map((sender) => ({
+                        kind: sender.track?.kind,
+                        state: sender.track?.readyState,
+                        settings: sender.track?.getSettings(),
+                      })),
                       outbound: [...(await peer.getStats()).values()].filter(
                         (stat) => stat.type === 'outbound-rtp',
                       ),
