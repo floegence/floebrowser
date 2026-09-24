@@ -93,6 +93,10 @@ const template = `    <main class="floe-browser browser-window">
          
           ></span
         >
+        <button class="icon-button" data-floe-ui="more" aria-haspopup="menu" aria-expanded="false" hidden>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
+        </button>
+        <div data-floe-ui="browser-menu" class="browser-menu" role="menu" popover="manual"></div>
       </nav>
       <div class="stage">
         <div data-floe-ui="viewport"></div>

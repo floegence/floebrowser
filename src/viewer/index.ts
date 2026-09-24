@@ -33,3 +33,5 @@ export type {
   UploadFile,
   DownloadState,
 } from '../shared/protocol.js';
+
+export type { BrowserMenu } from './menu.js';

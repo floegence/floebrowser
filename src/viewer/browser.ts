@@ -10,6 +10,7 @@ import { OriginZoom, type ZoomPreferences } from './zoom-preferences.js';
 import { FilePicker, type ChooseFiles } from './files.js';
 import { Downloads } from './downloads.js';
 import { browserTemplate } from './template.js';
+import { mountBrowserMenu, type BrowserMenu } from './menu.js';
 import {
   AddressSuggestions,
   addressURL,
@@ -30,6 +31,8 @@ export type BrowserOptions = Omit<
   connect: (request: { takeover: boolean }) => ProjectionConnection;
   title?: string;
   library?: BrowserLibrary;
+  /** Optional host actions in the address row. The host owns their effects. */
+  menu?: BrowserMenu;
   zoomPreferences?: ZoomPreferences;
   /** Host-owned authorized history/bookmarks/tabs; never contact a search engine
    * on each keystroke. Omission uses this view's bounded in-memory visits. */
@@ -1029,6 +1032,14 @@ export function mountBrowser(
             buttons.length;
     buttons[next]?.focus();
   });
+  mountBrowserMenu(
+    root,
+    element<HTMLButtonElement>('more'),
+    element('browser-menu'),
+    options.menu,
+    notice,
+    lifetime.signal,
+  );
   window.addEventListener('pagehide', destroy, { signal: lifetime.signal });
   function destroy(): void {
     if (destroyed) return;

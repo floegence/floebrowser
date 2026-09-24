@@ -544,6 +544,16 @@ const browser = mountBrowser(container, {
 // Later: browser.destroy();
 ```
 
+Hosts can supply `menu: { label, actions }` to place product actions in the
+address row's **More** button instead of adding another toolbar. Each action has
+plain localized `label`, optional `description`, `run()` and `failureMessage`
+(a string or a function mapping a host error to localized text).
+The menu supports keyboard navigation, focus return, outside dismissal and
+narrow viewports. `run()` executes directly in the user's activation (including
+native window creation), with no replay. A pending action cannot be invoked
+twice; rejection shows its localized failure message. Source identity, permissions
+and lifecycle remain host-owned. No menu is shown when actions are omitted.
+
 Omitting `messages` uses `englishMessages`. A supplied catalog must explicitly
 provide every `BrowserMessageKey` and preserve each message's named placeholders;
 missing or malformed entries fail at mount. Source content and URLs remain
