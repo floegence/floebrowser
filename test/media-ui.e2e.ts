@@ -1,8 +1,84 @@
 import { clickProjected } from './projected-input.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
+
+for (const client of [chromium, firefox, webkit])
+  test(
+    `${client.name()} never adds local playback controls to unavailable source video`,
+    { timeout: 15000 },
+    async (t) => {
+      const sourceBrowser = await chromium.launch();
+      const viewerBrowser = await client.launch();
+      t.after(() =>
+        Promise.all([sourceBrowser.close(), viewerBrowser.close()]),
+      );
+      const source = await sourceBrowser.newPage();
+      await source.goto(
+        'data:text/html,' +
+          encodeURIComponent(
+            '<style>video{display:block;width:320px;height:180px;background:rgb(20,100,200)}</style><video></video>',
+          ),
+      );
+      await source.locator('video').evaluate((video) => {
+        Object.defineProperty(video, 'readyState', { value: 2 });
+        (video as any).captureStream = () => {
+          throw new DOMException('Cross-origin media', 'SecurityError');
+        };
+      });
+      const service = await createProjectionServer(source, {
+        authorize: () => true,
+      });
+      t.after(() => service.close());
+      const viewer = await viewerBrowser.newPage();
+      viewer.setDefaultTimeout(4000);
+      await viewer.goto(service.url);
+      await viewer.locator('#status.live').waitFor();
+      const video = viewer.frameLocator('#viewport iframe').locator('video');
+      await video.waitFor();
+      const bounds = await video.boundingBox();
+      assert.ok(bounds);
+      const screenshot = await viewer.screenshot({
+        clip: {
+          x: bounds.x + 12,
+          y: bounds.y + bounds.height - 20,
+          width: 2,
+          height: 2,
+        },
+      });
+      const color = await viewer.evaluate(
+        async (bytes) => {
+          const bitmap = await createImageBitmap(
+            new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+          );
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d')!;
+          context.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          return [...context.getImageData(0, 0, 1, 1).data];
+        },
+        [...screenshot],
+      );
+      assert.deepEqual(
+        color,
+        [20, 100, 200, 255],
+        'Inert video preserves its source appearance without nonfunctional local controls',
+      );
+      await viewer
+        .getByRole('button', { name: 'Media controls', exact: true })
+        .click();
+      await viewer
+        .getByText('This media cannot play in this browser.', { exact: true })
+        .waitFor();
+      assert.equal(
+        await viewer
+          .getByRole('button', { name: 'Play source media', exact: true })
+          .isEnabled(),
+        false,
+      );
+    },
+  );
 
 test(
   'hidden unavailable media does not cover a page or force open controls',

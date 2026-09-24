@@ -785,6 +785,9 @@ export class DOMBrowserView {
           },
         ],
         insertStyleRules: [
+          // Chromium exposes native video controls in scriptless documents even
+          // without the controls attribute. Only source controls are functional.
+          'video[data-floebrowser-media]::-webkit-media-controls{display:none!important}',
           `select[${INPUT_PROXY_ATTRIBUTE}]{opacity:0!important}`,
           `[${INPUT_PROXY_ATTRIBUTE}]:not(select){-webkit-text-fill-color:transparent!important;text-shadow:none!important;caret-color:transparent!important}`,
           `[${INPUT_PROXY_ATTRIBUTE}]::placeholder{color:transparent!important;-webkit-text-fill-color:transparent!important}`,

@@ -110,6 +110,11 @@ DOM removal retires media by stream identity, so reinserting an element establis
 
 The standalone loopback server creates a second private WebSocket for encoded media and consumer acknowledgements. Its token belongs to the admitted viewer and expires with that viewer; it does not transfer control authority. An SSH TCP tunnel carries both connections. Product integrations supply authenticated byte streams and HTTPS client origins supporting WebCodecs, Workers and AudioWorklet. DRM, origin restrictions, source autoplay policy, unsupported codecs and client platform support can still prevent playback; these cases are explicit rather than replaced with screen capture.
 
+The scriptless projection suppresses Chromium's automatically exposed native
+video controls, including while capture is unavailable. They cannot control the
+source and would otherwise overlap the website's projected controls. Capture
+failures remain discoverable in the browser's media panel.
+
 Decoder failures are scoped to a single element track. A damaged video packet
 requests a fresh keyframe; a damaged Opus packet can recover from the next
 packet. Three consecutive decoding failures retire that track until a fresh
