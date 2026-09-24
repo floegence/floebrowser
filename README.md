@@ -173,8 +173,8 @@ Resource references on the wire are inert, host-scoped identities. Source captur
 announces available response bodies and their revisions; the trusted viewer
 fetches only those same-origin host URLs and supplies Blob URLs to the scriptless
 replay. This also works when replay-frame HTTP would bypass a host's Service
-Worker. `ViewOptions.fetchResource(url, signal)` can supply a host-owned resource
-reader. CSS imports, fonts, SVG references and later CSSOM updates share this
+Worker. `ViewOptions.fetchResource(url, signal)` (also accepted by `mountBrowser`)
+can supply a host-owned resource reader. CSS imports, fonts, SVG references and later CSSOM updates share this
 path. Unused or unavailable fonts never trigger a website request or hold first
 paint; fonts retain the 200 ms fallback budget. Resource reads run independently
 of DOM/input, with eight concurrent reads, a 512-entry wait queue, 2,048 cached

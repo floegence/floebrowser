@@ -546,6 +546,7 @@ export function mountBrowser(
     find.close();
     connected = ready = changingTab = false;
     view = new DOMBrowserView(viewport, options.connect({ takeover }), {
+      fetchResource: options.fetchResource,
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
@@ -818,6 +819,12 @@ export function mountBrowser(
   });
   address.addEventListener('keydown', (event) => {
     if (composing || event.isComposing) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      submitAddress();
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -850,13 +857,13 @@ export function mountBrowser(
       });
     }
   });
-  element('address-form').addEventListener('submit', (event) => {
-    event.preventDefault();
+  function submitAddress(): void {
     if (composing) return;
     if (selectedSuggestion >= 0 && !suggestionList.hidden)
       choose(matches[selectedSuggestion]!);
     else if (address.value.trim()) navigate(address.value);
-  });
+  }
+  element('address-go').addEventListener('click', submitAddress);
   element('new-tab').addEventListener('click', newTab);
   element('find').addEventListener('click', () => find.open());
   for (const kind of ['back', 'forward', 'reload'] as const)

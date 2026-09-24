@@ -58,6 +58,11 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
   await page.route('http://127.0.0.1/component', (route) =>
     route.fulfill({
       contentType: 'text/html',
+      // Hosts forbid native form submissions. Browser chrome must dispatch
+      // authorized source commands without requiring allow-forms.
+      headers: {
+        'Content-Security-Policy': 'sandbox allow-scripts allow-same-origin',
+      },
       body: '<title>Host title</title><button id="outside">Host button</button><div style="display:flex;height:700px"><section id="host-0" style="width:50%"></section><section id="host-1" style="width:50%"></section></div>',
     }),
   );
@@ -162,6 +167,22 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
       .evaluate((e) => getComputedStyle(e).borderRadius),
     '0px',
     'Browser styling does not change host buttons',
+  );
+  await second.getByRole('combobox').fill('https://keyboard.invalid/');
+  await second.getByRole('combobox').press('Enter');
+  await page.waitForFunction(() =>
+    (window as any).sent[1].some(
+      (m: any) => m.action?.url === 'https://keyboard.invalid/',
+    ),
+  );
+  await second.getByRole('combobox').fill('https://button.invalid/');
+  await second
+    .getByRole('button', { name: 'Open website', exact: true })
+    .click();
+  await page.waitForFunction(() =>
+    (window as any).sent[1].some(
+      (m: any) => m.action?.url === 'https://button.invalid/',
+    ),
   );
   await page.evaluate(() =>
     (window as any).deliver[0]({

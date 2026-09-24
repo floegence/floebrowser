@@ -44,7 +44,7 @@ const template = `    <main class="floe-browser browser-window">
             </svg>
           </button>
         </div>
-        <form class="address-bar" data-floe-ui="address-form">
+        <div class="address-bar">
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <circle cx="10" cy="10" r="7" />
             <path d="M3 10h14M10 3c4 4 4 10 0 14-4-4-4-10 0-14Z" />
@@ -63,7 +63,7 @@ const template = `    <main class="floe-browser browser-window">
             spellcheck="false"
           />
           <button
-            type="submit"
+            type="button"
             data-floe-ui="address-go"
             class="icon-button"
            
@@ -77,7 +77,7 @@ const template = `    <main class="floe-browser browser-window">
            
             hidden
           ></div>
-        </form>
+        </div>
         <button data-floe-ui="take-control" class="take-control" hidden></button>
         <button class="zoom-toggle" data-floe-ui="zoom"></button>
         <button class="icon-button" data-floe-ui="library" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3h10v14l-5-3-5 3z"/></svg></button>
