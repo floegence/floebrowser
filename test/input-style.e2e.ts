@@ -30,7 +30,7 @@ for (const client of [chromium, firefox, webkit])
       @font-face{font-family:PrivateInput;src:url('/font')}
       body{margin:20px;background:linear-gradient(120deg,#eff5ff,#c6d8f0);font:16px system-ui}
       section{padding:12px}section:focus-within{background:rgb(210,225,240)}
-      input{font:24px PrivateInput;width:400px;padding:12px;background:transparent;border:1px solid #abc;outline:none}
+      input{font:24px PrivateInput;width:400px;padding:12px;background:rgb(255,255,255);border:1px solid #abc;outline:none}
       input:focus{border-color:rgb(30,90,170)}input:focus-visible{outline:2px solid rgb(20,140,90)}
       button{width:180px;height:40px;background:rgb(240,240,240)}button:hover{background:rgb(30,90,170)}button:active{background:rgb(170,30,90)}
       </style><section><input value="Minimum width MW 0123456789"><button>Action</button></section>`,
@@ -79,8 +79,11 @@ for (const client of [chromium, firefox, webkit])
       await viewer.locator('.floe-input-proxy').waitFor();
       await viewer.waitForFunction(
         () =>
-          getComputedStyle(document.querySelector('.floe-input-proxy')!)
-            .borderTopColor === 'rgb(30, 90, 170)',
+          getComputedStyle(
+            document
+              .querySelector<HTMLIFrameElement>('#viewport iframe')!
+              .contentDocument!.querySelector('input')!,
+          ).borderTopColor === 'rgb(30, 90, 170)',
       );
       await viewer.waitForFunction(
         () =>
@@ -114,6 +117,65 @@ for (const client of [chromium, firefox, webkit])
         ),
         false,
         'Website font names do not enter the host font namespace',
+      );
+      // Search fields often extend underneath sibling buttons. The trusted
+      // caret layer must not repaint their background, border or shadows above
+      // those siblings; the inert source document owns those decorations.
+      assert.equal(
+        await viewer
+          .locator('.floe-input-proxy')
+          .evaluate((node) => getComputedStyle(node).backgroundColor),
+        'rgba(0, 0, 0, 0)',
+      );
+      await source.locator('input').evaluate((node) => {
+        node.style.backgroundColor = 'rgb(255, 255, 255)';
+        const button = node.nextElementSibling as HTMLElement;
+        button.style.cssText =
+          'position:absolute;left:330px;top:35px;width:110px;height:40px;background:rgb(20,100,200)';
+      });
+      await viewer.waitForFunction(() => {
+        const input = document
+          .querySelector<HTMLIFrameElement>('#viewport iframe')!
+          .contentDocument!.querySelector('input')!;
+        return getComputedStyle(input).backgroundColor === 'rgb(255, 255, 255)';
+      });
+      await viewer.waitForFunction(
+        () =>
+          getComputedStyle(
+            document
+              .querySelector<HTMLIFrameElement>('#viewport iframe')!
+              .contentDocument!.querySelector('button')!,
+          ).position === 'absolute',
+      );
+      assert.equal(
+        await viewer
+          .locator('.floe-input-proxy')
+          .evaluate((node) => getComputedStyle(node).backgroundColor),
+        'rgba(0, 0, 0, 0)',
+        'The native caret does not paint over the source search button',
+      );
+      const overlay = await content.locator('button').boundingBox();
+      assert.ok(overlay);
+      const pixels = await viewer.screenshot({
+        clip: { x: overlay.x + 5, y: overlay.y + 5, width: 2, height: 2 },
+      });
+      const color = await viewer.evaluate(
+        async (bytes) => {
+          const bitmap = await createImageBitmap(
+            new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+          );
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d')!;
+          context.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          return [...context.getImageData(0, 0, 1, 1).data];
+        },
+        [...pixels],
+      );
+      assert.deepEqual(
+        color,
+        [20, 100, 200, 255],
+        'The overlapping button remains visually intact',
       );
       await viewer.keyboard.press('Tab');
       await viewer.waitForFunction(() =>

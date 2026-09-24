@@ -710,6 +710,10 @@ gestures through host admission and source completion; browser chrome remains
 available. Unsent gestures are discarded, and a superseded completion cannot
 resume a newer navigation's input. Rejected admission restores the current page.
 `test/input-focus.e2e.ts` and `test/navigation-input.e2e.ts` cover these boundaries.
+The inert document retains field backgrounds, borders and shadows in its original
+stacking order. Trusted text proxies paint only text, selection and caret, so
+search and clear buttons overlapping a field remain visible. Native select
+proxies retain their complete platform picker presentation.
 
 Audio/video synchronization has a separate acceptance check in
 `test/media-sync.e2e.ts`, including a Firefox viewer, with an unchanged 100 ms

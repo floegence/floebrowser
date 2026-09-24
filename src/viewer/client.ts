@@ -785,7 +785,9 @@ export class DOMBrowserView {
           },
         ],
         insertStyleRules: [
-          `[${INPUT_PROXY_ATTRIBUTE}]{opacity:0!important}`,
+          `select[${INPUT_PROXY_ATTRIBUTE}]{opacity:0!important}`,
+          `[${INPUT_PROXY_ATTRIBUTE}]:not(select){-webkit-text-fill-color:transparent!important;text-shadow:none!important;caret-color:transparent!important}`,
+          `[${INPUT_PROXY_ATTRIBUTE}]::placeholder{color:transparent!important;-webkit-text-fill-color:transparent!important}`,
           ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]{display:flex!important;align-items:center;justify-content:center;background:#f3f5f8!important;border:1px dashed #c9d1dd!important;color:#64748b!important;font:12px/1.5 system-ui!important;overflow:hidden}',
           ':not([data-floebrowser-canvas])[data-floebrowser-unsupported]::after{content:attr(data-floebrowser-unsupported);padding:12px;text-align:center}',
           'a,button,select,input[type=checkbox],input[type=radio]{cursor:pointer}',

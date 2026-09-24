@@ -94,6 +94,8 @@ export function styleInputProxy(
     'direction',
     'writing-mode',
     'color',
+    '-webkit-text-fill-color',
+    'text-shadow',
     'background-color',
     'border-top-width',
     'border-right-width',
@@ -123,6 +125,15 @@ export function styleInputProxy(
     'opacity',
   ])
     proxy.style.setProperty(property, style.getPropertyValue(property));
+  // The source document owns decoration and sibling stacking. A host-level
+  // opaque field would cover buttons placed over the source input (for example
+  // a search or clear button). Only native selection, text and caret paint here.
+  if (element.tagName !== 'SELECT') {
+    proxy.style.backgroundColor = 'transparent';
+    proxy.style.borderColor = 'transparent';
+    proxy.style.outline = 'none';
+    proxy.style.boxShadow = 'none';
+  }
   Object.assign(proxy.style, {
     left: `${rect.left - origin.left + container.scrollLeft}px`,
     top: `${rect.top - origin.top + container.scrollTop}px`,
