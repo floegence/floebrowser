@@ -22,11 +22,11 @@ jobs:
           cache-dependency-path: |
             media/go.sum
             test/flowersec/go.sum
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package -test ./...
         working-directory: media
         env:
           GOWORK: 'off'
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package -test ./...
         working-directory: test/flowersec
         env:
           GOWORK: 'off'
