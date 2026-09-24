@@ -761,7 +761,9 @@ without `requestFrame()`, including Firefox.
 
 The shared presentation clock cannot schedule audio beyond the bounded PCM
 queue's capacity. Each audio block accounts for device presentation latency,
-its own size, and a 50 ms dispatch margin before limiting the clock's lookahead.
+its own size, and one 128-sample render quantum before limiting the clock's lookahead.
+The shared clock already owns the 50 ms dispatch margin; subtracting it again
+from audio capacity would advance both deadlines before video can arrive.
 This keeps a retained older picture from filling the 12,000-frame queue with
 future audio and discarding later pulses. Both decoder and worklet retain their
 existing hard limit. The synchronization test includes a first picture whose

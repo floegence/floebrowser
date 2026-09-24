@@ -1,8 +1,4 @@
-import {
-  AUDIO_BUFFER_FRAMES,
-  AUDIO_SAMPLE_RATE,
-  MEDIA_SCHEDULING_MARGIN_MS,
-} from './media-limits.js';
+import { AUDIO_BUFFER_FRAMES, AUDIO_SAMPLE_RATE } from './media-limits.js';
 
 /** Playback is independent of source execution. Resuming this context only
  * unlocks client audio; it never invokes play on a source media element. */
@@ -36,14 +32,14 @@ export class AudioOutput {
     );
   }
   maximumDelay(frames: number): number {
-    // Reserve room for this whole block and a dispatch margin. An older first
-    // picture must not anchor playback beyond the bounded PCM queue's horizon.
+    // Reserve this whole block and one render quantum. The shared media clock
+    // already includes dispatch margin; reserving that margin again shortens
+    // the audio horizon and advances video deadlines before pictures arrive.
     return (
       this.presentationLatency() +
       Math.max(
         0,
-        ((AUDIO_BUFFER_FRAMES - frames) / AUDIO_SAMPLE_RATE) * 1000 -
-          MEDIA_SCHEDULING_MARGIN_MS,
+        ((AUDIO_BUFFER_FRAMES - frames - 128) / AUDIO_SAMPLE_RATE) * 1000,
       )
     );
   }
