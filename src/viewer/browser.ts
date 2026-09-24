@@ -332,6 +332,18 @@ export function mountBrowser(
     if (document.activeElement !== address) setAddress();
   }
   async function dispatchPage(action: Action): Promise<boolean> {
+    const resume = ['navigate', 'back', 'forward', 'reload'].includes(
+      action.kind,
+    )
+      ? view!.suspendInput()
+      : undefined;
+    try {
+      return await admitPage(action);
+    } finally {
+      resume?.();
+    }
+  }
+  async function admitPage(action: Action): Promise<boolean> {
     if (action.kind !== 'navigate' || !options.onRequestControl)
       return view!.dispatch(action);
     const target = tabState.active,

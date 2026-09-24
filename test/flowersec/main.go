@@ -190,7 +190,7 @@ func serve() error {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path == "/"+token+"/" {
-			http.SetCookie(w, &http.Cookie{Name: "fixture", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: "fixture", Value: token, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, "<!doctype html><title>Flowersec mixed lanes</title>")
 			return

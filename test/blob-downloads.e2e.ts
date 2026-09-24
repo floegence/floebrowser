@@ -31,14 +31,14 @@ test(
   'Blob downloads remain source scoped, repeatable and disposable across frame navigation',
   { timeout: 15000 },
   async (t) => {
-    const site = http.createServer((request, response) => {
+    const site = http.createServer((_request, response) => {
       response.writeHead(200, { 'Content-Type': 'text/html' });
       response.end(`<!doctype html><script>
       window.nativeCreate = URL.createObjectURL;
       window.nativeRevoke = URL.revokeObjectURL;
       window.early = URL.createObjectURL(new Blob(['before observation']));
       window.exportURL = (url) => { const a = document.createElement('a'); a.href=url; a.download='blob.txt'; a.click(); };
-      </script><button onclick="window.saved ||= window.URL.createObjectURL(new Blob(['${request.url} immutable bytes']));exportURL(window.saved)">Export</button>`);
+      </script><button onclick="window.saved ||= window.URL.createObjectURL(new Blob([location.pathname + ' immutable bytes']));exportURL(window.saved)">Export</button>`);
     });
     site.listen(0, '127.0.0.1');
     await once(site, 'listening');

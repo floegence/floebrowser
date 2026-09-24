@@ -1,33 +1,32 @@
-name: Browser qualification
+name: Dependency security
 on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '31 3 * * *'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  browser:
+  dependencies:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
-          cache: npm
-      - run: npm ci
+      - run: npm audit --audit-level=low
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: media/go.mod
           cache-dependency-path: |
             media/go.sum
             test/flowersec/go.sum
-      - run: go test -race ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package ./...
         working-directory: media
-      - run: npx playwright install --with-deps chromium firefox webkit
         env:
-          PLAYWRIGHT_SKIP_BROWSER_GC: '1'
-      - run: npm run build
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: browser-evidence
-          path: .test-artifacts/
+          GOWORK: 'off'
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan=package ./...
+        working-directory: test/flowersec
+        env:
+          GOWORK: 'off'

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile, stat } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { UploadBudget } from '../src/host/uploads.js';
 
 async function* bytes(value: string) {
@@ -12,8 +12,13 @@ test('uploads stream into private staging and only current opaque identities sel
   const batch = budget.create(false);
   const id = await batch.write({ name: '例.txt', size: 5 }, bytes('hello'));
   const paths = await batch.readyPaths([id]);
-  assert.equal(await readFile(paths[0]!, 'utf8'), 'hello');
-  assert.equal((await stat(paths[0]!)).mode & 0o077, 0);
+  const file = await open(paths[0]!, 'r');
+  try {
+    assert.equal(await file.readFile('utf8'), 'hello');
+    assert.equal((await file.stat()).mode & 0o077, 0);
+  } finally {
+    await file.close();
+  }
   assert.throws(() => batch.paths(['/etc/passwd']));
   assert.throws(() => batch.paths([id, id]));
   batch.commit();

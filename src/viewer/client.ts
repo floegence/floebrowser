@@ -152,6 +152,7 @@ export class DOMBrowserView {
   private lastMove = 0;
   private dragging = false;
   private inputEngaged = false;
+  private inputPause?: object;
   private sourceFocus?: FocusState;
   private inputFonts = new InputFonts();
   private focusFrame = 0;
@@ -610,6 +611,8 @@ export class DOMBrowserView {
         message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
       );
       if (message.state.active !== this.tab) {
+        this.inputPause = undefined;
+        this.inputSurface.inert = false;
         this.dialogOpen = false;
         this.directoryDialog = undefined;
         this.options.onDialog?.(null);
@@ -686,7 +689,7 @@ export class DOMBrowserView {
         this.pages.drop(this.tab);
         this.pages.present(this.surface);
         // The connection and browser chrome remain usable without website DOM.
-        this.options.onStatus?.('live');
+        if (!this.inputPause) this.options.onStatus?.('live');
       }
       this.options.onState?.(message.state);
       this.layout();
@@ -748,7 +751,7 @@ export class DOMBrowserView {
           }
           this.pages.drop(this.tab);
           this.applyFocus();
-          this.options.onStatus?.('live');
+          if (!this.inputPause) this.options.onStatus?.('live');
           for (const changed of this.readiness) changed();
         },
         () => this.options.onNotice?.(this.text('page.stylesSlow')),
@@ -985,6 +988,10 @@ export class DOMBrowserView {
   private sendAction(action: Action): Promise<boolean> {
     if (
       !this.connected ||
+      (this.inputPause &&
+        ['pointer', 'wheel', 'key', 'text', 'select', 'media', 'find'].includes(
+          action.kind,
+        )) ||
       (this.previewTarget &&
         this.previewTarget !== this.tab &&
         !action.kind.startsWith('tab_') &&
@@ -1254,6 +1261,26 @@ export class DOMBrowserView {
     if (this.heldInput) void this.dispatch({ kind: 'release_input' });
     this.heldInput = false;
     this.dragging = false;
+  }
+
+  /** Fence page input from explicit navigation intent, including host admission.
+   * Only the newest intent may resume input; no queued gesture is retained. */
+  suspendInput(): () => void {
+    const intent = (this.inputPause = {});
+    this.queuedWheel = undefined;
+    this.inputEngaged = false;
+    this.cancelInput();
+    this.clearProxy();
+    this.inputSurface.inert = true;
+    this.sink.blur();
+    this.options.onStatus?.('refreshing');
+    return () => {
+      if (this.inputPause !== intent || this.destroyed) return;
+      this.inputPause = undefined;
+      this.inputSurface.inert = false;
+      if (this.connected && (this.ready || !this.pageError.hidden))
+        this.options.onStatus?.('live');
+    };
   }
 
   private bindInput(): void {

@@ -44,6 +44,19 @@ test('suggestions deduplicate open tabs, match titles and bound in-memory visits
   assert.equal(history.match('New tab', tabs).length, 0);
 });
 
+test('long invalid domain-like search terms are processed in linear time', () => {
+  const input = '!.'.repeat(50000) + ' invalid';
+  const started = performance.now();
+  assert.equal(
+    addressURL(input),
+    `https://www.google.com/search?q=${encodeURIComponent(input)}`,
+  );
+  assert.ok(
+    performance.now() - started < 200,
+    'Address classification must not backtrack across repeated dots',
+  );
+});
+
 test('host search policy is used only for submitted search terms and cannot create active URLs', () => {
   const queries: string[] = [];
   const search = (query: string) => {

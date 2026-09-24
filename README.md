@@ -703,6 +703,14 @@ for source-selected form and nested-frame text in all three engines. These
 Playwright development-engine tests do not qualify current stable Safari,
 Firefox or Edge.
 
+Every completed source mouse gesture confirms focus, including a repeated click
+whose focus and selection did not change. This restores the native caret without
+replaying input. Explicit address, back, forward and reload intents suspend page
+gestures through host admission and source completion; browser chrome remains
+available. Unsent gestures are discarded, and a superseded completion cannot
+resume a newer navigation's input. Rejected admission restores the current page.
+`test/input-focus.e2e.ts` and `test/navigation-input.e2e.ts` cover these boundaries.
+
 Audio/video synchronization has a separate acceptance check in
 `test/media-sync.e2e.ts`, including a Firefox viewer, with an unchanged 100 ms
 maximum. Native Chromium 153 file-backed capture copies upcoming audio while
@@ -829,6 +837,40 @@ npm run check:package
 Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover attachment to loaded pages, cached popups and in-flight stylesheets, authenticated images/CSS/fonts, trusted source clicks, IME, submission cookies, responsive images, live DOM changes, navigation, sustained scrolling with delayed DOM, live scroll latency, bounded wheel accumulation, reversal/click ordering and cancellation on rejection/navigation/handoff, zero-height document roots, nested scroll chaining and containment, scaled cross-origin wheel input, rejected scroll targets, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, window handoff with source video hover/click input, source tabs, persistent drag/keyboard reordering, overflow scrolling, cancellation and rejected moves, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media subscription fences, stalled media consumer credit with responsive input, paused-frame preservation across DOM checkpoints, pending source playback without blocked input or shutdown, hidden-media suppression, on-demand media controls, source-authorized media location with muted-state labels, and audio activation without overriding source or client mute.
 
 `npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch.
+
+## Security qualification
+
+GitHub CodeQL default setup analyzes Actions, Go and JavaScript/TypeScript with
+extended queries on changes and its scheduled scan. The main ruleset blocks
+deletion and force pushes and requires CodeQL findings to pass for pull requests.
+Secret scanning and push protection are enabled, as are Dependabot alerts,
+security updates and weekly dependency updates. Every Action is pinned to a
+reviewed commit. `dependency-security.yml` runs npm audit and Go package-level
+vulnerability checks on changes and daily, without installing browsers.
+
+Before creating a release, run `node scripts/check-security.mjs <main-sha>` with
+maintainer credentials. It requires the exact current main commit to have three
+complete CodeQL analyses and a successful dependency-security run, and requires
+zero open code-scanning, Dependabot and secret-scanning alerts. The OIDC publishing
+workflow repeats the exact-commit CodeQL, code-alert and dependency-run checks
+using its read-only security/actions permissions. It fails closed if evidence is
+missing, partial, stale, skipped or failed. The workflow token cannot read secret
+or Dependabot alerts; the maintainer audit owns those repository-wide checks.
+
+Go qualification scans imported packages, including tests, rather than treating
+every package in a required module as executable product code. GO-2026-5932 affects
+the retired `golang.org/x/crypto/openpgp` packages, none of which are imported by
+the collector or Flowersec fixture. There is no fixed OpenPGP version. Package
+scanning remains mandatory and will fail if an affected package is introduced.
+The networking dependencies include the fix for GO-2026-5942.
+
+CodeQL false positives require a recorded per-alert explanation. The initial
+review dismissed the dedicated media Worker's missing Window-origin check:
+it is not a Window message endpoint and only its creating viewer owns its port.
+Publication readback findings were also reviewed: registry URLs use fixed npm
+origins and qualified versions, and evidence writes use a fixed output path.
+Registry redirects, unexpected tarball paths and mismatched integrity/bytes are
+rejected. No scan categories or rules are excluded to suppress these findings.
 
 ## Ownership and integration
 

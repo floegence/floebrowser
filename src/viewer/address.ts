@@ -51,7 +51,11 @@ export function addressURL(
     /^(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:]+\])(?=[:/?#]|$)/i.test(
       text,
     );
-  const domain = /^[^\s/:]+\.[^\s/:]+(?=[:/?#]|$)/.test(text);
+  // Scan the authority once. Overlapping repetitions on either side of a dot
+  // can backtrack quadratically on a long, invalid search term.
+  const authority = text.split(/[:/?#]/, 1)[0]!;
+  const dot = authority.indexOf('.');
+  const domain = dot > 0 && dot < authority.length - 1 && !/\s/.test(authority);
   const explicit = /^[a-z][a-z\d+.-]*:/i.test(text) && !local && !domain;
   try {
     const url = new URL(

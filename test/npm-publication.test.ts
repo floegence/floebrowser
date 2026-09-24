@@ -64,6 +64,26 @@ test('registry readback fails immediately on other errors and bounds processing 
   assert.equal(calls, 121);
 });
 
+test('registry readback rejects external endpoints and refuses redirects', async () => {
+  for (const endpoint of [
+    'https://example.com/version',
+    'https://registry.npmjs.org@evil.test/version',
+    'http://registry.npmjs.org/version',
+  ])
+    await assert.rejects(
+      readPublishedMetadata(endpoint, async () => {
+        assert.fail('Untrusted endpoints cannot be requested');
+      }),
+    );
+  await readPublishedMetadata(
+    'https://registry.npmjs.org/example/1.0.0',
+    async (_url: URL, options: RequestInit) => {
+      assert.equal(options.redirect, 'error');
+      return Response.json({ version: '1.0.0' });
+    },
+  );
+});
+
 test('npm publication accepts only the matching release artifact and GitHub OIDC identity', () => {
   assert.doesNotThrow(() => verifyPublication(pkg, pkg, environment));
   for (const changed of [

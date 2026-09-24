@@ -339,7 +339,11 @@ export function installRecorder(binding: string, key: string): void {
           );
           media.add(observer);
           observer.setEnabled(mediaActive, picturesActive);
-          const changed = () => queueMicrotask(() => emitFocus(doc));
+          // A repeated click can leave both focus and selection unchanged. The
+          // viewer retires its input proxy while the gesture is in flight, so
+          // every completed pointer gesture must confirm current source focus.
+          const changed = (event: Event) =>
+            queueMicrotask(() => emitFocus(doc, event.type === 'mouseup'));
           const stopInteraction = observeInteraction(doc, (element, state) => {
             const id = record.mirror.getId(element);
             if (id > 0)
@@ -366,7 +370,12 @@ export function installRecorder(binding: string, key: string): void {
                 rawSrc: image.getAttribute('src'),
               });
           };
-          for (const event of ['focusin', 'selectionchange', 'input'])
+          for (const event of [
+            'focusin',
+            'selectionchange',
+            'input',
+            'mouseup',
+          ])
             doc.addEventListener(event, changed, true);
           doc.addEventListener('load', loaded, true);
           return () => {
@@ -380,7 +389,12 @@ export function installRecorder(binding: string, key: string): void {
             stopInteraction();
             canvasObserver.close();
             media.delete(observer);
-            for (const event of ['focusin', 'selectionchange', 'input'])
+            for (const event of [
+              'focusin',
+              'selectionchange',
+              'input',
+              'mouseup',
+            ])
               doc.removeEventListener(event, changed, true);
             doc.removeEventListener('load', loaded, true);
           };

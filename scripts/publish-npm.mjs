@@ -13,7 +13,10 @@ export async function readPublishedMetadata(
 ) {
   // npm acknowledges uploads before the version is visible in the registry.
   for (let attempt = 0; attempt <= 120; attempt++) {
-    const response = await request(endpoint);
+    const url = new URL(endpoint);
+    assert.equal(url.origin, 'https://registry.npmjs.org');
+    assert.ok(!url.username && !url.password && !url.search && !url.hash);
+    const response = await request(url, { redirect: 'error' });
     if (response.ok) return response.json();
     assert.equal(
       response.status,
@@ -83,7 +86,7 @@ export async function publish() {
   const bytes = await readFile(archive);
   const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
   const endpoint = `https://registry.npmjs.org/@floegence%2ffloebrowser/${source.version}`;
-  const existing = await fetch(endpoint);
+  const existing = await fetch(endpoint, { redirect: 'error' });
   if (existing.status === 404) {
     if (process.env.VERIFY_ONLY !== 'true')
       execFileSync(
@@ -110,7 +113,12 @@ export async function publish() {
   assert.equal(metadata.dist?.integrity, integrity);
   const url = new URL(metadata.dist.tarball);
   assert.equal(url.origin, 'https://registry.npmjs.org');
-  const download = await fetch(url);
+  assert.equal(
+    url.pathname,
+    `/@floegence/floebrowser/-/floebrowser-${source.version}.tgz`,
+  );
+  assert.ok(!url.username && !url.password && !url.search && !url.hash);
+  const download = await fetch(url, { redirect: 'error' });
   assert.ok(download.ok, `Tarball readback failed: ${download.status}`);
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
   assert.ok(
