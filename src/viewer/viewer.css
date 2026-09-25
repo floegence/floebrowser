@@ -37,11 +37,9 @@
   box-sizing: border-box;
   padding: clamp(40px, 12vh, 120px) max(24px, calc((100% - 520px) / 2));
   overflow: auto;
-  background: #fff;
-  color: #303640;
-  font:
-    14px/1.65 system-ui,
-    sans-serif;
+  background: var(--floe-background, #fff);
+  color: var(--floe-foreground, #303640);
+  font: 14px/1.65 var(--floe-font-family, system-ui, sans-serif);
 }
 .floe-page-error[hidden] {
   display: none;
@@ -54,28 +52,23 @@
 }
 .floe-page-error p {
   margin: 0 0 28px;
-  color: #737c89;
+  color: var(--floe-muted, #737c89);
 }
 .floe-page-error button {
   padding: 8px 18px;
   border: 0;
   border-radius: 6px;
-  background: #406ca6;
-  color: #fff;
+  background: var(--floe-accent, #406ca6);
+  color: var(--floe-accent-foreground, var(--floe-background, #fff));
   font: inherit;
   cursor: pointer;
 }
 .floe-page-error button:focus-visible {
-  outline: 2px solid #406ca6;
+  outline: 2px solid var(--floe-accent, #406ca6);
   outline-offset: 3px;
 }
 
 /* Shared browser chrome controls, also used by embedded viewers. */
-.floe-media-controls {
-  --floe-ink: #243248;
-  --floe-muted: #7b8798;
-  --floe-accent: #4c6b9a;
-}
 .floe-media-controls[hidden],
 .floe-media-row[hidden],
 .floe-media-timeline[hidden] {
@@ -90,7 +83,7 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #68758a;
+  color: var(--floe-muted, #68758a);
   cursor: pointer;
   transition:
     background 140ms,
@@ -98,8 +91,8 @@
 }
 .floe-media-toggle:hover,
 .floe-media-toggle[aria-expanded='true'] {
-  background: #edf2f9;
-  color: var(--floe-accent);
+  background: var(--floe-surface, #edf2f9);
+  color: var(--floe-accent, #4c6b9a);
 }
 .floe-media-toggle svg {
   width: 19px;
@@ -115,18 +108,14 @@
   overflow: auto;
   box-sizing: border-box;
   padding: 0;
-  border: 1px solid #dfe5ed;
+  border: 1px solid var(--floe-line, #dfe5ed);
   border-radius: 16px;
-  background: #fff;
+  background: var(--floe-background, #fff);
   box-shadow:
     0 16px 48px -12px #182d4933,
     0 3px 10px #182d490a;
-  color: var(--floe-ink);
-  font:
-    13px/1.45 -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
+  color: var(--floe-foreground, #243248);
+  font: 13px/1.45 var(--floe-font-family, system-ui, sans-serif);
 }
 .floe-media-panel::backdrop {
   background: transparent;
@@ -142,15 +131,15 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--floe-muted);
+  color: var(--floe-muted, #737c89);
   transition:
     background 140ms,
     color 140ms,
     transform 140ms;
 }
 .floe-media-panel button:hover {
-  background: #edf1f6;
-  color: var(--floe-ink);
+  background: var(--floe-surface, #edf1f6);
+  color: var(--floe-foreground, #243248);
 }
 .floe-media-panel button:active {
   transform: scale(0.94);
@@ -165,7 +154,7 @@
 }
 .floe-media-toggle:focus-visible,
 .floe-media-panel :focus-visible {
-  outline: 2px solid #7394c5;
+  outline: 2px solid var(--floe-accent, #7394c5);
   outline-offset: 3px;
 }
 .floe-media-header {
@@ -173,7 +162,7 @@
   align-items: center;
   gap: 4px;
   padding: 10px 12px 10px 18px;
-  border-bottom: 1px solid #edf0f5;
+  border-bottom: 1px solid var(--floe-line, #edf0f5);
 }
 .floe-media-header h2 {
   margin: 0 auto 0 0;
@@ -182,8 +171,8 @@
   letter-spacing: 0.02em;
 }
 .floe-media-sound[aria-pressed='true'] {
-  color: var(--floe-accent);
-  background: #edf2f9;
+  color: var(--floe-accent, #4c6b9a);
+  background: var(--floe-surface, #edf2f9);
 }
 .floe-media-list {
   padding: 0 18px;
@@ -197,7 +186,7 @@
   padding: 18px 0 16px;
 }
 .floe-media-row + .floe-media-row {
-  border-top: 1px solid #edf0f5;
+  border-top: 1px solid var(--floe-line, #edf0f5);
 }
 .floe-media-art {
   display: grid;
@@ -205,8 +194,8 @@
   width: 40px;
   height: 40px;
   border-radius: 11px;
-  background: linear-gradient(145deg, #edf2fa, #e5ebf6);
-  color: #7186a8;
+  background: var(--floe-surface, #edf2fa);
+  color: var(--floe-accent, #7186a8);
   box-shadow: inset 0 0 0 1px #7186a80c;
 }
 .floe-media-art svg {
@@ -227,14 +216,14 @@
   display: block;
   margin-top: 3px;
   font-size: 11px;
-  color: var(--floe-muted);
+  color: var(--floe-muted, #737c89);
 }
 .floe-media-panel .floe-media-play {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: #ecf1f8;
-  color: var(--floe-accent);
+  background: var(--floe-surface, #ecf1f8);
+  color: var(--floe-accent, #4c6b9a);
 }
 .floe-media-actions {
   display: flex;
@@ -242,11 +231,11 @@
   gap: 4px;
 }
 .floe-media-mute[aria-pressed='true'] {
-  color: var(--floe-accent);
+  color: var(--floe-accent, #4c6b9a);
 }
 .floe-media-panel .floe-media-play:hover {
-  background: #dfe8f5;
-  color: #355783;
+  background: var(--floe-field, #dfe8f5);
+  color: var(--floe-accent, #355783);
 }
 .floe-media-timeline {
   grid-column: 1 / -1;
@@ -256,13 +245,13 @@
   display: flex;
   justify-content: space-between;
   margin-top: 2px;
-  color: #8490a2;
+  color: var(--floe-muted, #8490a2);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 .floe-media-location {
   grid-column: 1 / -1;
-  color: #737f90;
+  color: var(--floe-muted, #737f90);
   font-size: 11px;
 }
 .floe-media-panel .floe-media-locate {
@@ -274,7 +263,7 @@
   margin: -4px 0 -4px -6px;
   padding: 0 6px;
   border-radius: 6px;
-  color: #4c6b9a;
+  color: var(--floe-accent, #4c6b9a);
   font: inherit;
 }
 .floe-media-locate span {
@@ -296,15 +285,15 @@
   border-radius: 4px;
   cursor: pointer;
   background: transparent;
-  accent-color: var(--floe-accent);
+  accent-color: var(--floe-accent, #4c6b9a);
 }
 .floe-media-timeline input::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 3px;
   background: linear-gradient(
     to right,
-    #6d88af var(--floe-progress, 0%),
-    #e8edf3 var(--floe-progress, 0%)
+    var(--floe-accent, #6d88af) var(--floe-progress, 0%),
+    var(--floe-line, #e8edf3) var(--floe-progress, 0%)
   );
 }
 .floe-media-timeline input::-webkit-slider-thumb {
@@ -315,24 +304,24 @@
   margin-top: -3px;
   border: 0;
   border-radius: 50%;
-  background: #6d88af;
-  box-shadow: 0 0 0 3px #fff;
+  background: var(--floe-accent, #6d88af);
+  box-shadow: 0 0 0 3px var(--floe-background, #fff);
 }
 .floe-media-timeline input::-moz-range-track {
   height: 3px;
   border-radius: 3px;
-  background: #e8edf3;
+  background: var(--floe-line, #e8edf3);
 }
 .floe-media-timeline input::-moz-range-progress {
   height: 3px;
-  background: #6d88af;
+  background: var(--floe-accent, #6d88af);
 }
 .floe-media-timeline input::-moz-range-thumb {
   width: 9px;
   height: 9px;
   border: 0;
   border-radius: 50%;
-  background: #6d88af;
+  background: var(--floe-accent, #6d88af);
 }
 @media (prefers-reduced-motion: reduce) {
   .floe-media-panel button,

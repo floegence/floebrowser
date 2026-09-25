@@ -1,11 +1,8 @@
 .floe-browser {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--floe-font-family, system-ui, sans-serif);
   color: var(--floe-foreground);
   background: var(--floe-background);
   font-synthesis: none;
-  --line: var(--floe-line);
-  --muted: var(--floe-muted);
-  --accent: var(--floe-accent);
   --floe-background: #fff;
   --floe-foreground: #303640;
   --floe-muted: #737c89;
@@ -31,7 +28,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 10px;
   background: var(--floe-background);
   box-shadow: 0 5px 20px #17263e1a;
@@ -54,7 +51,7 @@
   background: var(--floe-surface);
 }
 .floe-browser .browser-library button[aria-pressed='true'] {
-  color: var(--accent);
+  color: var(--floe-accent);
   background: var(--floe-surface);
 }
 .floe-browser .browser-library header button:last-child {
@@ -65,16 +62,16 @@
   min-width: 0;
   padding: 8px;
   background: var(--floe-field);
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 6px;
   outline: none;
 }
 .floe-browser .browser-library input:focus {
-  border-color: var(--accent);
+  border-color: var(--floe-accent);
 }
 .floe-browser .browser-library p {
   margin: 0;
-  color: var(--muted);
+  color: var(--floe-muted);
 }
 .floe-browser .browser-library-entries {
   min-height: 0;
@@ -102,10 +99,9 @@
 }
 .floe-browser .browser-library-entries small {
   margin-top: 3px;
-  color: var(--muted);
+  color: var(--floe-muted);
 }
-.floe-browser button,
-.floe-browser input {
+.floe-browser :where(button, input) {
   font: inherit;
   color: inherit;
 }
@@ -138,7 +134,7 @@
   gap: 8px;
   align-items: center;
   padding: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 10px;
   box-shadow: 0 5px 20px #17263e1a;
   background: var(--floe-background);
@@ -153,7 +149,7 @@
   gap: 4px;
   padding: 6px 8px;
   max-width: calc(100% - 24px);
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 10px;
   box-shadow: 0 5px 20px #17263e1a;
   background: var(--floe-background);
@@ -163,16 +159,16 @@
   min-width: 50px;
   padding: 6px 8px;
   background: var(--floe-field);
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 6px;
   outline: none;
   font-size: 13px;
 }
 .floe-browser .page-find input:focus {
-  border-color: var(--accent);
+  border-color: var(--floe-accent);
 }
 .floe-browser .find-result {
-  color: var(--muted);
+  color: var(--floe-muted);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -186,7 +182,7 @@
   max-height: calc(100% - 24px);
   overflow: auto;
   padding: 22px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 14px;
   background: var(--floe-background);
   box-shadow:
@@ -199,7 +195,7 @@
   margin: 6px 0 12px;
 }
 .floe-browser .dialog-origin {
-  color: var(--muted);
+  color: var(--floe-muted);
   font-size: 12px;
   margin: 0;
   overflow-wrap: anywhere;
@@ -217,13 +213,13 @@
   width: 100%;
   height: 36px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 7px;
   outline: none;
   background: var(--floe-field);
 }
 .floe-browser .website-dialog input:focus {
-  border-color: var(--accent);
+  border-color: var(--floe-accent);
 }
 .floe-browser .dialog-actions {
   display: flex;
@@ -238,11 +234,11 @@
 .floe-browser .secondary-button {
   padding: 9px 16px;
   background: var(--floe-field);
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 7px;
 }
 .floe-browser button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--floe-accent);
   outline-offset: -2px;
 }
 .floe-browser svg {
@@ -342,7 +338,7 @@
   padding: 0;
   margin-right: 7px;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--floe-muted);
 }
 .floe-browser .tab-close svg {
   width: 14px;
@@ -379,7 +375,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--floe-line);
   background: var(--floe-background);
   flex-shrink: 0;
 }
@@ -400,7 +396,7 @@
   background: var(--floe-field);
   border: 1px solid transparent;
   border-radius: 18px;
-  color: var(--muted);
+  color: var(--floe-muted);
 }
 .floe-browser .address-bar:focus-within {
   border-color: var(--floe-accent);
@@ -436,7 +432,7 @@
   right: -1px;
   padding: 5px;
   background: var(--floe-background);
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 12px;
   box-shadow:
     0 16px 40px -12px #182d4933,
@@ -595,7 +591,7 @@
   margin: 18px 0 8px;
 }
 .floe-browser .connection-card p {
-  color: var(--muted);
+  color: var(--floe-muted);
   font-size: 13px;
   line-height: 1.7;
   margin: 0 0 20px;
@@ -616,7 +612,7 @@
 .floe-browser .primary-button {
   background: var(--floe-accent);
   border: 0;
-  color: var(--floe-background);
+  color: var(--floe-accent-foreground, var(--floe-background));
   padding: 9px 16px;
   border-radius: 7px;
   font-size: 13px;
@@ -649,7 +645,7 @@
 .floe-browser .toast button {
   border: 0;
   background: none;
-  color: var(--muted);
+  color: var(--floe-muted);
   font-size: 20px;
 }
 @keyframes floe-spin {
@@ -810,7 +806,7 @@
   max-height: calc(100% - 24px);
   overflow: auto;
   padding: 16px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--floe-line);
   border-radius: 14px;
   background: var(--floe-background);
   box-shadow: 0 12px 36px #17263e24;
@@ -826,13 +822,13 @@
   font-size: 15px;
 }
 .floe-browser .downloads-panel p {
-  color: var(--muted);
+  color: var(--floe-muted);
   font-size: 12px;
   line-height: 1.5;
 }
 .floe-browser .download-row {
   padding: 16px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--floe-line);
 }
 .floe-browser .download-row:last-child {
   border-bottom: 0;
@@ -854,7 +850,7 @@
   justify-content: flex-end;
 }
 .floe-browser .has-downloads {
-  color: var(--accent);
+  color: var(--floe-accent);
 }
 
 .floe-browser .browser-menu {

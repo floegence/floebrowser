@@ -571,7 +571,11 @@ missing or malformed entries fail at mount. Source content and URLs remain
 literal. Protocol notices carry stable codes instead of source-language prose.
 The `--floe-background`, `--floe-foreground`, `--floe-muted`, `--floe-line`,
 `--floe-accent`, `--floe-surface` and `--floe-field` custom properties style browser
-chrome; component styles do not reset the embedding document. The host supplies
+chrome, including media controls and navigation errors. Optional
+`--floe-accent-foreground` supplies text on primary buttons (defaults to the
+browser background); `--floe-font-family` supplies the chrome font (defaults to
+system-ui). Component styles use only namespaced properties and never redefine
+host tokens such as `--muted` or `--accent`. The host supplies
 constrained dimensions and the authenticated connection factory. The component
 never creates a new host environment connection itself.
 
