@@ -384,7 +384,9 @@ test(
     const projected = s.viewer
       .frameLocator('#viewport iframe')
       .locator('#second');
-    await projected.waitFor();
+    // The retained preview is deliberately stale and inert. Fresh admission,
+    // not the first visible cached node, must restore current source content.
+    await s.viewer.locator('#viewport .floe-projection:not([inert])').waitFor();
     assert.equal(await projected.textContent(), 'Background update 29');
   },
 );
