@@ -1506,7 +1506,6 @@ export class DOMBrowserView {
     const replayer = this.replayer,
       resources = this.resources;
     if (
-      this.pages.enabled &&
       this.ready &&
       replayer &&
       resources &&
@@ -1514,16 +1513,10 @@ export class DOMBrowserView {
       this.documentURL === this.tabURLs.get(this.tab)
     ) {
       replayer.pause();
-      this.pages.retain(
-        this.tab,
-        this.documentURL,
-        this.tabTitles.get(this.tab) ?? this.documentURL,
-        this.surface,
-        () => {
-          resources.dispose();
-          replayer.destroy();
-        },
-      );
+      this.pages.retain(this.tab, this.documentURL, this.surface, () => {
+        resources.dispose();
+        replayer.destroy();
+      });
       this.resources = undefined;
     } else {
       replayer?.destroy();

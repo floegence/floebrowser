@@ -93,12 +93,15 @@ DOM layout still happens on the client. Font availability, browser versions and 
 The viewer retains up to three recently completed inert tab documents in memory.
 Selecting a cached tab shows it immediately while fresh source selection and input
 authority are pending. The selected preview stays visible until the fully styled
-replacement is ready; uncached selections hide the previous page. Cached pages
-never receive input or new source updates;
-only a fully rebuilt current view becomes interactive. Source removal, changed
+replacement is ready. An uncached selection retains the outgoing painted document
+as an inert transition until the target is ready; it never accepts input for the
+new tab. Cached pages never receive input or new source updates; only a fully
+rebuilt current view becomes interactive. Source removal, changed
 URLs, revoked directory grants and disconnect discard corresponding caches.
 State-preserving DOM moves retain iframe documents and loaded resources. Browsers
-without that API rebuild normally and do not advertise a cached presentation.
+without that API keep the outgoing document attached during preparation and
+dispose it after the replacement is ready. Title changes do not invalidate a
+document; source navigation and grant removal still do.
 
 ## Source media
 

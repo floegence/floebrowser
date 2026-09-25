@@ -10,17 +10,17 @@ const projectionStyle = `
 
 type CachedPage = {
   url: string;
-  title: string;
   surface: HTMLElement;
   dispose: () => void;
 };
 
 /** A small cache of inert, already rendered documents. It owns no source state,
  * input authority or transport subscriptions. Moving an iframe must preserve
- * its document; engines without state-preserving moves simply rebuild pages. */
+ * its document; engines without state-preserving moves retain only the outgoing
+ * document in place until its replacement is ready. */
 export class ReplayPages {
-  /** Engines without state-preserving moves use a cold rebuild. */
-  readonly enabled: boolean;
+  /** Only state-preserving moves allow reuse of background documents. */
+  private readonly enabled: boolean;
   private style: HTMLStyleElement;
   private parked: HTMLDivElement;
   private storage: HTMLDivElement;
@@ -48,8 +48,7 @@ export class ReplayPages {
     (container.parentElement ?? container).append(this.parked);
   }
   private park(surface: HTMLElement): void {
-    if (this.enabled) this.storage.moveBefore(surface, null);
-    else this.storage.append(surface);
+    this.storage.moveBefore(surface, null);
   }
   create(): HTMLDivElement {
     const surface = document.createElement('div');
@@ -70,7 +69,7 @@ export class ReplayPages {
     if (this.visible === surface) return;
     // A pending surface may never have been presented (for example when a
     // tab is previewed before its first snapshot).  Park every other active
-    // surface so the viewport always exposes one iframe to its host.
+    // surface before presenting its replacement.
     for (const child of [...this.container.children]) {
       if (
         !(child instanceof HTMLElement) ||
@@ -92,24 +91,35 @@ export class ReplayPages {
     surface.style.visibility = '';
     surface.style.pointerEvents = '';
     this.visible = surface;
+    if (!this.enabled) {
+      for (const [id, page] of this.pages)
+        if (page.surface !== surface) this.drop(id);
+    }
   }
   retain(
     target: string,
     url: string,
-    title: string,
     surface: HTMLElement,
     dispose: () => void,
   ): void {
     this.drop(target);
     surface.inert = true;
-    this.pages.set(target, { url, title, surface, dispose });
+    this.pages.set(target, { url, surface, dispose });
     if (this.visible !== surface) this.hide(surface);
-    while (this.pages.size > 3) this.drop(this.pages.keys().next().value!);
+    while (this.pages.size > 3) {
+      const oldest = [...this.pages].find(
+        ([, page]) => page.surface !== this.visible,
+      );
+      if (!oldest) break;
+      this.drop(oldest[0]);
+    }
   }
   preview(target: string): boolean {
-    const page = this.pages.get(target);
+    const page = this.enabled ? this.pages.get(target) : undefined;
     if (!page) {
-      if (this.visible) this.hide(this.visible);
+      // A cache miss must not clear the last painted frame. It cannot accept
+      // input while selection and the replacement document are pending.
+      if (this.visible) this.visible.inert = true;
       return false;
     }
     this.pages.delete(target);
@@ -127,19 +137,12 @@ export class ReplayPages {
     surface.style.opacity = '0';
     surface.style.visibility = 'hidden';
     surface.style.pointerEvents = 'none';
-    this.park(surface);
+    if (this.enabled) this.park(surface);
     if (this.visible === surface) this.visible = undefined;
   }
   reconcile(tabs: { id: string; url: string; title?: string }[]): void {
     for (const [id, page] of this.pages)
-      if (
-        !tabs.some(
-          (tab) =>
-            tab.id === id &&
-            tab.url === page.url &&
-            (tab.title ?? tab.url) === page.title,
-        )
-      )
+      if (!tabs.some((tab) => tab.id === id && tab.url === page.url))
         this.drop(id);
   }
   drop(target: string): void {
