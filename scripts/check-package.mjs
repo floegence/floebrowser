@@ -66,7 +66,7 @@ for (const artifact of bundle.artifacts) {
   assert.equal(bytes.length, artifact.bytes);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
 }
-assert.equal(PROTOCOL_VERSION, 22);
+assert.equal(PROTOCOL_VERSION, 23);
 assert.equal(clientMessageSchema.safeParse({ type: 'resync' }).success, true);
 assert.equal(typeof projectionPortConnection, 'function');
 assert.equal(typeof serveProjectionPorts, 'function');

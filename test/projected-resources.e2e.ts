@@ -93,7 +93,7 @@ for (const client of [chromium, firefox, webkit])
       await viewer.locator('#status.live').waitFor({ timeout: 12000 });
       const replay = viewer.frameLocator('iframe');
       await replay
-        .locator('#image')
+        .locator('#image[src^="blob:"]')
         .evaluate((image) => (image as HTMLImageElement).decode());
       assert.equal(
         await replay
@@ -138,7 +138,7 @@ for (const client of [chromium, firefox, webkit])
       unblock();
       hold = false;
       await replay
-        .locator('#slow')
+        .locator('#slow[src^="blob:"]')
         .evaluate((image) => (image as HTMLImageElement).decode());
       assert.equal(await source.locator('button').textContent(), 'Count 1');
       assert.ok(resources.length >= 3);

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
+import {
+  MediaPacketReader,
+  encodeMediaFrame,
+} from '../src/shared/media-wire.js';
 
 test(
   'a stalled media consumer stays bounded while input works, then displays current frames',
@@ -65,17 +69,33 @@ test(
             this.acknowledgement = data;
             return;
           }
+          if (this.url.includes('/media?') && data instanceof Uint8Array)
+            (window as any).lastMediaAck = Number(
+              new DataView(
+                data.buffer,
+                data.byteOffset,
+                data.byteLength,
+              ).getBigUint64(0),
+            );
           super.send(data);
         }
       };
     });
     let bytes = 0;
+    let framedBytes = 0;
+    const frameEnds: number[] = [];
+    const reader = new MediaPacketReader();
     const encodedControl: unknown[] = [];
     viewer.on('websocket', (socket) =>
       socket.on('framereceived', ({ payload }) => {
         if (socket.url().includes('/media?')) {
           bytes += payload.length;
           assert.ok(payload.length <= 16384);
+          assert.notEqual(typeof payload, 'string');
+          for (const frame of reader.push(payload as Buffer)) {
+            framedBytes += encodeMediaFrame(frame.header, frame.data).length;
+            frameEnds.push(framedBytes);
+          }
         } else if (typeof payload !== 'string') encodedControl.push(payload);
         else {
           const message = JSON.parse(payload);
@@ -103,9 +123,15 @@ test(
       assert.ok(await fn());
     };
     await wait(async () => (await decoded()) > 3);
-    await viewer.evaluate(() => {
+    const acknowledged = await viewer.evaluate(() => {
       (window as any).mediaHeld = true;
+      return (window as any).lastMediaAck as number;
     });
+    // Wait for the actual eight-packet credit window to fill, not an assumed
+    // encoder frame rate. Retain the exact no-growth assertion while stalled.
+    await wait(
+      async () => frameEnds.filter((end) => end > acknowledged).length === 8,
+    );
     await new Promise((done) => setTimeout(done, 500));
     const stalledFrames = await decoded(),
       stalledBytes = bytes;
