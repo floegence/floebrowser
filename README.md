@@ -91,10 +91,11 @@ viewer does not solve challenges or change source identity to avoid site checks.
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
 The viewer retains up to three recently completed inert tab documents in memory.
-Selecting a cached tab shows it immediately while fresh source selection and input
+Selecting a cached tab at the same window size shows it immediately while fresh source selection and input
 authority are pending. The selected preview stays visible until the fully styled
 replacement is ready. An uncached selection retains the outgoing painted document
-as an inert transition until the target is ready; it never accepts input for the
+as an inert transition until the target is ready, as does a cached selection from
+a different window size; it never accepts input for the
 new tab. Cached pages never receive input or new source updates; only a fully
 rebuilt current view becomes interactive. Source removal, changed
 URLs, revoked directory grants and disconnect discard corresponding caches.
@@ -257,6 +258,17 @@ Hosts with asynchronous input leases can provide `onRequestControl(target, signa
 to admit a submitted address only after the idle-control token is ready. This
 callback must not take over another controller. Tab changes, a newer submission,
 disconnection and destruction cancel unsubmitted navigation; no input is replayed.
+
+For host-managed leases, `onPrepareView(target, signal)` admits idle control once
+per selected target, before its first document is presented. Revocation invalidates
+that admission; resuming a hidden view prepares its lease again. Return `true` to wait
+for the matching source control notification; return `false` (or reject) to keep
+an observer view. Both selection acknowledgement and responsive source sizing
+settle before presentation, so a new tab does not first appear centered at its old
+size. Honor the signal on selection changes, disconnect, destruction or the
+10-second preparation deadline. The callback never grants input by itself and
+must not take over another controller. Do not request idle control again from
+`onStatus('live')` or tab-list notifications. DOM checkpoints do not repeat admission.
 
 The component exposes `onTakeControl` for a product-owned takeover action; no
 remote input message can manufacture this grant.

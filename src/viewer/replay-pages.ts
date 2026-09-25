@@ -11,6 +11,8 @@ const projectionStyle = `
 type CachedPage = {
   url: string;
   surface: HTMLElement;
+  width: number;
+  height: number;
   dispose: () => void;
 };
 
@@ -104,7 +106,13 @@ export class ReplayPages {
   ): void {
     this.drop(target);
     surface.inert = true;
-    this.pages.set(target, { url, surface, dispose });
+    this.pages.set(target, {
+      url,
+      surface,
+      dispose,
+      width: this.container.clientWidth,
+      height: this.container.clientHeight,
+    });
     if (this.visible !== surface) this.hide(surface);
     while (this.pages.size > 3) {
       const oldest = [...this.pages].find(
@@ -115,7 +123,17 @@ export class ReplayPages {
     }
   }
   preview(target: string): boolean {
-    const page = this.enabled ? this.pages.get(target) : undefined;
+    let page = this.enabled ? this.pages.get(target) : undefined;
+    if (
+      page &&
+      (page.width !== this.container.clientWidth ||
+        page.height !== this.container.clientHeight)
+    ) {
+      // A preview from a different window size would visibly jump before the
+      // current source layout is ready. Retain the outgoing paint instead.
+      if (page.surface !== this.visible) this.drop(target);
+      page = undefined;
+    }
     if (!page) {
       // A cache miss must not clear the last painted frame. It cannot accept
       // input while selection and the replacement document are pending.

@@ -68,6 +68,12 @@ export type ViewOptions = {
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
   onControl?: (controlling: boolean) => void;
+  /** Prepare a newly selected view or a view resumed after control revocation. Hosts may
+   * request idle control, never takeover. Return true to await the matching
+   * control notification, or false to present as an observer. Rejection also
+   * leaves the view in observation mode. Honor cancellation on selection,
+   * disconnect or timeout; completion alone never authorizes input. */
+  onPrepareView?: (target: string, signal: AbortSignal) => Promise<boolean>;
   onSessionAccess?: (editTabs: boolean, restoreTabs: boolean) => void;
   onAddressFocus?: () => void;
   /** Return true for a browser-chrome shortcut consumed by the embedding host. */
@@ -119,7 +125,8 @@ export class DOMBrowserView {
   private controlled = false;
   private editTabs = true;
   private restoreTabs = true;
-  private tabCommands = 0;
+  private tabCommands = new Set<Promise<boolean>>();
+  private preparation?: { abort: AbortController; work: Promise<void> };
   private disconnectReason?: DisconnectReason;
   private ready = false;
   private destroyed = false;
@@ -572,6 +579,10 @@ export class DOMBrowserView {
     }
     if (message.type === 'control') {
       if (message.target === this.tab) {
+        if (this.controlled && !message.active) {
+          this.preparation?.abort.abort();
+          this.preparation = undefined;
+        }
         this.controlled = message.active;
         if (!message.active) {
           if (!this.directoryDialog) {
@@ -631,7 +642,7 @@ export class DOMBrowserView {
         this.ready = false;
         this.pageError.hidden = true;
         this.queuedWheel = undefined;
-        this.tab = message.state.active;
+        this.selectTarget(message.state.active);
         this.media.select(this.tab);
         this.epoch = '';
         this.options.onStatus?.(this.connected ? 'refreshing' : 'connecting');
@@ -667,7 +678,7 @@ export class DOMBrowserView {
     if (message.type === 'state') {
       this.zoom = message.state.zoom;
       if (this.tab !== message.state.id) this.queuedWheel = undefined;
-      this.tab = message.state.id;
+      this.selectTarget(message.state.id);
       this.viewport = {
         width: message.state.width,
         height: message.state.height,
@@ -731,8 +742,13 @@ export class DOMBrowserView {
             presentation.active &&
             this.presentation === presentation;
           if (!current()) return;
-          // Settle initial responsive sizing before exposing clickable content.
-          // Otherwise its scale can change between mouse down and mouse up.
+          // Selection and host admission determine whether this view fits an
+          // observer's source or resizes it. Settle both before exposing it.
+          while (current() && this.tabCommands.size)
+            await Promise.all(this.tabCommands);
+          if (!current()) return;
+          await this.prepareView();
+          if (!current()) return;
           if (this.viewportPending) await this.viewportPending;
           while (current() && this.viewportMode === 'responsive') {
             const resized = this.resizeViewport();
@@ -940,11 +956,12 @@ export class DOMBrowserView {
     if (action.kind === 'tab_move') return this.sendAction(action);
     if (action.kind.startsWith('tab_')) {
       this.queuedWheel = undefined;
-      this.tabCommands++;
-      return this.sendAction(action).finally(() => {
-        this.tabCommands--;
+      const work = this.sendAction(action).finally(() => {
+        this.tabCommands.delete(work);
         this.scheduleViewport();
       });
+      this.tabCommands.add(work);
+      return work;
     }
     // A click, key, navigation or other action is an ordering barrier.
     this.flushWheel();
@@ -952,7 +969,12 @@ export class DOMBrowserView {
   }
 
   private queueWheel(action: Wheel): void {
-    if (!this.controlled || !this.connected || !this.ready || this.tabCommands)
+    if (
+      !this.controlled ||
+      !this.connected ||
+      !this.ready ||
+      this.tabCommands.size
+    )
       return;
     const prior = this.queuedWheel;
     if (
@@ -1014,7 +1036,7 @@ export class DOMBrowserView {
       (!this.editTabs &&
         action.kind.startsWith('tab_') &&
         action.kind !== 'tab_select') ||
-      (this.tabCommands > 0 &&
+      (this.tabCommands.size > 0 &&
         !action.kind.startsWith('tab_') &&
         action.kind !== 'dialog_reply') ||
       (!this.ready &&
@@ -1154,7 +1176,7 @@ export class DOMBrowserView {
       !this.controlled ||
       !this.connected ||
       !this.ready ||
-      this.tabCommands > 0 ||
+      this.tabCommands.size > 0 ||
       this.viewportMode !== 'responsive'
     )
       return;
@@ -1165,7 +1187,7 @@ export class DOMBrowserView {
         !this.controlled ||
         !this.connected ||
         !this.ready ||
-        this.tabCommands
+        this.tabCommands.size
       )
         return;
       void this.resizeViewport();
@@ -1182,7 +1204,7 @@ export class DOMBrowserView {
       !this.controlled ||
       width < 1 ||
       height < 1 ||
-      this.tabCommands ||
+      this.tabCommands.size ||
       (Math.round(width / this.zoom) === this.viewport.width &&
         Math.round(height / this.zoom) === this.viewport.height)
     )
@@ -1473,7 +1495,53 @@ export class DOMBrowserView {
     });
   }
 
+  private selectTarget(target: string): void {
+    if (this.tab === target) return;
+    this.preparation?.abort.abort();
+    this.preparation = undefined;
+    this.tab = target;
+  }
+
+  private prepareView(): Promise<void> | undefined {
+    if (!this.options.onPrepareView) return;
+    if (this.preparation) return this.preparation.work;
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]);
+    const work = new Promise<void>((resolve) => {
+      let granted = false;
+      const finish = () => {
+        this.readiness.delete(check);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      const check = () => {
+        if (granted && this.controlled) finish();
+      };
+      this.readiness.add(check);
+      signal.addEventListener('abort', finish, { once: true });
+      // A host result and the source's control notification may use different
+      // carriers. Neither alone is sufficient to finish controller preparation.
+      void Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.options.onPrepareView!(this.tab, signal);
+        })
+        .then((controller) => {
+          if (signal.aborted) return;
+          if (!controller) finish();
+          else {
+            granted = true;
+            check();
+          }
+        }, finish);
+    });
+    this.preparation = { abort, work };
+    return work;
+  }
+
   private disconnected(reason?: DisconnectReason): void {
+    this.preparation?.abort.abort();
+    this.preparation = undefined;
     this.resources?.dispose();
     this.fileChooser = null;
     this.options.onFileChooser?.(null);

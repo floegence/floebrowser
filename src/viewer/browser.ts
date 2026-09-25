@@ -565,6 +565,7 @@ export function mountBrowser(
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
+      onPrepareView: options.onPrepareView,
       onFind: (result) => {
         find.result(result);
         options.onFind?.(result);
