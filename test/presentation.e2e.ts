@@ -388,11 +388,16 @@ test(
         ),
     );
     assert.equal(
-      await card.evaluate((node) =>
-        node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
-      ),
-      false,
-      'Unstyled DOM must stay hidden until its styles are applied',
+      await card.evaluate((node) => getComputedStyle(node).backgroundColor),
+      'rgb(10, 80, 160)',
+      'Only the fully styled cached preview is visible while the fresh document waits',
+    );
+    assert.equal(
+      await viewer
+        .locator('#viewport .floe-projection')
+        .evaluate((node) => (node as HTMLElement).inert),
+      true,
+      'A styled preview has no input authority before fresh admission',
     );
     assert.equal(await viewer.locator('#new-tab').isEnabled(), true);
     assert.equal(

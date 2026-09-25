@@ -84,11 +84,17 @@ Selectors keep their source meaning when replay must make an attribute inert. Or
 
 SVG style text updates retain their SVG namespace. MathML elements are rebuilt in the native MathML namespace, preserving fractions, exponents and live node identities. Site-defined scrollbar gutters and scrollbar widths are retained instead of being forced to zero.
 
+Websites may challenge or reject a managed automation session independently of
+projection input. Correct native clicks do not guarantee website admission. The
+viewer does not solve challenges or change source identity to avoid site checks.
+
 DOM layout still happens on the client. Font availability, browser versions and CSS behavior can affect layout. This architecture does not promise pixel-identical rendering, lower bandwidth than video, or zero input latency.
 
 The viewer retains up to three recently completed inert tab documents in memory.
 Selecting a cached tab shows it immediately while fresh source selection and input
-authority are pending. Cached pages never receive input or new source updates;
+authority are pending. The selected preview stays visible until the fully styled
+replacement is ready; uncached selections hide the previous page. Cached pages
+never receive input or new source updates;
 only a fully rebuilt current view becomes interactive. Source removal, changed
 URLs, revoked directory grants and disconnect discard corresponding caches.
 State-preserving DOM moves retain iframe documents and loaded resources. Browsers

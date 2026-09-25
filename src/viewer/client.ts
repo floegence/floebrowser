@@ -611,6 +611,7 @@ export class DOMBrowserView {
         message.state.tabs.map((tab) => [tab.id, tab.title || tab.url]),
       );
       if (message.state.active !== this.tab) {
+        if (!this.previewTarget) this.pages.preview(message.state.active);
         this.inputPause = undefined;
         this.inputSurface.inert = false;
         this.dialogOpen = false;
@@ -1526,7 +1527,7 @@ export class DOMBrowserView {
       this.resources = undefined;
     } else {
       replayer?.destroy();
-      this.surface.remove();
+      this.pages.remove(this.surface);
     }
     this.replayer = undefined;
     this.presentation?.dispose();

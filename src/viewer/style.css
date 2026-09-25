@@ -511,8 +511,7 @@
   position: absolute;
   inset: 0;
 }
-/* Never show the previous page under a newly selected tab. */
-.floe-browser .stage.switching [data-floe-ui='viewport'],
+/* The view owns selected-page previews; the welcome screen has no preview. */
 .floe-browser .stage.switching [data-floe-ui='welcome'] {
   visibility: hidden;
 }

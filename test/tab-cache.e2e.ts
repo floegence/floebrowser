@@ -30,6 +30,7 @@ test(
       console.error('cache viewer', error.message),
     );
     await viewer.addInitScript(() => {
+      (window as any).__name = (value: unknown) => value;
       const Native = WebSocket;
       (window as any).WebSocket = class extends Native {
         send(data: Parameters<WebSocket['send']>[0]) {
@@ -88,6 +89,35 @@ test(
       '/first',
       'A warm cached document needs no source round trip',
     );
+    assert.equal(
+      await viewer.locator('#viewport .floe-projection').evaluate((node) =>
+        node.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        }),
+      ),
+      true,
+      'The selected cached page must be painted, not hidden by the switching curtain',
+    );
+    await viewer.evaluate(() => {
+      (window as any).previewFrames = [];
+      (window as any).samplePreview = true;
+      const sample = () => {
+        const frame =
+          document.querySelector<HTMLIFrameElement>('#viewport iframe');
+        const surface = frame?.closest<HTMLElement>('.floe-projection');
+        (window as any).previewFrames.push(
+          Boolean(
+            surface?.checkVisibility({
+              checkOpacity: true,
+              checkVisibilityCSS: true,
+            }),
+          ),
+        );
+        if ((window as any).samplePreview) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
     const box = await replay.locator('#count').boundingBox();
     assert.ok(box);
     await viewer.mouse.click(box.x + 20, box.y + 20);
@@ -98,6 +128,15 @@ test(
     );
     await viewer.evaluate(() => (window as any).releaseSelection());
     await settled();
+    const frames = await viewer.evaluate(() => {
+      (window as any).samplePreview = false;
+      return (window as any).previewFrames as boolean[];
+    });
+    assert.ok(frames.length > 0);
+    assert.ok(
+      frames.every(Boolean),
+      'The selected preview must stay painted until its fresh replacement is ready',
+    );
     await replay.locator('#count').click();
     await source.waitForFunction(() => (window as any).count === 1, undefined, {
       timeout: 4000,
