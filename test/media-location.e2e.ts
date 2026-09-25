@@ -43,8 +43,8 @@ async function setup(t: test.TestContext, framed = false) {
     ? source.frames().find((f) => f.url().endsWith('/frame'))!
     : source.mainFrame();
   await frame.waitForFunction(() => {
-    const v = document.querySelector<HTMLVideoElement>('#clip')!;
-    return !v.paused;
+    const video = document.querySelector<HTMLVideoElement>('#clip');
+    return Boolean(video && !video.paused);
   });
   const actions: any[] = [];
   let allowed = true;
