@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { launchSourceBrowser } from './browser.js';
 import { createProjectionServer } from './server.js';
+import { PlaywrightSourceBrowser } from './playwright-source.js';
 
 const { values } = parseArgs({
   options: {
@@ -26,6 +27,7 @@ if (values.help) {
     profile: values.profile,
     headless: !values.headed,
   });
+  const owner = new PlaywrightSourceBrowser({ windowViewport: true });
   const page = context.pages()[0] ?? (await context.newPage());
   let service: Awaited<ReturnType<typeof createProjectionServer>> | undefined;
   let stopping = false;
@@ -33,10 +35,11 @@ if (values.help) {
     if (stopping) return;
     stopping = true;
     await service?.close();
+    await owner.dispose();
     await context.close();
   };
   try {
-    service = await createProjectionServer(page, {
+    service = await createProjectionServer(await owner.adopt(page), {
       port,
       authorize: () => true,
     });
@@ -52,7 +55,7 @@ if (values.help) {
           );
         });
     console.log(
-      `FloeBrowser is ready.\n\nOpen the private viewer:\n${service.url}\n\nSource: ${values.headed ? 'visible' : 'headless'} Chromium · 1280 × 800\nPress Ctrl+C to stop.`,
+      `FloeBrowser is ready.\n\nOpen the private viewer:\n${service.url}\n\nSource: ${values.headed ? 'visible' : 'headless'} Chromium\nPress Ctrl+C to stop.`,
     );
     process.once('SIGINT', () => {
       void stop();

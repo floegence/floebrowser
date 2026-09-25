@@ -6,6 +6,10 @@ import { closeCDPPage } from './close-page.js';
 const sources = new WeakMap<Page, Promise<CDPSourcePage>>();
 
 export type PlaywrightSourceOptions = {
+  /** The host owns this entire browser window and launches its context with
+   * viewport: null. Keep native contents sized for future tabs before their
+   * scripts run; borrowed personal tabs must not receive this authority. */
+  windowViewport?: boolean;
   /** A host with its own source-scoped download adapter must not also consume
    * Playwright's native handles, which are unavailable in borrowed contexts. */
   nativeDownloads?: boolean;
@@ -51,6 +55,14 @@ export class PlaywrightSourceBrowser {
         downloads: true,
         viewport: page.viewportSize() ?? undefined,
         setViewport: async (size, deviceScaleFactor) => {
+          if (this.options.windowViewport) {
+            const { windowId } = await root.send('Browser.getWindowForTarget');
+            await root.send('Browser.setContentsSize', {
+              windowId,
+              width: Math.round(size.width * deviceScaleFactor),
+              height: Math.round(size.height * deviceScaleFactor),
+            });
+          }
           // Keep Playwright's CSS viewport model aligned with the borrowed CDP
           // owner; source raster density determines responsive assets/canvases.
           await page.setViewportSize(size);

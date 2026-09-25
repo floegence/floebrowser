@@ -249,6 +249,18 @@ the predicate. `setAudio(false)` mutes all authorized source audio for that view
 retires queued decoders, while keeping source collectors and playback alive.
 This policy is independent of the page's actual mute state and input ownership.
 Observers fit the authoritative viewport and cannot race its controller's size.
+
+Managed browser owners launch with `viewport: null` and use
+`PlaywrightSourceBrowser({ windowViewport: true })`. An authorized viewport
+change also sizes the native window contents, so newly opened tabs inherit the
+current display size before their scripts cache layout. Per-target emulation
+continues to own zoom and isolates already controlled tabs. The standalone CLI
+uses this managed policy. The default adapter changes only its target;
+personal Chrome and extension adapters never resize the user's native window.
+This preserves real website click feedback without rewriting page coordinates,
+forcing a reload, or replaying an action. Websites remain responsible for
+responding to an actual user resize of an existing page.
+
 `closeCDPPage(page, transport)` supplies the shared source-scoped native close
 lifecycle for host adapters: it waits for physical page closure or a declined
 `beforeunload` decision without closing the surrounding browser context. Hosts

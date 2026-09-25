@@ -25,7 +25,9 @@ export async function launchSourceBrowser(
     // Keep the actual Chromium version/platform. Some sites reject the shell
     // product token before serving any document. This is not bot invisibility.
     const contextOptions = {
-      viewport: { width: 1280, height: 800 },
+      // New tabs inherit the native window before website scripts run. A fixed
+      // context viewport would reset each popup before controller admission.
+      viewport: null,
       userAgent: userAgent.replace('HeadlessChrome/', 'Chrome/'),
     };
     if (options.profile) {
