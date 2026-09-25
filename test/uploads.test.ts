@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { open, readFile } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 import { UploadBudget } from '../src/host/uploads.js';
 
 async function* bytes(value: string) {
@@ -24,7 +24,7 @@ test('uploads stream into private staging and only current opaque identities sel
   batch.commit();
   await assert.rejects(batch.write({ name: 'late', size: 0 }, bytes('')));
   await batch.close();
-  await assert.rejects(readFile(paths[0]!));
+  await assert.rejects(stat(paths[0]!), { code: 'ENOENT' });
 });
 
 test('upload limits account for concurrent and retained files and reject truncated or excess bytes', async () => {
