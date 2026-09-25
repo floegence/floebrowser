@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -338,6 +338,7 @@ export type ServerMessage =
       ok: boolean;
       code?:
         | 'stale_view'
+        | 'target_changed'
         | 'target_unavailable'
         | 'unsupported'
         | 'action_failed'

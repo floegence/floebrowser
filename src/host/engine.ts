@@ -1563,7 +1563,7 @@ export class BrowserProjection {
         action.kind === 'wheel' ? action : undefined,
       );
       assertCurrent();
-      if (!point) throw new CommandError('stale_view');
+      if (!point) throw new CommandError('target_changed');
       if (action.kind === 'wheel') {
         await this.cdp.send('Input.dispatchMouseEvent', {
           type: 'mouseWheel',
@@ -1916,7 +1916,11 @@ export class BrowserProjection {
 class CommandError extends Error {
   constructor(
     readonly code:
-      'stale_view' | 'target_unavailable' | 'unsupported' | 'not_allowed',
+      | 'stale_view'
+      | 'target_changed'
+      | 'target_unavailable'
+      | 'unsupported'
+      | 'not_allowed',
   ) {
     super(code);
   }

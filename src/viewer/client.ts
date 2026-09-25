@@ -883,6 +883,11 @@ export class DOMBrowserView {
           return;
         if (message.code === 'navigation_failed' && !this.pageError.hidden)
           return;
+        // This gesture was rejected before dispatch because its node or hit
+        // target changed. The incremental DOM stream remains valid. Rebuilding
+        // it here would interrupt subsequent scrolling and invalidate more input.
+        // Never retry the gesture or reinterpret it against the new content.
+        if (message.code === 'target_changed') return;
         if (message.code === 'stale_view') {
           // A loading or rebuilding view is already fenced and awaiting source
           // state. A rejected old gesture cannot trigger another refresh loop.

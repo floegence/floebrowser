@@ -129,7 +129,7 @@ for (const confirmation of ['rejected', 'expired'] as const)
     );
 
 test(
-  'stale hover is quiet and a rejected click refreshes the view without replaying input',
+  'changed targets are quiet while a missing DOM sequence refreshes without replaying input',
   { timeout: 15000 },
   async (t) => {
     const browser = await chromium.launch({
@@ -207,7 +207,7 @@ test(
     await button.hover();
     await viewer.waitForFunction(() =>
       (window as any).testCarrier.acks.some(
-        (a: any) => a.code === 'stale_view',
+        (a: any) => a.code === 'target_changed',
       ),
     );
     assert.equal(
@@ -227,6 +227,24 @@ test(
     );
     await button.click();
     await viewer.waitForFunction(
+      () =>
+        (window as any).testCarrier.acks.filter(
+          (a: any) => a.code === 'target_changed',
+        ).length >= 3,
+    );
+    assert.equal(
+      await viewer.evaluate(() => (window as any).testCarrier.resyncs),
+      0,
+      'A changed hit target does not imply a broken DOM stream',
+    );
+    assert.equal(await viewer.locator('#toast').isVisible(), false);
+    // The fixture discarded a mutation. Delivering a later sequence must still
+    // recover the complete view, independently of the canceled pointer input.
+    await viewer.evaluate(() => ((window as any).testCarrier.holdDOM = false));
+    await source.evaluate(() =>
+      document.body.setAttribute('data-current', 'true'),
+    );
+    await viewer.waitForFunction(
       () => (window as any).testCarrier.snapshots === 2,
       null,
       { timeout: 3000 },
@@ -236,7 +254,7 @@ test(
     assert.equal(
       await viewer.evaluate(() => (window as any).testCarrier.resyncs),
       1,
-      'Down/up rejection requests one fresh view',
+      'A missing DOM sequence requests one fresh view',
     );
     assert.equal(
       await viewer.evaluate(

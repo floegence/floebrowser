@@ -133,7 +133,7 @@ test(
     await scrollBurst(viewer, 0, 150, 1);
     assert.equal(
       await viewer.evaluate(() => (window as any).scrollTest.acks.at(-1).code),
-      'stale_view',
+      'target_changed',
     );
     assert.deepEqual(
       await child.evaluate(() => [scrollX, scrollY]),
@@ -190,7 +190,7 @@ for (const change of ['replace', 'cover', 'remove'] as const) {
         await viewer.evaluate(
           () => (window as any).scrollTest.acks.at(-1).code,
         ),
-        'stale_view',
+        'target_changed',
       );
       assert.deepEqual(
         await source.evaluate(() => [
