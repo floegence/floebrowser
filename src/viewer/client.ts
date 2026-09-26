@@ -107,6 +107,7 @@ type Drag = {
   node: number;
   button: Pointer['button'];
   active: boolean;
+  moved: boolean;
   queued?: Pointer;
   inFlight: number;
 };
@@ -1391,6 +1392,7 @@ export class DOMBrowserView {
         node: point.node,
         button: mouseButton(event.button),
         active: true,
+        moved: false,
         inFlight: 0,
       };
       this.drag = drag;
@@ -1411,7 +1413,12 @@ export class DOMBrowserView {
       const drag = this.drag;
       if (!drag?.active) return;
       const event = raw as MouseEvent;
-      const point = this.dragPoint(event, drag);
+      // A click keeps its node anchor when source focus or client actionability
+      // has scrolled a partly clipped control. Only actual motion starts a drag.
+      const hit = !drag.moved && this.hit(event);
+      const point = drag.moved
+        ? this.dragPoint(event, drag)
+        : hit && this.point(hit);
       if (!point) {
         this.cancelInput();
         return;
@@ -1452,6 +1459,7 @@ export class DOMBrowserView {
           this.cancelInput();
           return;
         }
+        drag.moved = true;
         drag.queued = {
           kind: 'pointer',
           phase: 'move',
