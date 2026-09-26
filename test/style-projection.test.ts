@@ -174,3 +174,14 @@ test('source interaction selectors preserve pseudo specificity without rewriting
   assert.match(css, /:not\(\[data-floebrowser-focus\]\)/);
   assert.ok(css.includes(String.raw`.focus\:hover[data-label=":hover"]`));
 });
+
+test('object fallback selectors retain type specificity and attribute semantics', (t) => {
+  const css = resources(t).css(
+    'object > div, :is(object[data=""], object[type=""]) { color: red; content: "object" } .object { color: blue }',
+    'https://source.test/',
+  );
+  assert.match(css, /floe-object > div/);
+  assert.match(css, /:is\(floe-object\[data=""\], floe-object\[type=""\]\)/);
+  assert.match(css, /content: "object"/);
+  assert.match(css, /\.object/);
+});

@@ -1,6 +1,7 @@
 import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
 import { observeInteraction, sourceInteraction } from './interaction-source.js';
+import { UNSUPPORTED_SELECTOR } from '../shared/protocol.js';
 import { record } from '@rrweb/record';
 import {
   EventType,
@@ -102,6 +103,25 @@ export function installRecorder(binding: string, key: string): void {
       media: element.media,
     };
   };
+  // Observe only serialized objects, including those in shadow roots and child
+  // documents. MutationObserver's node list and this mode map hold weak keys.
+  // Crossing the embedding boundary requires a fresh authoritative checkpoint;
+  // ordinary HTML edits keep the existing incremental path and input epoch.
+  const objectModes = new WeakMap<Element, boolean>();
+  const objectObserver = new MutationObserver((records) => {
+    let changed = false;
+    for (const { target } of records) {
+      const element = target as Element;
+      if (!element.isConnected) continue;
+      const fallback = !element.matches(UNSUPPORTED_SELECTOR);
+      if (objectModes.get(element) !== fallback) changed = true;
+      objectModes.set(element, fallback);
+    }
+    if (changed && projecting && recordedDocument) {
+      record.takeFullSnapshot();
+      emitFocus(document, true);
+    }
+  });
   const prepareNode = (node: any, root = true) => {
     if (node.type === 2 && ['iframe', 'frame'].includes(node.tagName))
       frameIDs.add(node.id);
@@ -112,6 +132,14 @@ export function installRecorder(binding: string, key: string): void {
       const element = record.mirror.getNode(node.id) as Element | null;
       if (element?.nodeType === 1) {
         node.floeInteraction = sourceInteraction(element);
+        if (element.localName === 'object') {
+          node.floeObjectFallback = !element.matches(UNSUPPORTED_SELECTOR);
+          objectModes.set(element, node.floeObjectFallback);
+          objectObserver.observe(element, {
+            attributes: true,
+            attributeFilter: ['data', 'type'],
+          });
+        }
         if (element.localName === 'canvas')
           node.floeCanvas ??= canvasSize(element as HTMLCanvasElement);
         if (element.namespaceURI === 'http://www.w3.org/1998/Math/MathML')
@@ -275,7 +303,7 @@ export function installRecorder(binding: string, key: string): void {
   const stop = record({
     emit,
     // Canvas element attributes carry layout; its pixels are never recorded.
-    blockSelector: 'object,embed',
+    blockSelector: UNSUPPORTED_SELECTOR,
     inlineStylesheet: true,
     inlineImages: false,
     recordCanvas: false,
@@ -478,6 +506,7 @@ export function installRecorder(binding: string, key: string): void {
       stop: () => {
         for (const observer of media) observer.close();
         canvas.close();
+        objectObserver.disconnect();
         media.clear();
         stop?.();
         delete target[key];

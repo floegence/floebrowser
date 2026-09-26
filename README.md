@@ -824,6 +824,17 @@ Public-site qualification on 2026-09-20 and 2026-09-21 used isolated managed Chr
 
 Canvas and WebGL are graphics surfaces rather than DOM content. They use the source-owned graphics transport described above; an opened page alone is not evidence that a game works.
 
+Objects without a nonempty `data` or `type` attribute expose ordinary fallback HTML.
+FloeBrowser projects that content through an inert element, preserving source CSS
+selectors, live DOM updates, pointer input and scrolling. It never creates a native
+`object` or `embed` in the viewer. Resource-bearing or typed objects and `embed`
+remain explicitly unsupported. Changing between fallback HTML and embedded content
+rebuilds the current projection through the existing checkpoint path; ordinary
+content edits remain incremental. `test/object-fallback.e2e.ts` covers Chromium,
+Firefox and WebKit viewers, nested and shadow content, mode changes, and script and
+network isolation. This is DOM support, not support for external object documents
+or plugins.
+
 Live CSS animations run in the scriptless projection rather than being frozen by rrweb's paused-replay defaults. Entry fades, transformed scroll regions and pseudo-element animations can finish; an animation explicitly paused by website CSS remains paused. Animation timelines are not synchronized frame-for-frame with the source, and website JavaScript still runs only at the source.
 
 Canvas layout attributes, source intrinsic dimensions and mutations remain on the DOM path. The viewer uses an inert image with native replaced-element sizing; current Canvas pixels arrive through the independent graphics channel. Canvas and image type selectors are rewritten separately, and source attribute selectors retain their original semantics. Hidden and zero-sized editor overlays preserve visibility, pointer behavior and dimensions. These layout contracts remain covered by `test/style-fidelity.e2e.ts` and `test/projection.test.ts`; graphics and lifecycle tests live in `test/canvas.e2e.ts` and `test/canvas.test.ts`.

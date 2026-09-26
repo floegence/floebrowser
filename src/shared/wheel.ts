@@ -1,4 +1,5 @@
 type WheelLocation = {
+  unsupported: string;
   space: 'client' | 'viewport';
   x: number;
   y: number;
@@ -34,8 +35,7 @@ export function mapWheelPoint(
   };
   const supported = (node: Element) => {
     for (let current: Element | null = node; current; current = parent(current))
-      if (current.matches('object,embed,[data-floebrowser-unsupported]'))
-        return false;
+      if (current.matches(location.unsupported)) return false;
     return true;
   };
   if (!target.isConnected || !supported(target)) return;

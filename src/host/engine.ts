@@ -1705,6 +1705,7 @@ export class BrowserProjection {
     try {
       const local = wheel
         ? await element.evaluate(mapWheelPoint, {
+            unsupported: UNSUPPORTED_SELECTOR,
             space: 'viewport' as const,
             x: point.x,
             y: point.y,

@@ -2,6 +2,7 @@ import { EventType, IncrementalSource, type eventWithTime } from '@rrweb/types';
 import { SOURCE_LINK_ATTRIBUTE, type ResourceStore } from './resources.js';
 import {
   MATHML_ATTRIBUTE,
+  OBJECT_FALLBACK_TAG,
   CANVAS_ATTRIBUTE,
   STYLESHEET_LINK_ATTRIBUTE,
   styleAttributes,
@@ -13,7 +14,6 @@ import {
 } from '../shared/style.js';
 
 type Serialized = Record<string, any>;
-const blocked = new Set(['object', 'embed']);
 const inert = new Set(['script', 'base', 'meta', 'source', 'track']);
 const dropped =
   /^(?:on.*|srcdoc|nonce|integrity|crossorigin|ping|action|formaction|target|download|autofocus|srcset|sizes)$/i;
@@ -242,18 +242,18 @@ export class DOMProjection {
         node.childNodes = [];
         return;
       }
-      if (blocked.has(original)) {
-        const label =
-          original === 'iframe' || original === 'frame'
-            ? 'Embedded frame'
-            : original[0]!.toUpperCase() + original.slice(1);
+      const objectFallback =
+        original === 'object' && node.floeObjectFallback === true;
+      delete node.floeObjectFallback;
+      if (original === 'embed' || (original === 'object' && !objectFallback)) {
+        const label = original[0]!.toUpperCase() + original.slice(1);
         const width = /^[\d.]+px$/.test(node.attributes?.rr_width)
           ? node.attributes.rr_width
           : '100%';
         const height = /^[\d.]+px$/.test(node.attributes?.rr_height)
           ? node.attributes.rr_height
           : '96px';
-        this.excluded.add(node.id);
+        this.exclude(node);
         node.tagName = 'div';
         node.attributes = {
           'data-floebrowser-unsupported': `${label} is not supported in DOM mode`,
@@ -287,6 +287,7 @@ export class DOMProjection {
       delete node.floeAttributes;
       delete node.floeStylesheet;
       if (original === 'link') node.tagName = 'style';
+      if (objectFallback) node.tagName = OBJECT_FALLBACK_TAG;
       parentTag = original;
     } else if (node.type === 3 && (parentTag === 'style' || node.isStyle)) {
       this.tags.set(node.id, 'style');
@@ -367,7 +368,6 @@ export class DOMProjection {
         data.attributes = data.attributes.filter(
           (entry: Serialized) =>
             !this.excluded.has(entry.id) &&
-            !blocked.has(this.tags.get(entry.id) ?? '') &&
             !inert.has(this.tags.get(entry.id) ?? ''),
         );
         for (const entry of data.attributes) {

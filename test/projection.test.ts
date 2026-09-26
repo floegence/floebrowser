@@ -512,3 +512,78 @@ test('canvas projection retains layout attributes without accepting bitmap paylo
     resources.close();
   }
 });
+
+test('object fallback requires source metadata and keeps ordinary descendants inert', () => {
+  const resources = new ResourceStore(
+    new EventEmitter() as unknown as CDPSession,
+  );
+  try {
+    const projection = new DOMProjection(resources);
+    const node = (id: number, metadata: unknown) => ({
+      type: 2,
+      id,
+      tagName: 'object',
+      attributes: {},
+      floeObjectFallback: metadata,
+      childNodes: [
+        {
+          type: 2,
+          id: id + 1,
+          tagName: 'button',
+          attributes: { onclick: 'steal()' },
+          childNodes: [],
+        },
+      ],
+    });
+    const event: any = {
+      type: 2,
+      timestamp: 1,
+      data: {
+        node: {
+          type: 0,
+          id: 1,
+          childNodes: [node(2, undefined), node(4, false), node(6, true)],
+        },
+        initialOffset: { left: 0, top: 0 },
+      },
+    };
+    const output: any = projection.event(event, 'https://source.test/');
+    const [unknown, external, fallback] = output.data.node.childNodes;
+    for (const blocked of [unknown, external]) {
+      assert.equal(blocked.tagName, 'div');
+      assert.match(
+        blocked.attributes['data-floebrowser-unsupported'],
+        /Object/,
+      );
+      assert.deepEqual(blocked.childNodes, []);
+    }
+    assert.equal(fallback.tagName, 'floe-object');
+    assert.equal(fallback.childNodes[0].attributes.onclick, null);
+    assert.equal(fallback.floeObjectFallback, undefined);
+    const mutation: any = projection.event(
+      {
+        type: 3,
+        timestamp: 2,
+        data: {
+          source: 0,
+          adds: [],
+          removes: [],
+          texts: [],
+          attributes: [
+            { id: 3, attributes: { title: 'hidden' } },
+            { id: 5, attributes: { title: 'hidden' } },
+            { id: 6, attributes: { class: 'updated' } },
+            { id: 7, attributes: { onclick: 'steal()', title: 'safe' } },
+          ],
+        },
+      } as any,
+      'https://source.test/',
+    );
+    assert.deepEqual(mutation.data.attributes, [
+      { id: 6, attributes: { class: 'updated' } },
+      { id: 7, attributes: { onclick: null, title: 'safe' } },
+    ]);
+  } finally {
+    resources.close();
+  }
+});

@@ -1,4 +1,6 @@
 import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
+export const UNSUPPORTED_REPLAY_SELECTOR =
+  'object,embed,[data-floebrowser-unsupported]';
 type Frame = HTMLIFrameElement;
 
 /** Convert once at each frame boundary, including its CSS scale and border. */
@@ -40,7 +42,7 @@ export function replayHit(
     node;
     node = node.parentElement ?? (node.getRootNode() as ShadowRoot).host ?? null
   )
-    if (node.matches('object,embed,[data-floebrowser-unsupported]')) return;
+    if (node.matches(UNSUPPORTED_REPLAY_SELECTOR)) return;
   return { target, x, y };
 }
 

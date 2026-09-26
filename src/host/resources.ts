@@ -10,6 +10,7 @@ import selectorParser from 'postcss-selector-parser';
 import valueParser from 'postcss-value-parser';
 import {
   CANVAS_ATTRIBUTE,
+  OBJECT_FALLBACK_TAG,
   STYLESHEET_LINK_ATTRIBUTE,
   styleAttributes,
   interactionAttributes,
@@ -24,6 +25,10 @@ const projectedSelectors = selectorParser((selectors) => {
   for (const tag of tags) {
     if (tag.namespace) continue;
     const name = tag.value.toLowerCase();
+    if (name === 'object') {
+      tag.value = OBJECT_FALLBACK_TAG;
+      continue;
+    }
     const selector =
       name === 'link'
         ? `:is(link,style:where([${STYLESHEET_LINK_ATTRIBUTE}]))`

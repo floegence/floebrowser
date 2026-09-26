@@ -13,6 +13,7 @@ import { InputFonts } from './input-fonts.js';
 import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
 import {
   replayHit,
+  UNSUPPORTED_REPLAY_SELECTOR,
   replayDragPoint,
   styleInputProxy,
 } from './input-geometry.js';
@@ -1510,6 +1511,7 @@ export class DOMBrowserView {
         const hit = this.hit(event);
         if (!hit) return;
         const mapped = mapWheelPoint(hit.target, {
+          unsupported: UNSUPPORTED_REPLAY_SELECTOR,
           space: 'client',
           x: hit.x,
           y: hit.y,

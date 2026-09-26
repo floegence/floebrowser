@@ -2,6 +2,7 @@
 export const STYLESHEET_LINK_ATTRIBUTE = 'data-floebrowser-stylesheet-link';
 export const CANVAS_ATTRIBUTE = 'data-floebrowser-canvas';
 export const MATHML_ATTRIBUTE = 'data-floebrowser-mathml';
+export const OBJECT_FALLBACK_TAG = 'floe-object';
 export const INPUT_PROXY_ATTRIBUTE = 'data-floebrowser-input-proxy';
 export const interactionAttributes = {
   hover: 'data-floebrowser-hover',
