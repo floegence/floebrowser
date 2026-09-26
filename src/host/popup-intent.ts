@@ -22,8 +22,8 @@ export function clearPopupIntent(source: object, sequence: number): void {
 }
 
 /**
- * A popup without a recent pointer activation (for example a keyboard or
- * script action) stays in the directory without stealing the current view.
+ * Keyboard and script popups follow Chromium's default foreground behavior.
+ * An explicit middle-pointer activation overrides that default for one popup.
  */
 export function consumePopupIntent(source: object): boolean {
   const intent = intents.get(source);
