@@ -17,7 +17,7 @@ npm run build
 npm start -- --url https://example.com
 ```
 
-Open the private viewer URL printed by the CLI. The source browser uses full Chromium in modern headless mode by default, rather than the separate Headless Shell. Its User-Agent keeps the real browser version and platform with the standard `Chrome` product token. Chromium startup settings also disable the explicit WebDriver automation marker. These settings improve site and media-session compatibility; they do not promise automation invisibility, CAPTCHA acceptance, or access from every network. Website requests, scripts, cookies, storage and form submissions remain in that browser.
+Open the private viewer URL printed by the CLI. The source browser uses full Chromium in modern headless mode by default, rather than the separate Headless Shell. Chromium owns its User-Agent and client hints, including the real architecture and platform version; the launcher does not reconstruct these values from the reduced User-Agent. Headless operation retains the native HeadlessChrome product token. The startup policy hides only the explicit WebDriver marker while keeping the native browser identity; managed automation does not promise CAPTCHA acceptance or access from every network. Website requests, scripts, cookies, storage and form submissions remain in that browser.
 
 Opening the same private URL in another window shows **This browser is open in another window**. Choose **Use in this window** to transfer control. The previous window disconnects with a persistent explanation; the source page, login and browser profile stay open. Opening or refreshing an inactive window never takes control automatically.
 

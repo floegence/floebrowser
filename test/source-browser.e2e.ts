@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { launchSourceBrowser } from '../dist/host/browser.js';
 
-test('managed headless Chromium uses its actual Chrome UA and preserves a dedicated profile', async () => {
+test('managed headless Chromium preserves native identity and a dedicated profile', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'floe-source-profile-'));
   const requests: Array<{ ua?: string; cookie?: string }> = [];
   const server = createServer((request, response) => {
@@ -32,13 +32,11 @@ test('managed headless Chromium uses its actual Chrome UA and preserves a dedica
           `http://127.0.0.1:${(server.address() as AddressInfo).port}/`,
         );
         const ua = await page.evaluate(() => navigator.userAgent);
-        assert.doesNotMatch(ua, /HeadlessChrome/);
-        assert.match(ua, /Chrome\/\d+/);
-        assert.equal(
-          await page.evaluate(() => navigator.webdriver),
-          false,
-          'The user-controlled source does not advertise WebDriver mode',
-        );
+        const cdp = await context.browser()!.newBrowserCDPSession();
+        const version = await cdp.send('Browser.getVersion');
+        await cdp.detach();
+        assert.equal(ua, version.userAgent);
+        assert.equal(await page.evaluate(() => navigator.webdriver), false);
         assert.equal(requests.at(-1)!.ua, ua);
         if (i) assert.match(requests.at(-1)!.cookie ?? '', /floe=retained/);
       } finally {

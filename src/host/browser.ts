@@ -12,31 +12,24 @@ export async function launchSourceBrowser(
     channel: 'chromium',
     headless: options.headless ?? true,
     chromiumSandbox: true,
-    // The source is a user-controlled browser. Explicit WebDriver markers can
-    // cause sites to reject its playback sessions; other detection remains possible.
+    // Keep the explicit automation-marker policy consistent with the managed
+    // source. This does not alter the native UA/client hints or promise site
+    // admission; challenge providers may still reject automation.
     ignoreDefaultArgs: ['--enable-automation'],
     args: ['--disable-blink-features=AutomationControlled'],
   };
+  // Keep Chromium's native UA and client hints together. Passing a reduced UA
+  // through Playwright makes it infer the OS and CPU from compatibility tokens,
+  // replacing real platform metadata even when the UA string is unchanged.
+  // New tabs inherit native window dimensions before website scripts run.
+  const contextOptions = { viewport: null };
+  if (options.profile)
+    return chromium.launchPersistentContext(resolve(options.profile), {
+      ...launch,
+      ...contextOptions,
+    });
   const browser = await chromium.launch(launch);
   try {
-    const cdp = await browser.newBrowserCDPSession();
-    const { userAgent } = await cdp.send('Browser.getVersion');
-    await cdp.detach();
-    // Keep the actual Chromium version/platform. Some sites reject the shell
-    // product token before serving any document. This is not bot invisibility.
-    const contextOptions = {
-      // New tabs inherit the native window before website scripts run. A fixed
-      // context viewport would reset each popup before controller admission.
-      viewport: null,
-      userAgent: userAgent.replace('HeadlessChrome/', 'Chrome/'),
-    };
-    if (options.profile) {
-      await browser.close();
-      return await chromium.launchPersistentContext(resolve(options.profile), {
-        ...launch,
-        ...contextOptions,
-      });
-    }
     const context = await browser.newContext(contextOptions);
     context.once('close', () => {
       void browser.close();
