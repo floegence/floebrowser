@@ -69,6 +69,8 @@ type Viewer = {
 export interface SessionConnection extends Controller {
   readonly id: string;
   readonly currentState: TabState;
+  /** Host-only selection used for a source-reported foreground popup. */
+  select(tab: string): Promise<void>;
   setMedia(enabled: boolean): Promise<void>;
   setAudio(enabled: boolean): Promise<void>;
   setVisible(visible: boolean): Promise<void>;
@@ -601,6 +603,23 @@ export class BrowserSession {
         return session.state(viewer);
       },
       receive: (message) => this.receive(viewer, message),
+      select: (tab) => {
+        if (
+          !viewer.active ||
+          !this.entries(viewer).some((entry) => entry.page.id === tab)
+        )
+          return Promise.reject(new Error('Unknown source tab'));
+        const work = viewer.directoryWork.then(async () => {
+          if (
+            !viewer.active ||
+            !this.entries(viewer).some((entry) => entry.page.id === tab)
+          )
+            return;
+          await this.select(viewer, tab);
+        });
+        viewer.directoryWork = work.catch(() => {});
+        return work;
+      },
       receiveDirectoryDecision: async (input) => {
         const parsed = clientMessageSchema.safeParse(input);
         if (!parsed.success) return false;

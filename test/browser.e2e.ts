@@ -326,6 +326,32 @@ test('follows source redirects and manages new tabs, popups, switching and closi
   const { page, viewer, projected, site, service } = await setup(t);
   await page.evaluate(() => {
     const link = document.createElement('a');
+    link.id = 'background-link';
+    link.href = '/second';
+    link.target = '_blank';
+    link.textContent = 'Open a background source tab';
+    link.style.cssText = 'position:fixed;top:10px;left:300px;z-index:100';
+    document.body.append(link);
+  });
+  await clickProjected(projected.locator('#background-link'), {
+    button: 'middle',
+  });
+  await viewer.getByRole('tab', { name: 'Second page', exact: true }).waitFor();
+  assert.equal(
+    await viewer.locator('#address').inputValue(),
+    `${site.url}/`,
+    'A middle-clicked popup stays in the background',
+  );
+  assert.equal(page.context().pages().length, 2);
+  await viewer
+    .getByRole('button', { name: 'Close Second page', exact: true })
+    .click();
+  await eventually(
+    async () => page.context().pages().length === 1,
+    'Closing the background popup removes only that source tab',
+  );
+  await page.evaluate(() => {
+    const link = document.createElement('a');
     link.id = 'popup-link';
     link.href = '/second';
     link.target = '_blank';
