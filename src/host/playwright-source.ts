@@ -1,7 +1,19 @@
-import type { CDPSession, Frame, Page, Download } from 'playwright';
+import type {
+  BrowserContext,
+  CDPSession,
+  Frame,
+  Page,
+  Download,
+} from 'playwright';
 import { CDPSourcePage } from './cdp-source.js';
 import { playwrightDownload } from './downloads.js';
 import { closeCDPPage } from './close-page.js';
+import {
+  consumeLatestPopupIntent,
+  consumePopupIntent,
+  forgetPopupIntentSource,
+  markPopupIntent,
+} from './popup-intent.js';
 
 const sources = new WeakMap<Page, Promise<CDPSourcePage>>();
 
@@ -15,7 +27,11 @@ export type PlaywrightSourceOptions = {
   nativeDownloads?: boolean;
   /** Embedded hosts decide whether and under which identity to adopt a popup.
    * Providing this callback disables implicit debugger adoption. */
-  onPopup?: (page: Page, opener: CDPSourcePage) => void | Promise<void>;
+  onPopup?: (
+    page: Page,
+    opener: CDPSourcePage,
+    foreground: boolean,
+  ) => void | Promise<void>;
 };
 
 /** Optional Playwright lifecycle owner. Consumers share each returned source
@@ -23,6 +39,9 @@ export type PlaywrightSourceOptions = {
 export class PlaywrightSourceBrowser {
   private pages = new Map<Page, Promise<CDPSourcePage>>();
   private disposers = new Set<() => Promise<void>>();
+  private contextListeners = new Map<BrowserContext, (page: Page) => void>();
+  private handledPopups = new WeakSet<Page>();
+  private ownedSources = new Set<CDPSourcePage>();
   private closed = false;
   constructor(private options: PlaywrightSourceOptions = {}) {}
   adopt(page: Page, id?: string): Promise<CDPSourcePage> {
@@ -43,6 +62,20 @@ export class PlaywrightSourceBrowser {
     this.pages.set(page, task);
     sources.set(page, task);
     return task;
+  }
+  private async handlePopup(
+    page: Page,
+    source: CDPSourcePage,
+    foreground: boolean,
+  ): Promise<void> {
+    if (this.options.onPopup) {
+      if (!this.closed) await this.options.onPopup(page, source, foreground);
+      return;
+    }
+    const popup = await this.adopt(page);
+    if (this.closed) return;
+    markPopupIntent(popup, foreground);
+    source.emit('popup', popup);
   }
   private async attach(page: Page, id?: string): Promise<CDPSourcePage> {
     const root = await page.context().newCDPSession(page);
@@ -76,6 +109,7 @@ export class PlaywrightSourceBrowser {
         close: () => closeCDPPage(page, root),
         createPage: async () => this.adopt(await page.context().newPage()),
       });
+      this.ownedSources.add(source);
     } catch (error) {
       await root.detach().catch(() => {});
       throw error;
@@ -130,21 +164,48 @@ export class PlaywrightSourceBrowser {
       }
     };
     const popup = (page: Page) => {
-      if (this.options.onPopup) {
-        void Promise.resolve()
-          .then(() => {
-            if (!disposed && !this.closed)
-              return this.options.onPopup!(page, source);
-          })
-          .catch(() => {});
-        return;
-      }
-      void this.adopt(page)
-        .then((popup) => {
-          if (!disposed) source.emit('popup', popup);
-        })
-        .catch(() => {});
+      if (this.handledPopups.has(page)) return;
+      this.handledPopups.add(page);
+      // Chromium reports the popup on the opener. Carry the opener's most
+      // recent pointer intent across that boundary before the new source is
+      // adopted, otherwise the directory cannot distinguish middle-click
+      // background tabs from ordinary foreground popups.
+      const foreground = consumePopupIntent(source);
+      void this.handlePopup(page, source, foreground).catch(() => {});
     };
+    const context = page.context();
+    if (!this.contextListeners.has(context)) {
+      const contextPage = (popupPage: Page) => {
+        if (this.closed || this.handledPopups.has(popupPage)) return;
+        // Let a normal page-level popup event win when Chromium exposes an
+        // opener. Middle-click tabs have no opener and are resolved from the
+        // source pointer intent after the page event settles.
+        setTimeout(() => {
+          if (this.closed || this.handledPopups.has(popupPage)) return;
+          void (async () => {
+            const opener = await popupPage.opener().catch(() => null);
+            const openerTask = opener ? this.pages.get(opener) : undefined;
+            if (openerTask) {
+              // A page-level popup handler may still be delivered just after
+              // this context event. Leave it to that handler when no intent is
+              // available yet; unmarked browser pages are not admitted.
+              const source = await openerTask.catch(() => undefined);
+              if (source && this.handledPopups.has(popupPage)) return;
+            }
+            const intent = consumeLatestPopupIntent(this.ownedSources);
+            if (!intent) return;
+            this.handledPopups.add(popupPage);
+            void this.handlePopup(
+              popupPage,
+              intent.source as CDPSourcePage,
+              intent.foreground,
+            );
+          })().catch(() => {});
+        }, 0);
+      };
+      context.on('page', contextPage);
+      this.contextListeners.set(context, contextPage);
+    }
     const crash = () => source.emit('crash');
     const download = (file: Download) =>
       source.reportDownload(playwrightDownload(file));
@@ -179,9 +240,20 @@ export class PlaywrightSourceBrowser {
       page.off('close', closed);
       await Promise.allSettled(pending.values());
       source.dispose();
+      this.ownedSources.delete(source);
+      forgetPopupIntentSource(source);
       await Promise.allSettled(
         [root, ...children.values()].map((session) => session.detach()),
       );
+      if (
+        ![...this.pages.keys()].some(
+          (candidate) => candidate.context() === context,
+        )
+      ) {
+        const listener = this.contextListeners.get(context);
+        if (listener) context.off('page', listener);
+        this.contextListeners.delete(context);
+      }
     };
     this.disposers.add(dispose);
     await Promise.all(page.frames().map(attach));

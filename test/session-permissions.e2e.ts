@@ -117,10 +117,11 @@ test(
     t.after(() => browser.close());
     const context = await browser.newContext();
     const page = await context.newPage();
-    let popupNotice: { page: typeof page; opener: string } | undefined;
+    let popupNotice:
+      { page: typeof page; opener: string; foreground: boolean } | undefined;
     const owner = new PlaywrightSourceBrowser({
-      onPopup: (popup, opener) => {
-        popupNotice = { page: popup, opener: opener.id };
+      onPopup: (popup, opener, foreground) => {
+        popupNotice = { page: popup, opener: opener.id, foreground };
       },
     });
     t.after(() => owner.dispose());
@@ -131,6 +132,7 @@ test(
     await wait(() => Boolean(popupNotice));
     assert.equal(popupNotice!.page, popup);
     assert.equal(popupNotice!.opener, 'host-opener');
+    assert.equal(popupNotice!.foreground, true);
     const source = await owner.adopt(popup, 'host-authorized-popup');
     assert.equal(
       source.id,

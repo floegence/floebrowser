@@ -41,6 +41,7 @@ import { SourceFind } from './find.js';
 import { DownloadTransfers } from './downloads.js';
 import { interactionAttributes } from '../shared/style.js';
 import { mapWheelPoint } from '../shared/wheel.js';
+import { clearPopupIntent, markPopupIntent } from './popup-intent.js';
 import type { SourceMediaBridge, MediaSubscription } from './media-bridge.js';
 import {
   MEDIA_WIRE_VERSION,
@@ -1591,6 +1592,15 @@ export class BrowserProjection {
         this.heldButtons.add(action.button);
         this.pointerOrigin = { node: action.point.node, epoch: command.epoch };
       }
+      // Browser popup activation follows the physical pointer button. Keep the
+      // intent beside the source page until Playwright emits its popup event;
+      // middle-click stays in the background while left-click selects it.
+      const popupIntent =
+        action.phase === 'up'
+          ? markPopupIntent(this.page, action.button !== 'middle')
+          : undefined;
+      if (popupIntent !== undefined)
+        setTimeout(() => clearPopupIntent(this.page, popupIntent), 1000);
       await this.cdp.send('Input.dispatchMouseEvent', {
         type:
           action.phase === 'down'

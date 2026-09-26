@@ -1,4 +1,5 @@
 import type { SourcePage } from './source.js';
+import { consumePopupIntent } from './popup-intent.js';
 
 export type SourceTab = {
   page: SourcePage;
@@ -70,7 +71,9 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     };
     const popup = (page: SourcePage) => {
       this.add(page);
-      this.publish({ activate: page.id });
+      this.publish(
+        consumePopupIntent(page) ? { activate: page.id } : undefined,
+      );
     };
     page.on('close', closed);
     page.on('popup', popup);
