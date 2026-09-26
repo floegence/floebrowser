@@ -4,7 +4,6 @@ type PopupIntent = {
 };
 
 const intents = new WeakMap<object, PopupIntent>();
-const trackedSources = new Set<object>();
 let nextSequence = 0;
 
 /**
@@ -15,7 +14,6 @@ let nextSequence = 0;
 export function markPopupIntent(source: object, foreground: boolean): number {
   const sequence = ++nextSequence;
   intents.set(source, { foreground, sequence });
-  trackedSources.add(source);
   return sequence;
 }
 
@@ -34,27 +32,6 @@ export function consumePopupIntent(source: object): boolean {
   return intent.foreground;
 }
 
-/**
- * Middle-click opens a new Chromium page without an opener relationship, so
- * Playwright reports only the browser-context `page` event. Resolve that page
- * against the newest source-side pointer intent while it is still fresh.
- */
-export function consumeLatestPopupIntent(
-  candidates?: ReadonlySet<object>,
-): { source: object; foreground: boolean } | undefined {
-  let selected: { source: object; intent: PopupIntent } | undefined;
-  for (const source of trackedSources) {
-    if (candidates && !candidates.has(source)) continue;
-    const intent = intents.get(source);
-    if (intent && (!selected || intent.sequence > selected.intent.sequence))
-      selected = { source, intent };
-  }
-  if (!selected) return undefined;
-  intents.delete(selected.source);
-  return { source: selected.source, foreground: selected.intent.foreground };
-}
-
 export function forgetPopupIntentSource(source: object): void {
   intents.delete(source);
-  trackedSources.delete(source);
 }

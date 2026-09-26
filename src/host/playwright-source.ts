@@ -9,7 +9,6 @@ import { CDPSourcePage } from './cdp-source.js';
 import { playwrightDownload } from './downloads.js';
 import { closeCDPPage } from './close-page.js';
 import {
-  consumeLatestPopupIntent,
   consumePopupIntent,
   forgetPopupIntentSource,
   markPopupIntent,
@@ -40,6 +39,23 @@ export class PlaywrightSourceBrowser {
   private pages = new Map<Page, Promise<CDPSourcePage>>();
   private disposers = new Set<() => Promise<void>>();
   private contextListeners = new Map<BrowserContext, (page: Page) => void>();
+  private contextWatchers = new Map<
+    BrowserContext,
+    {
+      session: CDPSession;
+      onTarget: (event: any) => void;
+      intents: Map<string, { source: CDPSourcePage; foreground: boolean }>;
+    }
+  >();
+  private pendingNewTabs = new Map<
+    BrowserContext,
+    Array<{
+      contextID: string;
+      url: string;
+      source: CDPSourcePage;
+      foreground: boolean;
+    }>
+  >();
   private handledPopups = new WeakSet<Page>();
   private ownedSources = new Set<CDPSourcePage>();
   private closed = false;
@@ -80,8 +96,10 @@ export class PlaywrightSourceBrowser {
   private async attach(page: Page, id?: string): Promise<CDPSourcePage> {
     const root = await page.context().newCDPSession(page);
     let source: CDPSourcePage;
+    let contextID = 'default';
     try {
       const target = await root.send('Target.getTargetInfo');
+      contextID = target.targetInfo.browserContextId || 'default';
       source = await CDPSourcePage.attach({
         id: id ?? target.targetInfo.targetId,
         transport: root,
@@ -115,7 +133,7 @@ export class PlaywrightSourceBrowser {
       throw error;
     }
     const children = new Map<Frame, CDPSession>();
-    const pending = new Map<Frame, Promise<void>>();
+    const pendingFrames = new Map<Frame, Promise<void>>();
     let disposed = false;
     const attach = (frame: Frame): Promise<void> => {
       if (
@@ -125,7 +143,7 @@ export class PlaywrightSourceBrowser {
         children.has(frame)
       )
         return Promise.resolve();
-      const prior = pending.get(frame);
+      const prior = pendingFrames.get(frame);
       if (prior) return prior;
       const task = (async () => {
         const child = await page
@@ -148,8 +166,8 @@ export class PlaywrightSourceBrowser {
           children.delete(frame);
           await child.detach().catch(() => {});
         }
-      })().finally(() => pending.delete(frame));
-      pending.set(frame, task);
+      })().finally(() => pendingFrames.delete(frame));
+      pendingFrames.set(frame, task);
       return task;
     };
     const attached = (frame: Frame) => {
@@ -174,12 +192,58 @@ export class PlaywrightSourceBrowser {
       void this.handlePopup(page, source, foreground).catch(() => {});
     };
     const context = page.context();
+    const pendingTabs = this.pendingNewTabs.get(context) ?? [];
+    this.pendingNewTabs.set(context, pendingTabs);
+    const requestedNewTab = (event: any) => {
+      if (event?.disposition !== 'newTab' || typeof event.url !== 'string')
+        return;
+      pendingTabs.push({
+        contextID,
+        url: event.url,
+        source,
+        foreground: consumePopupIntent(source),
+      });
+      const expiry = setTimeout(() => {
+        const index = pendingTabs.findIndex(
+          (item) => item.source === source && item.url === event.url,
+        );
+        if (index >= 0) pendingTabs.splice(index, 1);
+      }, 1000);
+      (expiry as unknown as { unref?: () => void }).unref?.();
+    };
+    root.on('Page.frameRequestedNavigation', requestedNewTab);
+    const watcher = this.contextWatchers.get(context);
+    if (!watcher) {
+      const session = await context.browser()!.newBrowserCDPSession();
+      const intents = new Map<
+        string,
+        { source: CDPSourcePage; foreground: boolean }
+      >();
+      const onTarget = (event: any) => {
+        const target = event?.targetInfo;
+        if (!target || target.type !== 'page' || target.openerId) return;
+        const tabs = this.pendingNewTabs.get(context) ?? [];
+        const index = tabs.findIndex(
+          (item) => item.contextID === (target.browserContextId || 'default'),
+        );
+        if (index < 0) return;
+        const item = tabs.splice(index, 1)[0]!;
+        intents.set(target.targetId, {
+          source: item.source,
+          foreground: item.foreground,
+        });
+      };
+      await session.send('Target.setDiscoverTargets', { discover: true });
+      session.on('Target.targetCreated', onTarget);
+      this.contextWatchers.set(context, { session, onTarget, intents });
+    }
     if (!this.contextListeners.has(context)) {
       const contextPage = (popupPage: Page) => {
         if (this.closed || this.handledPopups.has(popupPage)) return;
         // Let a normal page-level popup event win when Chromium exposes an
-        // opener. Middle-click tabs have no opener and are resolved from the
-        // source pointer intent after the page event settles.
+        // opener. Middle-click tabs are admitted only when Chromium first
+        // reported a source navigation with `disposition: newTab` and the
+        // browser target watcher matched its native target ID.
         setTimeout(() => {
           if (this.closed || this.handledPopups.has(popupPage)) return;
           void (async () => {
@@ -192,14 +256,24 @@ export class PlaywrightSourceBrowser {
               const source = await openerTask.catch(() => undefined);
               if (source && this.handledPopups.has(popupPage)) return;
             }
-            const intent = consumeLatestPopupIntent(this.ownedSources);
-            if (!intent) return;
+            const probe = await popupPage
+              .context()
+              .newCDPSession(popupPage)
+              .catch(() => undefined);
+            const target = await probe
+              ?.send('Target.getTargetInfo')
+              .catch(() => undefined);
+            await probe?.detach().catch(() => {});
+            const intent = target
+              ? this.contextWatchers
+                  .get(context)
+                  ?.intents.get(target.targetInfo.targetId)
+              : undefined;
+            if (!target || !intent) return;
+            const targetID = target.targetInfo.targetId;
+            this.contextWatchers.get(context)?.intents.delete(targetID);
             this.handledPopups.add(popupPage);
-            void this.handlePopup(
-              popupPage,
-              intent.source as CDPSourcePage,
-              intent.foreground,
-            );
+            void this.handlePopup(popupPage, intent.source, intent.foreground);
           })().catch(() => {});
         }, 0);
       };
@@ -238,7 +312,8 @@ export class PlaywrightSourceBrowser {
       page.off('download', download);
       page.off('dialog', dialog);
       page.off('close', closed);
-      await Promise.allSettled(pending.values());
+      root.off('Page.frameRequestedNavigation', requestedNewTab);
+      await Promise.allSettled(pendingFrames.values());
       source.dispose();
       this.ownedSources.delete(source);
       forgetPopupIntentSource(source);
@@ -253,6 +328,13 @@ export class PlaywrightSourceBrowser {
         const listener = this.contextListeners.get(context);
         if (listener) context.off('page', listener);
         this.contextListeners.delete(context);
+        const watcher = this.contextWatchers.get(context);
+        if (watcher) {
+          watcher.session.off('Target.targetCreated', watcher.onTarget);
+          void watcher.session.detach().catch(() => {});
+          this.contextWatchers.delete(context);
+        }
+        this.pendingNewTabs.delete(context);
       }
     };
     this.disposers.add(dispose);

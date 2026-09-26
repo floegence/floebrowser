@@ -90,7 +90,10 @@ try {
   assert.equal((await embedded.projection(observer.currentState.active)).hasController, false);
   await observer.close();
   await embedded.close();
-  assert.doesNotMatch(await source.evaluate(() => navigator.userAgent), /HeadlessChrome/);
+  const sourceIdentity = await context.browser().newBrowserCDPSession();
+  const nativeIdentity = await sourceIdentity.send('Browser.getVersion');
+  await sourceIdentity.detach();
+  assert.equal(await source.evaluate(() => navigator.userAgent), nativeIdentity.userAgent);
   server = await createProjectionServer(source, { authorize: () => true });
   await source.goto('data:text/html,<h1 id="packed">Packed source</h1>');
   const viewer = await browser.newPage();
