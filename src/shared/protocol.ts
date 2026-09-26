@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -87,7 +87,7 @@ export const actionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('pointer'),
       phase: z.enum(['down', 'up', 'move']),
-      point,
+      point: point.extend({ space: z.literal('viewport').optional() }),
       button: z.enum(['left', 'middle', 'right']),
       buttons: z.number().int().min(0).max(7),
       modifiers,

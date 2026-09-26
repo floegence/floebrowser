@@ -1,27 +1,29 @@
 import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
 type Frame = HTMLIFrameElement;
 
+/** Convert once at each frame boundary, including its CSS scale and border. */
+function framePoint(frame: Frame, clientX: number, clientY: number) {
+  const rect = frame.getBoundingClientRect();
+  if (!rect.width || !rect.height || !frame.contentDocument) return;
+  const x =
+    ((clientX - rect.left) * frame.offsetWidth) / rect.width - frame.clientLeft;
+  const y =
+    ((clientY - rect.top) * frame.offsetHeight) / rect.height - frame.clientTop;
+  if (x < 0 || y < 0 || x >= frame.clientWidth || y >= frame.clientHeight)
+    return;
+  return { x, y };
+}
+
 /** Inert frame coordinates are independent of the trusted host input surface. */
 export function replayHit(
   frame: Frame,
   clientX: number,
   clientY: number,
 ): { target: Element; x: number; y: number } | undefined {
-  const rect = frame.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const x =
-    ((clientX - rect.left) * frame.offsetWidth) / rect.width - frame.clientLeft;
-  const y =
-    ((clientY - rect.top) * frame.offsetHeight) / rect.height - frame.clientTop;
-  const doc = frame.contentDocument;
-  if (
-    !doc ||
-    x < 0 ||
-    y < 0 ||
-    x >= frame.clientWidth ||
-    y >= frame.clientHeight
-  )
-    return;
+  const point = framePoint(frame, clientX, clientY);
+  if (!point) return;
+  const { x, y } = point;
+  const doc = frame.contentDocument!;
   let target = doc.elementFromPoint(x, y);
   while (target?.shadowRoot) {
     const child = target.shadowRoot.elementFromPoint(x, y);
@@ -40,6 +42,32 @@ export function replayHit(
   )
     if (node.matches('object,embed,[data-floebrowser-unsupported]')) return;
   return { target, x, y };
+}
+
+/** Continue an admitted drag in its original document, independent of moving nodes. */
+export function replayDragPoint(
+  root: Frame,
+  target: Element,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | undefined {
+  if (!target.isConnected) return;
+  const frames: Frame[] = [];
+  for (let win = target.ownerDocument.defaultView; win?.frameElement;) {
+    const frame = win.frameElement as Frame;
+    frames.unshift(frame);
+    if (frame === root) break;
+    win = frame.ownerDocument.defaultView;
+  }
+  if (frames[0] !== root) return;
+  let point = { x: clientX, y: clientY };
+  for (const frame of frames) {
+    const next = framePoint(frame, point.x, point.y);
+    if (!next) return;
+    point = next;
+  }
+  const win = target.ownerDocument.defaultView!;
+  return { x: point.x / win.innerWidth, y: point.y / win.innerHeight };
 }
 
 /** Return host viewport geometry, including nested frame borders and scaling. */

@@ -216,3 +216,29 @@ test('held-input release cannot carry a new key, pointer effect or extra authori
       false,
     );
 });
+
+test('held pointer viewport coordinates are bounded and cannot add arbitrary authority', () => {
+  const action = {
+    kind: 'pointer',
+    phase: 'move',
+    point: { space: 'viewport', node: 1, x: 0.5, y: 0.5 },
+    button: 'left',
+    buttons: 1,
+    modifiers: 0,
+    clicks: 1,
+  };
+  assert.equal(clientMessageSchema.safeParse(command(action)).success, true);
+  for (const patch of [
+    { space: 'screen' },
+    { x: 1.1 },
+    { y: -0.1 },
+    { node: 0 },
+    { captured: true },
+  ])
+    assert.equal(
+      clientMessageSchema.safeParse(
+        command({ ...action, point: { ...action.point, ...patch } }),
+      ).success,
+      false,
+    );
+});

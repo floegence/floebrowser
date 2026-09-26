@@ -11,7 +11,11 @@ import {
 } from '../shared/media-wire.js';
 import { InputFonts } from './input-fonts.js';
 import { INPUT_PROXY_ATTRIBUTE } from '../shared/style.js';
-import { replayHit, styleInputProxy } from './input-geometry.js';
+import {
+  replayHit,
+  replayDragPoint,
+  styleInputProxy,
+} from './input-geometry.js';
 import { ReplayPresentation } from './presentation.js';
 import { ReplayPages } from './replay-pages.js';
 import { ReplayResources, type ResourceFetch } from './resources.js';
@@ -97,6 +101,15 @@ type Pending = {
   documentBound: boolean;
 };
 type Wheel = Extract<Action, { kind: 'wheel' }>;
+type Pointer = Extract<Action, { kind: 'pointer' }>;
+type Drag = {
+  target: Element;
+  node: number;
+  button: Pointer['button'];
+  active: boolean;
+  queued?: Pointer;
+  inFlight: number;
+};
 const modifiers = (event: MouseEvent | KeyboardEvent) =>
   (event.altKey ? 1 : 0) |
   (event.ctrlKey ? 2 : 0) |
@@ -157,7 +170,7 @@ export class DOMBrowserView {
   private composing = false;
   private suppressCompositionInput = false;
   private lastMove = 0;
-  private dragging = false;
+  private drag?: Drag;
   private inputEngaged = false;
   private inputPause?: object;
   private sourceFocus?: FocusState;
@@ -958,6 +971,21 @@ export class DOMBrowserView {
   }
 
   dispatch(action: Action): Promise<boolean> {
+    if (action.kind === 'release_input') this.drag = undefined;
+    else if (
+      [
+        'navigate',
+        'back',
+        'forward',
+        'reload',
+        'tab_select',
+        'tab_close',
+        'tab_new',
+        'tab_restore',
+      ].includes(action.kind)
+    )
+      this.cancelInput();
+    else this.flushDragMove();
     if (action.kind === 'tab_move') return this.sendAction(action);
     if (action.kind.startsWith('tab_')) {
       this.queuedWheel = undefined;
@@ -981,6 +1009,7 @@ export class DOMBrowserView {
       this.tabCommands.size
     )
       return;
+    this.flushDragMove();
     const prior = this.queuedWheel;
     if (
       prior &&
@@ -1291,9 +1320,10 @@ export class DOMBrowserView {
   private cancelInput(): void {
     this.compositionAuthority = undefined;
     this.composing = false;
-    if (this.heldInput) void this.dispatch({ kind: 'release_input' });
+    const held = this.heldInput;
     this.heldInput = false;
-    this.dragging = false;
+    this.drag = undefined;
+    if (held) void this.dispatch({ kind: 'release_input' });
   }
 
   /** Fence page input from explicit navigation intent, including host admission.
@@ -1355,59 +1385,97 @@ export class DOMBrowserView {
       this.sourceFocus = undefined;
       this.clearProxy();
       this.sink.focus({ preventScroll: true });
-      this.dragging = this.heldInput = true;
-      void this.dispatch({
-        kind: 'pointer',
-        phase: 'down',
-        point,
+      this.heldInput = true;
+      const drag: Drag = {
+        target: hit.target,
+        node: point.node,
         button: mouseButton(event.button),
-        buttons: event.buttons,
-        modifiers: modifiers(event),
-        clicks: Math.max(1, Math.min(3, event.detail || 1)),
-      });
+        active: true,
+        inFlight: 0,
+      };
+      this.drag = drag;
+      void this.sendDragAction(
+        {
+          kind: 'pointer',
+          phase: 'down',
+          point,
+          button: mouseButton(event.button),
+          buttons: event.buttons,
+          modifiers: modifiers(event),
+          clicks: Math.max(1, Math.min(3, event.detail || 1)),
+        },
+        drag,
+      );
     });
     this.listen(window, 'mouseup', (raw) => {
-      if (!this.dragging) return;
+      const drag = this.drag;
+      if (!drag?.active) return;
       const event = raw as MouseEvent;
-      const hit = this.hit(event),
-        point = hit && this.point(hit);
+      const point = this.dragPoint(event, drag);
       if (!point) {
         this.cancelInput();
         return;
       }
-      this.dragging = false;
-      void this.dispatch({
-        kind: 'pointer',
-        phase: 'up',
-        point,
-        button: mouseButton(event.button),
-        buttons: event.buttons,
-        modifiers: modifiers(event),
-        clicks: Math.max(1, Math.min(3, event.detail || 1)),
+      this.flushDragMove();
+      drag.active = false;
+      void this.sendDragAction(
+        {
+          kind: 'pointer',
+          phase: 'up',
+          point,
+          button: mouseButton(event.button),
+          buttons: event.buttons,
+          modifiers: modifiers(event),
+          clicks: Math.max(1, Math.min(3, event.detail || 1)),
+        },
+        drag,
+      ).then(() => {
+        if (this.drag === drag) this.drag = undefined;
       });
     });
     this.listen(window, 'mousemove', (raw) => {
       const event = raw as MouseEvent;
       if (
         !this.controlled ||
-        (!this.dragging && !this.inputSurface.contains(event.target as Node))
+        (!this.drag?.active &&
+          !this.inputSurface.contains(event.target as Node))
       )
         return;
+      const drag = this.drag;
+      if (drag?.active) {
+        if (!event.buttons) {
+          this.cancelInput();
+          return;
+        }
+        const point = this.dragPoint(event, drag);
+        if (!point) {
+          this.cancelInput();
+          return;
+        }
+        drag.queued = {
+          kind: 'pointer',
+          phase: 'move',
+          point,
+          button: drag.button,
+          buttons: event.buttons,
+          modifiers: modifiers(event),
+          clicks: 1,
+        };
+        if (!drag.inFlight) this.flushDragMove();
+        return;
+      }
       const hit = this.hit(event);
       if (!hit) return;
-      if (!this.dragging) {
-        const cursor = hit.target.ownerDocument.defaultView!.getComputedStyle(
-          hit.target,
-        ).cursor;
-        this.inputSurface.style.cursor = /^[a-z-]+$/.test(cursor)
-          ? cursor
-          : 'auto';
-        const select = hit.target.closest('select');
-        if (select) this.proxyFor(select);
-        else if (this.inputProxy?.control.tagName === 'SELECT')
-          this.clearProxy();
-      }
-      if (!this.dragging && performance.now() - this.lastMove < 40) return;
+      const cursor = hit.target.ownerDocument.defaultView!.getComputedStyle(
+        hit.target,
+      ).cursor;
+      this.inputSurface.style.cursor = /^[a-z-]+$/.test(cursor)
+        ? cursor
+        : 'auto';
+      const select = hit.target.closest('select');
+      if (select) this.proxyFor(select);
+      else if (this.inputProxy?.control.tagName === 'SELECT') this.clearProxy();
+      if (performance.now() - this.lastMove < 40) return;
       this.lastMove = performance.now();
       const point = this.point(hit);
       if (point)
@@ -1416,7 +1484,7 @@ export class DOMBrowserView {
           phase: 'move',
           point,
           button: 'left',
-          buttons: this.dragging ? event.buttons : 0,
+          buttons: 0,
           modifiers: modifiers(event),
           clicks: 1,
         });
@@ -1459,6 +1527,41 @@ export class DOMBrowserView {
       },
       { passive: false },
     );
+  }
+
+  private dragPoint(
+    event: MouseEvent,
+    drag: Drag,
+  ): Pointer['point'] | undefined {
+    if (!this.replayer || !this.ready) return;
+    const point = replayDragPoint(
+      this.replayer.iframe,
+      drag.target,
+      event.clientX,
+      event.clientY,
+    );
+    return point && { ...point, node: drag.node, space: 'viewport' };
+  }
+
+  private sendDragAction(action: Pointer, drag: Drag): Promise<boolean> {
+    this.flushWheel();
+    return this.sendAction(action).then((ok) => {
+      if (!ok && this.drag === drag) this.cancelInput();
+      return ok;
+    });
+  }
+
+  private flushDragMove(): void {
+    const drag = this.drag,
+      action = drag?.queued;
+    if (!drag || !action) return;
+    drag.queued = undefined;
+    drag.inFlight++;
+    void this.sendDragAction(action, drag).then(() => {
+      drag.inFlight--;
+      if (this.drag === drag && drag.active && !drag.inFlight)
+        this.flushDragMove();
+    });
   }
 
   private key(event: KeyboardEvent, phase: 'down' | 'up'): void {
@@ -1561,7 +1664,7 @@ export class DOMBrowserView {
     this.controlled = false;
     this.options.onControl?.(false);
     this.ready = false;
-    this.dragging = false;
+    this.drag = undefined;
     this.presentation?.dispose();
     this.pages.clear();
     this.previewTarget = undefined;

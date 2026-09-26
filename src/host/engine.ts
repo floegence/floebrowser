@@ -169,6 +169,7 @@ export class BrowserProjection {
   private stateRead = 0;
   private heldKeys = new Map<string, Record<string, unknown>>();
   private heldButtons = new Set<string>();
+  private pointerOrigin?: { node: number; epoch: string };
   private state: BrowserState;
   private displayViewport: { width: number; height: number };
   private mediaNodes = new Map<number, string>();
@@ -299,6 +300,7 @@ export class BrowserProjection {
       this.metadata = undefined;
       this.heldKeys.clear();
       this.heldButtons.clear();
+      this.pointerOrigin = undefined;
       this.updateState({ status: 'loading' });
     });
     this.listen(this.cdp, 'Runtime.bindingCalled', (event) => {
@@ -1558,9 +1560,20 @@ export class BrowserProjection {
       return;
     }
     if (action.kind === 'pointer' || action.kind === 'wheel') {
+      const captured =
+        action.kind === 'pointer' && action.point.space === 'viewport';
+      if (
+        captured &&
+        (action.phase === 'down' ||
+          this.pointerOrigin?.node !== action.point.node ||
+          this.pointerOrigin.epoch !== command.epoch ||
+          !this.heldButtons.has(action.button))
+      )
+        throw new CommandError('target_changed');
       const point = await this.resolvePoint(
         action.point,
         action.kind === 'wheel' ? action : undefined,
+        captured,
       );
       assertCurrent();
       if (!point) throw new CommandError('target_changed');
@@ -1574,7 +1587,10 @@ export class BrowserProjection {
         });
         return;
       }
-      if (action.phase === 'down') this.heldButtons.add(action.button);
+      if (action.phase === 'down') {
+        this.heldButtons.add(action.button);
+        this.pointerOrigin = { node: action.point.node, epoch: command.epoch };
+      }
       await this.cdp.send('Input.dispatchMouseEvent', {
         type:
           action.phase === 'down'
@@ -1589,7 +1605,10 @@ export class BrowserProjection {
         clickCount: action.clicks,
         modifiers: action.modifiers,
       });
-      if (action.phase === 'up') this.heldButtons.delete(action.button);
+      if (action.phase === 'up') {
+        this.heldButtons.delete(action.button);
+        if (!this.heldButtons.size) this.pointerOrigin = undefined;
+      }
       return;
     }
     if (action.kind === 'release_input') {
@@ -1679,6 +1698,7 @@ export class BrowserProjection {
       y: number;
     },
     wheel?: Extract<Action, { kind: 'wheel' }>,
+    captured = false,
   ): Promise<{ x: number; y: number } | undefined> {
     const element = await this.frames.resolve(point.node);
     if (!element) return;
@@ -1692,26 +1712,41 @@ export class BrowserProjection {
             dy: wheel.dy,
           })
         : await element.evaluate(
-            (node, { point, unsupported }) => {
+            (node, { point, unsupported, captured }) => {
               if (!node.isConnected || node.closest(unsupported)) return;
               const rect = node.getBoundingClientRect();
               const win = node.ownerDocument.defaultView!;
               if (!rect.width || !rect.height) return;
               const x = Math.max(
                 0,
-                Math.min(win.innerWidth - 1, rect.x + rect.width * point.x),
+                Math.min(
+                  win.innerWidth - 1,
+                  captured
+                    ? win.innerWidth * point.x
+                    : rect.x + rect.width * point.x,
+                ),
               );
               const y = Math.max(
                 0,
-                Math.min(win.innerHeight - 1, rect.y + rect.height * point.y),
+                Math.min(
+                  win.innerHeight - 1,
+                  captured
+                    ? win.innerHeight * point.y
+                    : rect.y + rect.height * point.y,
+                ),
               );
               const hit = (
                 node.getRootNode() as Document | ShadowRoot
               ).elementFromPoint(x, y);
-              if (!hit || !(hit === node || node.contains(hit))) return;
+              if (
+                !hit ||
+                hit.closest(unsupported) ||
+                (!captured && !(hit === node || node.contains(hit)))
+              )
+                return;
               return { x, y };
             },
-            { point, unsupported: UNSUPPORTED_SELECTOR },
+            { point, unsupported: UNSUPPORTED_SELECTOR, captured },
           );
       if (!local) return;
       let position = { x: local.x, y: local.y };
@@ -1763,6 +1798,7 @@ export class BrowserProjection {
     if (this.closed || this.page.isClosed()) {
       this.heldKeys.clear();
       this.heldButtons.clear();
+      this.pointerOrigin = undefined;
       return;
     }
     if (this.inputDrainFailure) throw this.inputDrainFailure;
@@ -1795,6 +1831,7 @@ export class BrowserProjection {
       });
     this.heldKeys.clear();
     this.heldButtons.clear();
+    this.pointerOrigin = undefined;
     if (failures.length) {
       this.inputDrainFailure = new AggregateError(
         failures,
