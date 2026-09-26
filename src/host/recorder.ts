@@ -1,14 +1,17 @@
 import { observeCanvas } from './canvas-source.js';
 import { observeMedia } from './media-source.js';
 import { observeInteraction, sourceInteraction } from './interaction-source.js';
-import { UNSUPPORTED_SELECTOR } from '../shared/protocol.js';
 import { record } from '@rrweb/record';
 import {
   EventType,
   IncrementalSource,
   type ICrossOriginIframeMirror,
 } from '@rrweb/types';
-import { styleAttributes, type SourceStylesheet } from '../shared/style.js';
+import {
+  UNSUPPORTED_SELECTOR,
+  styleAttributes,
+  type SourceStylesheet,
+} from '../shared/style.js';
 
 /** Runs only inside source documents; media signaling terminates on this host. */
 export function installRecorder(binding: string, key: string): void {

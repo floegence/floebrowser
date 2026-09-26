@@ -18,10 +18,7 @@ export const DISCONNECT_CODES = {
   version_mismatch: 4004,
 } as const;
 export type DisconnectReason = keyof typeof DISCONNECT_CODES;
-// Only resource-free, untyped objects expose ordinary fallback HTML. A type
-// alone can create a browsing context, even without a data URL.
-export const UNSUPPORTED_SELECTOR =
-  'object:is([data]:not([data=""]),[type]:not([type=""])),embed';
+export { UNSUPPORTED_SELECTOR } from './style.js';
 
 export type UploadFile = { name: string; size: number; relativePath?: string };
 export type FileChooserState = {

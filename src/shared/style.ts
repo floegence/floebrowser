@@ -1,3 +1,8 @@
+// Only resource-free, untyped objects expose ordinary fallback HTML. A type
+// alone can create a browsing context, even without a data URL.
+export const UNSUPPORTED_SELECTOR =
+  'object:is([data]:not([data=""]),[type]:not([type=""])),embed';
+
 /** Preserve selector values separately from attributes made inert for replay. */
 export const STYLESHEET_LINK_ATTRIBUTE = 'data-floebrowser-stylesheet-link';
 export const CANVAS_ATTRIBUTE = 'data-floebrowser-canvas';
