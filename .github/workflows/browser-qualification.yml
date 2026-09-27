@@ -33,16 +33,23 @@ jobs:
         run: |
           sudo chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
           sudo chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
-          browser_executable="$(node --input-type=module -e 'import {chromium} from "playwright"; console.log(chromium.executablePath())')"
-          case "$browser_executable" in
-            /opt/floebrowser-qualification/chromium-*/chrome-linux64/chrome) ;;
-            *) echo 'Unexpected qualification browser placement' >&2; exit 1 ;;
-          esac
+          browser_executables=(
+            "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux64/chrome
+            "$PLAYWRIGHT_BROWSERS_PATH"/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
+          )
+          for browser_executable in "${browser_executables[@]}"; do
+            [[ -f "$browser_executable" && -x "$browser_executable" && ! -L "$browser_executable" ]]
+          done
           if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
-            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile floebrowser-qualification "%s" flags=(unconfined) {\n  userns,\n}\n' "$browser_executable" | sudo tee /etc/apparmor.d/floebrowser-qualification >/dev/null
+            {
+              printf 'abi <abi/4.0>,\ninclude <tunables/global>\n'
+              for index in "${!browser_executables[@]}"; do
+                printf 'profile floebrowser-qualification-%s "%s" flags=(unconfined) {\n  userns,\n}\n' "$index" "${browser_executables[$index]}"
+              done
+            } | sudo tee /etc/apparmor.d/floebrowser-qualification >/dev/null
             sudo apparmor_parser -r /etc/apparmor.d/floebrowser-qualification
           fi
-          node --input-type=module -e 'import {chromium} from "playwright"; const browser=await chromium.launch({channel:"chromium",chromiumSandbox:true}); await browser.close();'
+          node --input-type=module -e 'import {chromium} from "playwright"; for (const channel of [undefined,"chromium"]) { const browser=await chromium.launch({channel,chromiumSandbox:true}); await browser.close(); }'
       - run: npm run build
       - run: node --import tsx --test --test-reporter=tap --test-concurrency=1 test/*.e2e.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
