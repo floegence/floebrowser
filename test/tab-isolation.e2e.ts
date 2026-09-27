@@ -13,7 +13,10 @@ for (const navigated of [false, true])
     { timeout: 15000 },
     async (t) => {
       const site = await fixture();
-      const browser = await chromium.launch({ chromiumSandbox: true });
+      const browser = await chromium.launch({
+        channel: 'chromium',
+        chromiumSandbox: true,
+      });
       const source = await browser.newPage();
       await source.goto('data:text/html,<h1>Original</h1>');
       const engine = await BrowserProjection.attach(source, {
@@ -81,7 +84,10 @@ test(
   're-admission rejects the previous epoch before its fresh snapshot',
   { timeout: 15000 },
   async (t) => {
-    const browser = await chromium.launch({ chromiumSandbox: true });
+    const browser = await chromium.launch({
+      channel: 'chromium',
+      chromiumSandbox: true,
+    });
     const source = await browser.newPage();
     await source.goto('data:text/html,<input autofocus>');
     const engine = await BrowserProjection.attach(source, {
@@ -142,7 +148,10 @@ async function setup(
   authorize: (action: Action) => boolean | Promise<boolean> = () => true,
 ) {
   const site = await fixture();
-  const browser = await chromium.launch({ chromiumSandbox: true });
+  const browser = await chromium.launch({
+    channel: 'chromium',
+    chromiumSandbox: true,
+  });
   const context = await browser.newContext();
   const source = await context.newPage();
   const service = await createProjectionServer(source, {

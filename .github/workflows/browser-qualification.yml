@@ -70,6 +70,8 @@ jobs:
         env:
           QUALIFICATION_SUITE: ${{ inputs.suite }}
         run: |
+          set -o pipefail
+          ulimit -c 0
           case "$QUALIFICATION_SUITE" in
             all) tests=(test/*.e2e.ts) ;;
             linux-regressions) tests=(test/canvas-webgpu.e2e.ts test/input-style.e2e.ts test/media-sync.e2e.ts test/object-fallback.e2e.ts test/tab-isolation.e2e.ts test/viewer-engines.e2e.ts) ;;
@@ -77,6 +79,7 @@ jobs:
           esac
           mkdir -p .test-artifacts
           node --import tsx --test --test-reporter=tap --test-concurrency=1 "${tests[@]}" | tee .test-artifacts/qualification.tap
+          node scripts/check-browser-report.mjs .test-artifacts/qualification.tap
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

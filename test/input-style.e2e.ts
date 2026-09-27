@@ -10,11 +10,13 @@ for (const client of [chromium, firefox, webkit])
     `${client.name()} preserves source pseudo styles and private fonts while editing`,
     { timeout: 20000 },
     async (t) => {
-      const sourceBrowser = await chromium.launch();
+      const sourceBrowser = await chromium.launch({
+        channel: 'chromium',
+        chromiumSandbox: true,
+      });
+      t.after(() => sourceBrowser.close());
       const viewerBrowser = await client.launch();
-      t.after(() =>
-        Promise.all([sourceBrowser.close(), viewerBrowser.close()]),
-      );
+      t.after(() => viewerBrowser.close());
       const source = await sourceBrowser.newPage();
       source.setDefaultTimeout(4000);
       const font = await readFile(
@@ -118,12 +120,10 @@ for (const client of [chromium, firefox, webkit])
               weight: font.weight,
             })),
           ),
-          proxy: await viewer
-            .locator('.floe-input-proxy')
-            .evaluate((node) => ({
-              font: getComputedStyle(node).font,
-              family: getComputedStyle(node).fontFamily,
-            })),
+          proxy: await viewer.locator('.floe-input-proxy').evaluate((node) => ({
+            font: getComputedStyle(node).font,
+            family: getComputedStyle(node).fontFamily,
+          })),
         }),
       );
       assert.ok(

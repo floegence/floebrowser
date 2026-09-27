@@ -12,11 +12,13 @@ for (const client of [chromium, firefox, webkit])
     `${client.name()} projects resource-free object content with source layout, input and live changes`,
     { timeout: 20000 },
     async (t) => {
-      const sourceBrowser = await chromium.launch();
+      const sourceBrowser = await chromium.launch({
+        channel: 'chromium',
+        chromiumSandbox: true,
+      });
+      t.after(() => sourceBrowser.close());
       const viewerBrowser = await client.launch();
-      t.after(() =>
-        Promise.all([sourceBrowser.close(), viewerBrowser.close()]),
-      );
+      t.after(() => viewerBrowser.close());
       const source = await sourceBrowser.newPage({
         viewport: { width: 1000, height: 700 },
       });
@@ -121,11 +123,13 @@ for (const client of [chromium, firefox, webkit])
     `${client.name()} checkpoints object embedding changes without executing or fetching at the viewer`,
     { timeout: 25000 },
     async (t) => {
-      const sourceBrowser = await chromium.launch();
+      const sourceBrowser = await chromium.launch({
+        channel: 'chromium',
+        chromiumSandbox: true,
+      });
+      t.after(() => sourceBrowser.close());
       const viewerBrowser = await client.launch();
-      t.after(() =>
-        Promise.all([sourceBrowser.close(), viewerBrowser.close()]),
-      );
+      t.after(() => viewerBrowser.close());
       const source = await sourceBrowser.newPage();
       await source.route('https://embedded.test/**', (route) =>
         route.fulfill({
