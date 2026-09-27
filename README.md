@@ -801,6 +801,13 @@ The presentation canvas captures changed pictures without a second frame-rate
 limit: source encoding and the bounded presentation queue already control
 delivery. Adding another capture timer would delay due pictures in viewers
 without `requestFrame()`, including Firefox.
+Replacement video elements attach only after their prepared document is visible.
+The viewer then presents its retained decoded picture even if no new source frame
+arrives. This prevents WebKit from retaining an uninitialized media consumer
+across a hidden DOM checkpoint. It does not restart source playback, redraw the
+website, or renegotiate the source media subscription. The three-engine
+`test/media-reattach.e2e.ts` fixture verifies repeated document replacement while
+the source picture is paused and no further frames are delivered.
 
 The shared presentation clock cannot schedule audio beyond the bounded PCM
 queue's capacity. Each audio block accounts for device presentation latency,
@@ -901,7 +908,14 @@ npm run check:package
 
 Browser tests create isolated contexts and local fixture servers. The client is blocked from accessing the fixture website. Tests cover attachment to loaded pages, cached popups and in-flight stylesheets, authenticated images/CSS/fonts, trusted source clicks, stable held-pointer coordinates with delayed projection, bounded drag sampling and release ordering, scaled cross-origin drag reversal, cancellation and admitted-origin checks, IME, submission cookies, responsive images, live DOM changes, navigation, sustained scrolling with delayed DOM, live scroll latency, bounded wheel accumulation, reversal/click ordering and cancellation on rejection/navigation/handoff, zero-height document roots, nested scroll chaining and containment, scaled cross-origin wheel input, rejected scroll targets, scaling, selection, reconnect, stale epochs, duplicate commands, authorization, controller revocation, window handoff with source video hover/click input, source tabs, persistent drag/keyboard reordering, overflow scrolling, cancellation and rejected moves, stale-tab rejection, cross-site nested frames and source-only frame resources, managed headless profiles, blob and cross-origin MSE video/audio decoding, media source replacement, source playback/seek authorization, media teardown and recovery, media subscription fences, stalled media consumer credit with responsive input, paused-frame preservation across DOM checkpoints, pending source playback without blocked input or shutdown, hidden-media suppression, on-demand media controls, source-authorized media location with muted-state labels, and audio activation without overriding source or client mute.
 
-`npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch. The Linux qualification workflow installs pinned browsers in a root-owned directory, grants user namespaces only to the exact Chromium and headless-shell executables when AppArmor requires it, and verifies both sandboxed launch modes before the suite. It preserves system-wide AppArmor restrictions. TAP output exposes failures immediately, and the job has a finite deadline; browser startup failure must still release fixture listeners.
+`npm run test:e2e` requires a current build and Playwright Chromium. Test screenshots are written to `.test-artifacts/`. The package check installs the packed tarball into an isolated temporary directory and runs the viewer without source-checkout paths. Unit tests need no browser. Ordinary CI runs formatting, type and unit checks; real-browser qualification is available by manual workflow dispatch. The Linux qualification workflow installs pinned browsers in a root-owned directory, grants user namespaces only to the exact Chromium and headless-shell executables when AppArmor requires it, and verifies both sandboxed launch modes before the suite. It preserves system-wide AppArmor restrictions. TAP output exposes failures immediately, and the job has a finite deadline; browser startup failure must still release fixture listeners. Qualification requires a positive executed test count with no failures, cancellations, skipped tests or pending tests; a successful output collector cannot mask the test process exit status.
+
+Linux graphics qualification uses SwiftShader with Vulkan enabled for both the
+WebGPU adapter and Chromium's shared image backing. The flags apply only to the
+graphics fixture. Source font and object-layout tests use the same full,
+sandboxed Chromium channel as the product. Object fallback fixtures author their
+control geometry to isolate projection from native form-theme differences; the
+exact geometry assertion remains unchanged.
 
 ## Security qualification
 

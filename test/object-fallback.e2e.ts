@@ -3,8 +3,11 @@ import test from 'node:test';
 import { chromium, firefox, webkit } from 'playwright';
 import { createProjectionServer } from '../dist/host/server.js';
 
+// Author control geometry so this checks object fallback layout, not native
+// Chromium/Firefox/WebKit form-theme differences in the original HTML itself.
 const fixture = `<!doctype html><style>
 body{margin:24px;font:16px/1.5 Arial}object{color:rgb(20,70,100)}object > div{width:460px;padding:12px;border:1px solid #aaa}object[data=""] > span{font-weight:700}#scroll{height:80px;overflow:auto}#scroll p{margin:0;height:300px}
+button,input{box-sizing:border-box;height:24px;margin:0;padding:2px 6px;border:1px solid #777;font:13px/18px Arial;vertical-align:top}button{width:90px}input{width:185px}
 </style><object id="summary"><div><p id="text">Ordinary HTML summary inside an object.</p><button id="click" onclick="this.textContent='Clicked '+(++window.clicks)">Clicked 0</button><label>Name <input id="entry"></label><object id="nested" data=""><span>Nested fallback</span></object><div id="scroll"><p>Scrollable fallback content</p></div></div></object><script>window.clicks=0</script>`;
 
 for (const client of [chromium, firefox, webkit])

@@ -10,11 +10,17 @@ for (const lateAttachment of [false, true])
     async (t) => {
       const browser = await chromium.launch({
         channel: 'chromium',
+        chromiumSandbox: true,
         // Linux qualification hosts have no hardware GPU. Exercise real WebGPU
         // through Chromium's software adapter instead of skipping the surface.
         args:
           process.platform === 'linux'
-            ? ['--enable-unsafe-webgpu', '--use-angle=swiftshader']
+            ? [
+                '--enable-unsafe-webgpu',
+                '--use-angle=swiftshader',
+                '--enable-features=Vulkan',
+                '--use-vulkan=swiftshader',
+              ]
             : [],
       });
       const source = await browser.newPage();

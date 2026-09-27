@@ -372,12 +372,43 @@ for (const client of [chromium, firefox, webkit]) {
             document.querySelector('#viewport iframe') !==
             (window as any).priorProjection,
         );
-        await viewer.waitForFunction(() => {
-          const video = document
-            .querySelector<HTMLIFrameElement>('#viewport iframe')
-            ?.contentDocument?.querySelector('video');
-          return video?.videoWidth === 240 && video.readyState >= 2;
-        });
+        try {
+          await viewer.waitForFunction(() => {
+            const video = document
+              .querySelector<HTMLIFrameElement>('#viewport iframe')
+              ?.contentDocument?.querySelector('video');
+            return video?.videoWidth === 240 && video.readyState >= 2;
+          });
+        } catch (error) {
+          t.diagnostic(
+            JSON.stringify(
+              await viewer.evaluate(() => {
+                const video = document
+                  .querySelector<HTMLIFrameElement>('#viewport iframe')
+                  ?.contentDocument?.querySelector('video');
+                return {
+                  checkpoint: {
+                    width: video?.videoWidth,
+                    height: video?.videoHeight,
+                    readyState: video?.readyState,
+                    paused: video?.paused,
+                    visible: video?.checkVisibility(),
+                    error: video?.error?.message,
+                    tracks: (video?.srcObject as MediaStream | null)
+                      ?.getTracks()
+                      .map((track) => ({
+                        state: track.readyState,
+                        muted: track.muted,
+                        settings: track.getSettings(),
+                      })),
+                  },
+                  decoded: (window as any).decoded,
+                };
+              }),
+            ),
+          );
+          throw error;
+        }
         assert.equal(
           await content.locator('video').evaluate((video: HTMLVideoElement) => {
             const canvas = document.createElement('canvas');

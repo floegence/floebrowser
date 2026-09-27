@@ -411,9 +411,11 @@ export class MediaView {
       const node = projected as HTMLMediaElement | null;
       if (!node?.isConnected || !['VIDEO', 'AUDIO'].includes(node.tagName))
         continue;
+      // Wait for the prepared document to become visible before attaching its
+      // media consumer. WebKit can otherwise stay at HAVE_NOTHING after reveal.
       if (
         node === playback.element ||
-        (node.tagName === 'VIDEO' && !playback.stream)
+        (node.tagName === 'VIDEO' && (!playback.stream || !this.visible(node)))
       )
         continue;
       if (playback.element) {
@@ -427,6 +429,20 @@ export class MediaView {
       node.setAttribute('playsinline', '');
       if (playback.stream) node.srcObject = playback.stream;
       this.volume(playback);
+      // A replacement media element needs a fresh presentation of the retained
+      // picture even when the source is paused. Some engines do not seed a new
+      // consumer from the stream's last frame. Repaint only our decoded canvas;
+      // never ask the website to play, seek or redraw.
+      if (playback.paint && playback.stream) {
+        const context = playback.paint.getContext('2d')!;
+        context.save();
+        context.globalCompositeOperation = 'copy';
+        context.drawImage(playback.paint, 0, 0);
+        context.restore();
+        const track = playback.stream.getVideoTracks()[0] as
+          CanvasCaptureMediaStreamTrack | undefined;
+        track?.requestFrame?.();
+      }
     }
     for (const state of this.states.values()) {
       const image = this.node(
