@@ -13,6 +13,8 @@ for (const codec of ['vp8', 'h264'])
     `real Chromium ${codec} and Opus reach the client decoder without remote ICE`,
     { timeout: 30000 },
     async (t) => {
+      let phase = 'launch';
+      t.after(() => t.diagnostic(`Completed phase: ${phase}`));
       const bridge = new NativeMediaBridge(mediaExecutable());
       const browser = await chromium.launch({
         channel: 'chromium',
@@ -24,6 +26,7 @@ for (const codec of ['vp8', 'h264'])
       });
       const source = await browser.newPage();
       const client = await browser.newPage();
+      client.setDefaultTimeout(6000);
       const files: Record<string, string> = {
         '/decoder.js': 'dist/viewer/media-decoder.js',
         '/worker.js': 'dist/assets/media-worker.js',
@@ -81,6 +84,7 @@ for (const codec of ['vp8', 'h264'])
         });
         (window as any).decoder = decoder;
       });
+      phase = 'offer';
       const offer = await source.evaluate(async (codec) => {
         const canvas = document.createElement('canvas');
         canvas.width = 160;
@@ -117,6 +121,7 @@ for (const codec of ['vp8', 'h264'])
         return peer.localDescription!.sdp;
       }, codec);
       const packets: MediaFrame[] = [];
+      phase = 'collector';
       const subscription = await bridge.open(
         {
           target: 'target',
@@ -139,6 +144,7 @@ for (const codec of ['vp8', 'h264'])
           sdp,
         });
       }, subscription.sdp);
+      phase = 'source packets';
       const until = Date.now() + 10000;
       while (
         Date.now() < until &&
@@ -158,7 +164,9 @@ for (const codec of ['vp8', 'h264'])
         packets.some((p) => p.header.track === 'audio'),
         'Opus audio arrived',
       );
-      for (const packet of packets.slice())
+      phase = 'decode';
+      const initialPackets = packets.slice();
+      for (const packet of initialPackets)
         await client.evaluate(
           ({ header, data }) =>
             (window as any).decoder.push({
@@ -167,18 +175,35 @@ for (const codec of ['vp8', 'h264'])
             }),
           { header: packet.header, data: [...packet.data] },
         );
-      await client.waitForFunction(
-        () =>
-          (window as any).decoded.video > 0 &&
-          (window as any).decoded.audio > 0,
-      );
+      try {
+        await client.waitForFunction(
+          () =>
+            (window as any).decoded.video > 0 &&
+            (window as any).decoded.audio > 0,
+        );
+      } catch (error) {
+        t.diagnostic(
+          JSON.stringify({
+            initial: initialPackets.map((packet) => ({
+              track: packet.header.track,
+              keyframe: packet.header.keyframe,
+              bytes: packet.data.length,
+            })),
+            collected: packets.length,
+            decoded: await client.evaluate(() => (window as any).decoded),
+          }),
+        );
+        throw error;
+      }
       const decoded = await client.evaluate(() => (window as any).decoded);
       assert.deepEqual(decoded.errors, []);
       assert.ok(decoded.bright > 200, 'WebCodecs produced the source image');
       assert.ok(decoded.signal > 0.01, 'Opus decoded to non-silent PCM');
+      phase = 'revoke';
       await Promise.all([subscription.requestKeyframe(), subscription.close()]);
       const count = packets.length;
       await new Promise((resolve) => setTimeout(resolve, 150));
       assert.equal(packets.length, count, 'Revocation stops delivery');
+      phase = 'complete';
     },
   );
