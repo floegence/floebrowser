@@ -104,11 +104,30 @@ for (const client of [chromium, firefox, webkit])
       await viewer.locator('.floe-input-proxy').evaluate(async (node) => {
         await node.ownerDocument.fonts.ready;
       });
+      const actual = await viewer
+        .locator('.floe-input-proxy')
+        .evaluate(measure);
+      t.diagnostic(
+        JSON.stringify({
+          expected,
+          actual,
+          fonts: await viewer.evaluate(() =>
+            [...document.fonts].map((font) => ({
+              family: font.family,
+              status: font.status,
+              weight: font.weight,
+            })),
+          ),
+          proxy: await viewer
+            .locator('.floe-input-proxy')
+            .evaluate((node) => ({
+              font: getComputedStyle(node).font,
+              family: getComputedStyle(node).fontFamily,
+            })),
+        }),
+      );
       assert.ok(
-        Math.abs(
-          (await viewer.locator('.floe-input-proxy').evaluate(measure)) -
-            expected,
-        ) < 2,
+        Math.abs(actual - expected) < 2,
         'The native caret uses the same private font metrics as the source',
       );
       assert.equal(

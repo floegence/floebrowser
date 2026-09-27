@@ -1,6 +1,14 @@
 name: Browser qualification
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Browser qualification scope
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-regressions
 permissions:
   contents: read
 jobs:
@@ -29,6 +37,13 @@ jobs:
       - run: npx playwright install --with-deps chromium firefox webkit
         env:
           PLAYWRIGHT_SKIP_BROWSER_GC: '1'
+      - name: Start the qualification audio device
+        run: |
+          sudo apt-get install --yes pulseaudio
+          mkdir -p .test-artifacts
+          pulseaudio --daemonize=yes --exit-idle-time=-1 --log-target=file:"$PWD/.test-artifacts/pulseaudio.log"
+          pactl load-module module-null-sink sink_name=floebrowser
+          pactl set-default-sink floebrowser
       - name: Prepare and verify sandboxed Chromium
         run: |
           sudo chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
@@ -51,7 +66,17 @@ jobs:
           fi
           node --input-type=module -e 'import {chromium} from "playwright"; for (const channel of [undefined,"chromium"]) { const browser=await chromium.launch({channel,chromiumSandbox:true}); await browser.close(); }'
       - run: npm run build
-      - run: node --import tsx --test --test-reporter=tap --test-concurrency=1 test/*.e2e.ts
+      - name: Run browser qualification
+        env:
+          QUALIFICATION_SUITE: ${{ inputs.suite }}
+        run: |
+          case "$QUALIFICATION_SUITE" in
+            all) tests=(test/*.e2e.ts) ;;
+            linux-regressions) tests=(test/canvas-webgpu.e2e.ts test/input-style.e2e.ts test/media-sync.e2e.ts test/object-fallback.e2e.ts test/tab-isolation.e2e.ts test/viewer-engines.e2e.ts) ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p .test-artifacts
+          node --import tsx --test --test-reporter=tap --test-concurrency=1 "${tests[@]}" | tee .test-artifacts/qualification.tap
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

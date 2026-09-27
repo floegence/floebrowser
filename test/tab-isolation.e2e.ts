@@ -398,8 +398,10 @@ test(
     const s = await setup(t);
     const cdp = await s.other.context().newCDPSession(s.other);
     const crashed = s.other.waitForEvent('crash');
+    t.diagnostic('Sending source Page.crash');
     void cdp.send('Page.crash').catch(() => {});
     await crashed;
+    t.diagnostic('Source crash observed');
     await s.viewer.locator(`[data-tab="${s.original}"]`).click();
     const count = s.viewer.frameLocator('#viewport iframe').locator('#count');
     await count.waitFor({ timeout: 1200 });
@@ -410,6 +412,7 @@ test(
     await s.viewer
       .locator(`[data-tab="${s.second}"]`)
       .click({ button: 'middle' });
+    t.diagnostic('Requested crashed tab closure');
     await s.viewer
       .locator(`[data-tab="${s.second}"]`)
       .waitFor({ state: 'detached', timeout: 1200 });

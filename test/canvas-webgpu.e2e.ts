@@ -8,7 +8,15 @@ for (const lateAttachment of [false, true])
     `WebGPU element pixels survive presentation and later submission (late attachment: ${lateAttachment})`,
     { timeout: 20000 },
     async (t) => {
-      const browser = await chromium.launch({ channel: 'chromium' });
+      const browser = await chromium.launch({
+        channel: 'chromium',
+        // Linux qualification hosts have no hardware GPU. Exercise real WebGPU
+        // through Chromium's software adapter instead of skipping the surface.
+        args:
+          process.platform === 'linux'
+            ? ['--enable-unsafe-webgpu', '--use-angle=swiftshader']
+            : [],
+      });
       const source = await browser.newPage();
       let service = lateAttachment
         ? undefined

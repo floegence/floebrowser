@@ -46,6 +46,25 @@ for (const client of [chromium, firefox, webkit])
         color: el.ownerDocument.defaultView!.getComputedStyle(el).color,
       });
       const expected = await source.locator('#summary > div').evaluate(layout);
+      const controls = (el: Element) =>
+        [el, ...el.querySelectorAll('*')].map((node) => {
+          const style = node.ownerDocument.defaultView!.getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return {
+            tag: node.tagName,
+            width: rect.width,
+            height: rect.height,
+            font: style.font,
+            lineHeight: style.lineHeight,
+            display: style.display,
+          };
+        });
+      t.diagnostic(
+        JSON.stringify({
+          source: await source.locator('#summary > div').evaluate(controls),
+          viewer: await replay.locator('#summary > div').evaluate(controls),
+        }),
+      );
       assert.deepEqual(
         await replay.locator('#summary > div').evaluate(layout),
         expected,
