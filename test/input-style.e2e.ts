@@ -15,7 +15,11 @@ for (const client of [chromium, firefox, webkit])
         chromiumSandbox: true,
       });
       t.after(() => sourceBrowser.close());
-      const viewerBrowser = await client.launch();
+      const viewerBrowser = await client.launch(
+        client === chromium
+          ? { channel: 'chromium', chromiumSandbox: true }
+          : {},
+      );
       t.after(() => viewerBrowser.close());
       const source = await sourceBrowser.newPage();
       source.setDefaultTimeout(4000);

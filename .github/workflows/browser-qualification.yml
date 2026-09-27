@@ -71,10 +71,14 @@ jobs:
           QUALIFICATION_SUITE: ${{ inputs.suite }}
         run: |
           set -o pipefail
+          # Crash tests must observe renderer exit, not wait for the runner's
+          # external core-dump collector. This VM belongs only to this job.
+          cat /proc/sys/kernel/core_pattern
+          sudo sysctl -w kernel.core_pattern=core
           ulimit -c 0
           case "$QUALIFICATION_SUITE" in
             all) tests=(test/*.e2e.ts) ;;
-            linux-regressions) tests=(test/canvas-webgpu.e2e.ts test/input-style.e2e.ts test/media-reattach.e2e.ts test/media-sync.e2e.ts test/object-fallback.e2e.ts test/tab-isolation.e2e.ts test/viewer-engines.e2e.ts) ;;
+            linux-regressions) tests=(test/canvas-webgpu.e2e.ts test/input-style.e2e.ts test/media-collector.e2e.ts test/media-reattach.e2e.ts test/media-sync.e2e.ts test/media-ui.e2e.ts test/object-fallback.e2e.ts test/tab-isolation.e2e.ts test/viewer-engines.e2e.ts) ;;
             *) exit 1 ;;
           esac
           mkdir -p .test-artifacts
@@ -85,3 +89,5 @@ jobs:
         with:
           name: browser-evidence
           path: .test-artifacts/
+          include-hidden-files: true
+          if-no-files-found: error

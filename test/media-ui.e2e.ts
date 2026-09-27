@@ -216,6 +216,8 @@ test(
   'page gestures unlock received audio while an explicit mute remains respected',
   { timeout: 20000 },
   async (t) => {
+    let phase = 'launch';
+    t.after(() => t.diagnostic(`Completed phase: ${phase}`));
     const browser = await chromium.launch({
       channel: 'chromium',
       headless: true,
@@ -255,6 +257,7 @@ test(
       await browser.close();
     });
     const viewer = await browser.newPage();
+    viewer.setDefaultTimeout(4000);
     await viewer.addInitScript(() => {
       // Deterministic autoplay refusal, lifted only by a real client gesture.
       (window as any).__name = (value: unknown) => value;
@@ -267,6 +270,14 @@ test(
           super(options);
           (window as any).audioContexts.push(this);
           void this.suspend();
+          // Video may arrive before the independently prepared audio output.
+          // Hold that preparation so the gesture test establishes its real
+          // prerequisite instead of inferring audio readiness from video frames.
+          const addModule = this.audioWorklet.addModule.bind(this.audioWorklet);
+          this.audioWorklet.addModule = (...args) =>
+            new Promise<void>((resolve) => {
+              (window as any).prepareTestAudio = resolve;
+            }).then(() => addModule(...args));
         }
         resume() {
           if (!(window as any).allowTestAudio)
@@ -282,9 +293,11 @@ test(
         }
       };
     });
+    phase = 'connect';
     await viewer.goto(service.url);
     await viewer.locator('#status.live').waitFor();
     const frame = viewer.frameLocator('#viewport iframe');
+    phase = 'video playback';
     await clickProjected(frame.locator('#play'));
     await viewer.waitForFunction(() => {
       const video = document
@@ -296,12 +309,24 @@ test(
         video.getVideoPlaybackQuality().totalVideoFrames > 3
       );
     });
+    phase = 'audio preparation';
+    await viewer.waitForFunction(
+      () => typeof (window as any).prepareTestAudio === 'function',
+    );
+    await viewer.evaluate(() => (window as any).prepareTestAudio());
+    await viewer.waitForFunction(
+      () =>
+        (window as any).audioContexts.some(
+          (ctx: AudioContext) => ctx.state === 'suspended',
+        ) && (window as any).audioGains.length > 0,
+    );
     assert.equal(
       await viewer
         .getByRole('dialog', { name: 'Media controls', exact: true })
         .isVisible(),
       false,
     );
+    phase = 'audio gesture';
     await viewer.evaluate(() => ((window as any).allowTestAudio = true));
     await clickProjected(frame.locator('#play'));
     await viewer.waitForFunction(
@@ -313,6 +338,7 @@ test(
           (gain: GainNode) => gain.gain.value > 0,
         ),
     );
+    phase = 'explicit mute';
     await viewer
       .getByRole('button', { name: 'Media controls', exact: true })
       .click();
@@ -336,6 +362,7 @@ test(
     await viewer
       .getByRole('button', { name: 'Unmute audio', exact: true })
       .click();
+    phase = 'source mute';
     await source.locator('video').evaluate((v: HTMLVideoElement) => {
       v.muted = true;
       v.volume = 0.25;
@@ -345,12 +372,14 @@ test(
         (gain: GainNode) => gain.gain.value === 0,
       ),
     );
+    phase = 'hidden muted controls';
     await source.locator('video').evaluate((v: HTMLVideoElement) => {
       v.style.display = 'none';
     });
     await viewer
       .getByRole('button', { name: 'Media controls', exact: true })
       .waitFor({ state: 'hidden' });
+    phase = 'hidden audible controls';
     await source.locator('video').evaluate((v: HTMLVideoElement) => {
       v.muted = false;
     });
@@ -364,5 +393,6 @@ test(
       false,
       'Playing background audio stays controllable without reopening the popup',
     );
+    phase = 'complete';
   },
 );
