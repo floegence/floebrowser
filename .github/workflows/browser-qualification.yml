@@ -6,6 +6,9 @@ permissions:
 jobs:
   browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: /opt/floebrowser-qualification
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -21,11 +24,27 @@ jobs:
             test/flowersec/go.sum
       - run: go test -race ./...
         working-directory: media
+      - name: Create the qualification browser directory
+        run: sudo install -d -m 755 -o "$(id -u)" "$PLAYWRIGHT_BROWSERS_PATH"
       - run: npx playwright install --with-deps chromium firefox webkit
         env:
           PLAYWRIGHT_SKIP_BROWSER_GC: '1'
+      - name: Prepare and verify sandboxed Chromium
+        run: |
+          sudo chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
+          sudo chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
+          browser_executable="$(node --input-type=module -e 'import {chromium} from "playwright"; console.log(chromium.executablePath())')"
+          case "$browser_executable" in
+            /opt/floebrowser-qualification/chromium-*/chrome-linux64/chrome) ;;
+            *) echo 'Unexpected qualification browser placement' >&2; exit 1 ;;
+          esac
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile floebrowser-qualification "%s" flags=(unconfined) {\n  userns,\n}\n' "$browser_executable" | sudo tee /etc/apparmor.d/floebrowser-qualification >/dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/floebrowser-qualification
+          fi
+          node --input-type=module -e 'import {chromium} from "playwright"; const browser=await chromium.launch({channel:"chromium",chromiumSandbox:true}); await browser.close();'
       - run: npm run build
-      - run: npm run test:e2e
+      - run: node --import tsx --test --test-reporter=tap --test-concurrency=1 test/*.e2e.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

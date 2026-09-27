@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { chromium } from 'playwright';
+import { chromium, type Browser } from 'playwright';
 
 test(
   'PCM starts before device-clock sampling and mute affects actual worklet output',
@@ -25,14 +25,18 @@ test(
         res.end(bytes);
       });
     });
+    let browser: Browser | undefined;
+    t.after(async () => {
+      try {
+        await browser?.close();
+      } finally {
+        await new Promise<void>((done) => server.close(() => done()));
+      }
+    });
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
-    const browser = await chromium.launch({
+    browser = await chromium.launch({
       channel: 'chromium',
       chromiumSandbox: true,
-    });
-    t.after(async () => {
-      await browser.close();
-      await new Promise<void>((done) => server.close(() => done()));
     });
     const page = await browser.newPage();
     await page.goto(
