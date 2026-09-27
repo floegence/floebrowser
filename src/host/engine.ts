@@ -1656,6 +1656,13 @@ export class BrowserProjection {
         ...(action.phase === 'down' && text !== undefined
           ? { text, unmodifiedText: text }
           : {}),
+        // CDP does not invoke the native menu binding for Command+A. Keep the
+        // command on this key event so the source can still preventDefault().
+        ...(action.phase === 'down' &&
+        action.modifiers === 4 &&
+        action.key.toLowerCase() === 'a'
+          ? { commands: ['selectAll'] }
+          : {}),
       });
       if (action.phase === 'up') this.heldKeys.delete(action.code);
       return;

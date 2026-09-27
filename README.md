@@ -744,7 +744,10 @@ coordinates through frame borders and scaling and keeps source node/epoch checks
 Losing focus releases held source input without repeating a click. Child-document
 attachments retire their prior replay mirror even when rrweb reuses a document ID
 for an initially empty frame. Client clipboard tests cover native copy gestures
-for source-selected form and nested-frame text in all three engines. These
+for source-selected form and nested-frame text in all three engines. Command+A
+uses Chromium’s native editing command on the same authorized key event; the
+source page can cancel it with `preventDefault()`. Input and textarea tests cover
+selection, Chinese replacement and source cancellation in all three clients. These
 Playwright development-engine tests do not qualify current stable Safari,
 Firefox or Edge.
 
