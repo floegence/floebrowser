@@ -84,7 +84,7 @@ jobs:
           mkdir -p .test-artifacts
           node --import tsx --test --test-reporter=tap --test-concurrency=1 "${tests[@]}" | tee .test-artifacts/qualification.tap
           node scripts/check-browser-report.mjs .test-artifacts/qualification.tap
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: browser-evidence
