@@ -249,9 +249,10 @@ export class BrowserSession {
     }
     this.publish(viewer);
     this.publishDownloads(viewer);
-    return Promise.all([viewer.directoryWork, ...viewer.retiring.keys()]).then(
-      () => {},
-    );
+    // Grant publication and revocation cannot depend on a host resolving the
+    // newly selected page. That resolver may need the same directory lock as
+    // its caller, and a slow renderer must not hold metadata operations open.
+    return this.drainRetirements(viewer);
   }
   private publishDownloads(viewer: Viewer): void {
     if (!viewer.active) return;
