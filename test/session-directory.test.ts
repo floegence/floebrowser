@@ -97,3 +97,55 @@ test('metadata-only directories stay usable when the selected projection fails',
     await session.close();
   }
 });
+
+test('grant refresh drains revoked access without waiting for lazy page resolution', async () => {
+  let entries: SourceTab[] = [{ id: 'initial', url: 'about:blank' }];
+  let changed = () => {};
+  let rejectPending: (error: Error) => void = () => {};
+  const directory: SourceDirectory = {
+    list: () => entries,
+    downloads: () => [],
+    subscribe: (listener) => {
+      changed = () => listener({});
+      return () => {};
+    },
+    resolve: async (id) => {
+      if (id === 'initial') throw new Error('Initial projection unavailable');
+      return new Promise((_, reject) => {
+        rejectPending = reject;
+      });
+    },
+    create: async () => '',
+    close: async () => {},
+    move: async () => {},
+    pin: async () => {},
+    restore: async () => undefined,
+  };
+  const session = await BrowserSession.open(directory, {
+    authorize: () => false,
+  });
+  try {
+    const view = await session.observe(() => {});
+    entries = [{ id: 'next', url: 'about:blank' }];
+    changed();
+    let refreshed = false;
+    const refresh = view.refreshGrants().then(() => {
+      refreshed = true;
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(
+        refreshed,
+        true,
+        'Directory authorization cannot wait for a host resolver that needs the directory lock',
+      );
+      assert.equal(view.currentState.active, 'next');
+    } finally {
+      rejectPending(new Error('Fixture complete'));
+      await refresh;
+    }
+    await view.close();
+  } finally {
+    await session.close();
+  }
+});
