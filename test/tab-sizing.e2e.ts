@@ -40,7 +40,15 @@ for (const engine of [chromium, firefox, webkit])
         };
         const service = await createProjectionServer(
           {
-            list: () => entries,
+            list: () =>
+              entries.map(({ page, title }) => ({
+                id: page.id,
+                url: page.url(),
+                title,
+              })),
+            downloads: () => [],
+            resolve: async (id: string) =>
+              entries.find((entry) => entry.page.id === id)!.page,
             subscribe: () => () => {},
             create: unavailable,
             close: unavailable,

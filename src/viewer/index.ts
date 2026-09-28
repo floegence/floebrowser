@@ -29,6 +29,7 @@ export {
 } from './port.js';
 export type {
   ProjectionConnection,
+  ProjectionStatus,
   FileChooserState,
   UploadFile,
   DownloadState,

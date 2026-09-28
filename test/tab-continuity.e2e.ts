@@ -42,7 +42,15 @@ for (const engine of [chromium, firefox, webkit])
           throw new Error('No directory mutation in this fixture');
         };
         const directory = {
-          list: () => entries,
+          list: () =>
+            entries.map(({ page, title }) => ({
+              id: page.id,
+              url: page.url(),
+              title,
+            })),
+          downloads: () => [],
+          resolve: async (id: string) =>
+            entries.find((entry) => entry.page.id === id)!.page,
           subscribe: (listener: () => void) => {
             listeners.add(listener);
             return () => {

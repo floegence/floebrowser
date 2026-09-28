@@ -44,6 +44,7 @@ import type {
   ServerMessage,
   DisconnectReason,
   TabState,
+  ProjectionStatus,
   DialogState,
   FileChooserState,
   DownloadState,
@@ -84,6 +85,7 @@ export type ViewOptions = {
   /** Return true for a browser-chrome shortcut consumed by the embedding host. */
   onShortcut?: (event: KeyboardEvent, phase: 'down' | 'up') => boolean;
   onTabs?: (state: TabState) => void;
+  onProjection?: (target: string, status: ProjectionStatus) => void;
   /** Website-native dialogs are delivered only to the active source controller. */
   onDialog?: (dialog: DialogState | null) => void;
   onFileChooser?: (chooser: FileChooserState | null) => void;
@@ -534,6 +536,22 @@ export class DOMBrowserView {
   }
   private receiveMessage(message: ServerMessage): void {
     if (this.destroyed || this.incompatible) return;
+    if (message.type === 'projection') {
+      if (message.target !== this.tab) return;
+      if (message.status !== 'ready') {
+        // A resumed selection can load the same target again. Retain its
+        // painted document before revoking readiness for the replacement.
+        if (this.ready) this.prepareFrame();
+        this.ready = false;
+        this.controlled = false;
+        this.options.onControl?.(false);
+        this.cancelInput();
+        this.clearProxy();
+        this.options.onStatus?.('refreshing');
+      }
+      this.options.onProjection?.(message.target, message.status);
+      return;
+    }
     if (message.type === 'downloads') {
       this.options.onDownloads?.(message.target, message.items);
       return;
@@ -1071,7 +1089,7 @@ export class DOMBrowserView {
         )) ||
       (!this.editTabs &&
         action.kind.startsWith('tab_') &&
-        action.kind !== 'tab_select') ||
+        !['tab_select', 'tab_retry'].includes(action.kind)) ||
       (this.tabCommands.size > 0 &&
         !action.kind.startsWith('tab_') &&
         action.kind !== 'dialog_reply') ||
@@ -1092,6 +1110,7 @@ export class DOMBrowserView {
           'tab_restore',
           'tab_pin',
           'tab_select',
+          'tab_retry',
           'tab_close',
           'tab_move',
         ].includes(action.kind))

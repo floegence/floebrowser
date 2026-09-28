@@ -18,11 +18,20 @@ test(
     const owner = new PlaywrightSourceBrowser();
     const a = await owner.adopt(first, 'authorized-a'),
       b = await owner.adopt(second, 'authorized-b');
-    let entries: SourceTab[] = [{ page: a }, { page: b }];
+    let entries: SourceTab[] = [
+      { id: a.id, url: a.url() },
+      { id: b.id, url: b.url() },
+    ];
     const listeners = new Set<(change: { activate?: string }) => void>();
     let closed = '';
     const directory: SourceDirectory = {
+      downloads: () => [],
       list: () => entries,
+      resolve: async (id) => {
+        const page = [a, b].find((page) => page.id === id);
+        if (!page) throw new Error('Unknown source');
+        return page;
+      },
       subscribe: (listener) => {
         listeners.add(listener);
         return () => {
@@ -34,16 +43,16 @@ test(
       },
       close: async (id) => {
         closed = id;
-        entries = entries.filter((entry) => entry.page.id !== id);
+        entries = entries.filter((entry) => entry.id !== id);
         for (const listener of listeners) listener({});
       },
       move: async (id, before) => {
-        const item = entries.find((entry) => entry.page.id === id)!;
+        const item = entries.find((entry) => entry.id === id)!;
         entries = entries.filter((entry) => entry !== item);
         entries.splice(
           before === null
             ? entries.length
-            : entries.findIndex((entry) => entry.page.id === before),
+            : entries.findIndex((entry) => entry.id === before),
           0,
           item,
         );
@@ -51,7 +60,7 @@ test(
       },
       pin: async (id, pinned) => {
         entries = entries.map((entry) =>
-          entry.page.id === id ? { ...entry, pinned } : entry,
+          entry.id === id ? { ...entry, pinned } : entry,
         );
         for (const listener of listeners) listener({});
       },
@@ -116,5 +125,112 @@ test(
     await session.close();
     assert.equal(listeners.size, 0);
     assert.equal(first.isClosed(), false);
+  },
+);
+
+test(
+  'lazy profile resolution shares attachment, preserves focus and isolates selection failures',
+  { timeout: 20000 },
+  async (t) => {
+    const browser = await chromium.launch();
+    t.after(() => browser.close());
+    const context = await browser.newContext();
+    const owner = new PlaywrightSourceBrowser();
+    const a = await owner.adopt(await context.newPage(), 'a');
+    const b = await owner.adopt(await context.newPage(), 'b');
+    let focus = 0;
+    a.bringToFront = b.bringToFront = async () => {
+      focus++;
+    };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const directory: SourceDirectory = {
+      downloads: () => [],
+      list: () => [
+        { id: 'a', url: 'about:blank' },
+        { id: 'b', url: 'about:blank' },
+        {
+          id: 'internal',
+          url: 'chrome://settings',
+          availability: 'unsupported',
+        },
+      ],
+      subscribe: () => () => {},
+      resolve: async (id) => {
+        calls.push(id);
+        if (id === 'b') await held;
+        return id === 'a' ? a : b;
+      },
+      create: async () => {
+        throw new Error('Not used');
+      },
+      close: async () => {},
+      move: async () => {},
+      pin: async () => {},
+      restore: async () => undefined,
+    };
+    const session = await BrowserSession.open(directory, {
+      authorize: () => true,
+    });
+    t.after(async () => {
+      release();
+      await session.close();
+      await owner.dispose();
+    });
+    assert.deepEqual(calls, []);
+    const first = await session.observe(() => {});
+    const second = await session.observe(() => {});
+    assert.deepEqual(calls, ['a']);
+    await first.acquireControl(
+      () => true,
+      () => true,
+    );
+    assert.equal(
+      focus,
+      0,
+      'Control never brings a native tab or window forward',
+    );
+    first.setDirectoryAuthority(() => true);
+    const delayed = first.receive({
+      type: 'command',
+      id: 1,
+      tab: 'a',
+      epoch: '',
+      action: { kind: 'tab_select', tab: 'b' },
+    });
+    while (first.currentState.active !== 'b')
+      await new Promise((resolve) => setImmediate(resolve));
+    const shared = second.select('b');
+    await first.receive({
+      type: 'command',
+      id: 2,
+      tab: 'b',
+      epoch: '',
+      action: { kind: 'tab_select', tab: 'a' },
+    });
+    release();
+    await Promise.all([delayed, shared]);
+    assert.deepEqual(
+      calls,
+      ['a', 'b'],
+      'Concurrent viewers share one lazy source owner',
+    );
+    assert.equal(
+      first.currentState.active,
+      'a',
+      'A late resolver cannot override the latest selection',
+    );
+    assert.equal(second.currentState.active, 'b');
+    await first.select('internal');
+    assert.deepEqual(
+      calls,
+      ['a', 'b'],
+      'Internal pages remain visible without debugger attachment',
+    );
+    await first.close();
+    await second.close();
   },
 );

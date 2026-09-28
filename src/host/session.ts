@@ -6,6 +6,7 @@ import {
   StandaloneSourceDirectory,
   type SourceDirectory,
   type DirectoryChange,
+  type SourceTab,
 } from './directory.js';
 import { PlaywrightSourceBrowser } from './playwright-source.js';
 import { DownloadTransfers } from './downloads.js';
@@ -29,7 +30,7 @@ import {
 type Tab = { page: SourcePage; engine: BrowserProjection };
 type DirectoryClose = {
   viewer: Viewer;
-  page: SourcePage;
+  target: string;
   authorize: AttachOptions['authorize'];
   dialog?: SourceDialog;
   id?: string;
@@ -39,7 +40,7 @@ export interface SessionViewOptions extends ObservationOptions {
   /** External browser hosts can edit live tabs without granting URL restoration. */
   restoreClosedTabs?: boolean;
   /** Synchronous host grant predicate. Call refreshGrants after changing it. */
-  canObserve?: (page: SourcePage) => boolean;
+  canObserve?: (tab: SourceTab) => boolean;
   /** Independent per-source audio-output grant. Refresh after ownership changes. */
   canHear?: (page: SourcePage) => boolean;
 }
@@ -49,6 +50,7 @@ type Viewer = {
   active: boolean;
   selected: string;
   revision: number;
+  selection: number;
   queue: Promise<void>;
   directoryWork: Promise<void>;
   send: (message: ServerMessage) => void;
@@ -57,6 +59,7 @@ type Viewer = {
   controller?: Controller;
   observation?: Observation;
   observations: Map<string, Observation>;
+  observing: Map<string, Promise<Observation>>;
   authorize?: AttachOptions['authorize'];
   directoryAuthorize?: AttachOptions['authorize'];
   canControl?: (page: SourcePage) => boolean;
@@ -106,9 +109,8 @@ export interface SessionConnection extends Controller {
 /** One projection owner per authorized source; each view selects independently.
  * The host owns source grants, lifecycle and user/AI target-control policy. */
 export class BrowserSession {
-  private downloadTargets = new Map<SourcePage, () => void>();
   private tabs = new Map<string, Tab>();
-  private adding = new Map<SourcePage, Promise<Tab>>();
+  private adding = new Map<string, Promise<Tab>>();
   private viewers = new Set<Viewer>();
   private standaloneViewer?: Viewer;
   private resumeTab = '';
@@ -155,16 +157,11 @@ export class BrowserSession {
     );
     try {
       const entries = this.entries();
-      this.watchDownloads();
-      this.directoryOrder = entries.map((entry) => entry.page.id);
-      if (entries[0]) {
-        await this.add(entries[0].page);
-        this.resumeTab = entries[0].page.id;
-      }
+      this.directoryOrder = entries.map((entry) => entry.id);
+      this.resumeTab = entries[0]?.id ?? '';
+      if (this.standalone && this.resumeTab) await this.add(this.resumeTab);
     } catch (error) {
       this.unsubscribe();
-      for (const dispose of this.downloadTargets.values()) dispose();
-      this.downloadTargets.clear();
       throw error;
     }
   }
@@ -173,21 +170,22 @@ export class BrowserSession {
       .list()
       .filter(
         (entry) =>
-          !entry.page.isClosed() &&
-          (!viewer?.options.canObserve ||
-            viewer.options.canObserve(entry.page)),
+          !viewer?.options.canObserve || viewer.options.canObserve(entry),
       );
-    if (new Set(entries.map((entry) => entry.page.id)).size !== entries.length)
+    if (new Set(entries.map((entry) => entry.id)).size !== entries.length)
       throw new Error('Duplicate source target identity');
     return entries;
   }
   private directoryChanged(change: DirectoryChange): void {
     if (this.closing) return;
-    this.watchDownloads();
-    const ids = this.entries().map((entry) => entry.page.id);
+    const ids = this.entries().map((entry) => entry.id);
     const previous = this.directoryOrder;
     this.directoryOrder = ids;
-    for (const id of this.tabs.keys()) if (!ids.includes(id)) this.drop(id);
+    for (const id of this.tabs.keys())
+      if (
+        !this.entries().some((entry) => entry.id === id && !entry.availability)
+      )
+        this.drop(id);
     for (const viewer of this.viewers)
       void this.refreshGrants(viewer, change, previous).catch(() =>
         this.unavailable(viewer),
@@ -209,9 +207,9 @@ export class BrowserSession {
       viewer.controller = undefined;
       this.trackRetirement(viewer, control.close());
     }
-    const ids = this.entries(viewer).map((entry) => entry.page.id);
+    const ids = this.entries(viewer).map((entry) => entry.id);
     for (const close of this.directoryClosures.values())
-      if (close.viewer === viewer && !ids.includes(close.page.id))
+      if (close.viewer === viewer && !ids.includes(close.target))
         this.trackRetirement(viewer, this.dismissDirectoryDialog(close));
     viewer.transfers.retain((page) => ids.includes(page.id));
     for (const [id, observation] of viewer.observations)
@@ -239,14 +237,15 @@ export class BrowserSession {
     }
     if (change.activate && ids.includes(change.activate))
       next = change.activate;
-    if (next !== viewer.selected) {
+    if (
+      next !== viewer.selected ||
+      this.entries(viewer).find((entry) => entry.id === next)?.availability
+    ) {
       this.retire(viewer);
       viewer.selected = next;
       ++viewer.revision;
       if (viewer === this.standaloneViewer) this.resumeTab = next;
-      viewer.directoryWork = next
-        ? this.select(viewer, next).catch(() => this.unavailable(viewer))
-        : Promise.resolve();
+      viewer.directoryWork = this.select(viewer, next);
     }
     this.publish(viewer);
     this.publishDownloads(viewer);
@@ -254,37 +253,17 @@ export class BrowserSession {
       () => {},
     );
   }
-  private watchDownloads(): void {
-    const entries = this.entries();
-    for (const [page, dispose] of this.downloadTargets)
-      if (!entries.some((entry) => entry.page === page)) {
-        dispose();
-        this.downloadTargets.delete(page);
-      }
-    for (const { page } of entries)
-      if (!this.downloadTargets.has(page)) {
-        const changed = () => {
-          for (const viewer of this.viewers)
-            this.publishDownloads(viewer, page);
-        };
-        page.on('downloadschanged', changed);
-        this.downloadTargets.set(page, () =>
-          page.off('downloadschanged', changed),
-        );
-      }
-  }
-  private publishDownloads(viewer: Viewer, target?: SourcePage): void {
+  private publishDownloads(viewer: Viewer): void {
     if (!viewer.active) return;
-    for (const { page } of this.entries(viewer))
-      if (!target || target === page)
-        viewer.send({
-          type: 'downloads',
-          target: page.id,
-          items: page.downloads().map((download) => ({
-            ...download.state,
-            filename: download.state.filename.slice(0, 1024),
-          })),
-        });
+    for (const { id } of this.entries(viewer))
+      viewer.send({
+        type: 'downloads',
+        target: id,
+        items: this.directory.downloads(id).map((download) => ({
+          ...download.state,
+          filename: download.state.filename.slice(0, 1024),
+        })),
+      });
   }
   /** Standalone convenience; embedded consumers use their connection's state. */
   get activeProjection(): BrowserProjection {
@@ -300,14 +279,14 @@ export class BrowserSession {
   private state(viewer?: Viewer): TabState {
     return {
       active: viewer?.selected ?? this.resumeTab,
-      tabs: this.entries(viewer).map(({ page, title, pinned, loading }) => {
-        const state = this.tabs.get(page.id)?.engine.currentState;
+      tabs: this.entries(viewer).map(({ id, url, title, pinned, loading }) => {
+        const state = this.tabs.get(id)?.engine.currentState;
         return {
-          id: page.id,
-          title: state?.title || title || '',
-          url: state?.url || page.url(),
+          id,
+          title: title ?? state?.title ?? '',
+          url: state?.status === 'error' ? state.url : url,
           pinned: !!pinned,
-          loading: state?.loading ?? !!loading,
+          loading: loading ?? state?.loading ?? false,
         };
       }),
     };
@@ -331,23 +310,38 @@ export class BrowserSession {
     viewer.queue = result.catch(() => {});
     return result;
   }
-  private add(page: SourcePage): Promise<Tab> {
+  private add(id: string): Promise<Tab> {
     if (this.closing) return Promise.reject(new Error('Session closed'));
-    const existing = this.tabs.get(page.id);
-    if (existing) {
-      if (existing.page !== page)
-        return Promise.reject(new Error('Source identity reused'));
-      return Promise.resolve(existing);
-    }
-    const pending = this.adding.get(page);
+    const existing = this.tabs.get(id);
+    if (existing && !existing.page.isClosed()) return Promise.resolve(existing);
+    if (existing) this.drop(id);
+    const pending = this.adding.get(id);
     if (pending) return pending;
+    const entry = this.entries().find((entry) => entry.id === id);
+    if (!entry || entry.availability)
+      return Promise.reject(new Error('Source unavailable'));
     const task = (async () => {
-      const engine = await BrowserProjection.attach(page, {
+      const page = await this.directory.resolve(id);
+      if (
+        page.id !== id ||
+        page.isClosed() ||
+        !this.entries().some((entry) => entry.id === id)
+      )
+        throw new Error('Source identity unavailable');
+      let engine: BrowserProjection | undefined;
+      engine = await BrowserProjection.attach(page, {
         ...this.options,
         onState: (state) => {
           this.options.onState?.(state);
-          if (state.status === 'closed') this.directoryChanged({});
-          else this.publish();
+          if (
+            state.status === 'closed' &&
+            engine &&
+            this.tabs.get(id)?.engine === engine
+          ) {
+            this.drop(id);
+            for (const viewer of this.viewers)
+              if (viewer.selected === id) this.unavailable(viewer);
+          } else this.publish();
         },
         onPopup: () => {}, // Only the directory owner can admit popups.
         onUncontrolledDialog: (dialog, source) =>
@@ -355,28 +349,34 @@ export class BrowserSession {
       });
       if (
         this.closing ||
-        !this.entries().some((entry) => entry.page === page)
+        page.isClosed() ||
+        !this.entries().some((entry) => entry.id === page.id)
       ) {
         await engine.close();
         throw new Error('Source grant revoked while attaching a tab');
       }
       const tab = { page, engine };
-      this.tabs.set(page.id, tab);
+      this.tabs.set(id, tab);
       this.publish();
       return tab;
-    })().finally(() => this.adding.delete(page));
-    this.adding.set(page, task);
+    })().finally(() => this.adding.delete(id));
+    this.adding.set(id, task);
     return task;
   }
   /** Trusted host entry point for AI control. Shares the exact same projection
    * and debugger as viewers; calling it does not grant input or observation. */
   async projection(id: string): Promise<BrowserProjection> {
-    const entry = this.entries().find((entry) => entry.page.id === id);
+    const entry = this.entries().find((entry) => entry.id === id);
     if (!entry) throw new Error('Unknown source target');
-    return (await this.add(entry.page)).engine;
+    return (await this.add(entry.id)).engine;
   }
   private unavailable(viewer: Viewer): void {
-    if (viewer.active) viewer.send({ type: 'notice', code: 'tab_unavailable' });
+    if (viewer.active)
+      viewer.send({
+        type: 'projection',
+        target: viewer.selected,
+        status: 'unavailable',
+      });
   }
   private trackRetirement(
     viewer: Viewer,
@@ -439,7 +439,7 @@ export class BrowserSession {
       viewer.authorize === authorize &&
       viewer.canControl === canControl &&
       canControl(tab.page) &&
-      this.entries(viewer).some((entry) => entry.page === tab.page);
+      this.entries(viewer).some((entry) => entry.id === tab.page.id);
     let controller: Controller;
     try {
       controller = await tab.engine.acquireControl(
@@ -457,82 +457,104 @@ export class BrowserSession {
       return false;
     }
     viewer.controller = controller;
-    // Chromium can retry an error document when its target is foregrounded.
-    // Selecting or reconnecting that view must preserve the failure until the
-    // user explicitly navigates or reloads, for embedded and standalone views.
-    if (tab.engine.currentState.status !== 'error')
-      void tab.page.bringToFront().catch(() => {});
     return true;
   }
   private async select(viewer: Viewer, id: string): Promise<void> {
-    const entry = this.entries(viewer).find((entry) => entry.page.id === id);
-    if (!entry) throw new Error('Unknown source tab');
+    const entry = this.entries(viewer).find((entry) => entry.id === id);
+    if (id && !entry) throw new Error('Unknown source tab');
+    const selection = ++viewer.selection;
     this.retire(viewer);
     viewer.selected = id;
     if (viewer === this.standaloneViewer) this.resumeTab = id;
     this.publish(viewer);
-    const tab = await this.add(entry.page);
-    if (!viewer.active || viewer.selected !== id || this.closing) return;
-    // Only an input owner may activate the physical source page. Watching does
-    // not change AI's target, focus, viewport or personal-browser selection.
-    const observation =
-      viewer.observations.get(id) ??
-      (await tab.engine.observe(
-        (message) => {
-          if (
-            message.type === 'control' &&
-            message.target === viewer.selected &&
-            !message.active
-          )
-            viewer.controller = undefined;
-          if (
-            viewer.active &&
-            message.type !== 'downloads' &&
-            (message.type === 'ack' ||
-              message.type === 'media_end' ||
-              (message.type === 'control' && !message.active) ||
-              (this.entries(viewer).some((entry) => entry.page.id === id) &&
-                (message.type === 'media' ||
-                  (viewer.selected === id &&
-                    !(
-                      message.type === 'state' &&
-                      message.state.status === 'closed'
-                    )))))
-          )
-            viewer.send(message);
-        },
-        {
-          ...viewer.options,
-          media: viewer.mediaEnabled,
-          audio: this.canHear(viewer, id),
-          visible: viewer.visible,
-          onMediaFrame: viewer.options.onMediaFrame
-            ? (frame) => {
-                if (
-                  viewer.active &&
-                  this.entries(viewer).some((entry) => entry.page.id === id) &&
-                  (frame.header.track !== 'audio' || this.canHear(viewer, id))
-                )
-                  viewer.options.onMediaFrame?.(frame);
-              }
-            : undefined,
-        },
-      ));
-    if (
-      !viewer.active ||
-      !this.entries(viewer).some((entry) => entry.page.id === id)
-    ) {
-      await observation.close();
+    const current = () =>
+      viewer.active && viewer.selection === selection && !this.closing;
+    if (!entry || entry.availability) {
+      viewer.send({
+        type: 'projection',
+        target: id,
+        status: entry ? 'unsupported' : 'empty',
+      });
       return;
     }
-    viewer.observations.set(id, observation);
-    if (viewer.selected !== id) {
-      this.trackRetirement(viewer, observation.setVisible(false));
-      return;
+    viewer.send({ type: 'projection', target: id, status: 'loading' });
+    try {
+      const tab = await this.add(id);
+      if (!current()) return;
+      // Selecting a projection never activates the physical browser tab.
+      let pending = viewer.observing.get(id);
+      if (!viewer.observations.has(id) && !pending) {
+        pending = tab.engine
+          .observe(
+            (message) => {
+              if (
+                message.type === 'control' &&
+                message.target === viewer.selected &&
+                !message.active
+              )
+                viewer.controller = undefined;
+              if (
+                viewer.active &&
+                message.type !== 'downloads' &&
+                (message.type === 'ack' ||
+                  message.type === 'media_end' ||
+                  (message.type === 'control' && !message.active) ||
+                  (this.entries(viewer).some((entry) => entry.id === id) &&
+                    (message.type === 'media' ||
+                      (viewer.selected === id &&
+                        !(
+                          message.type === 'state' &&
+                          message.state.status === 'closed'
+                        )))))
+              )
+                viewer.send(message);
+            },
+            {
+              ...viewer.options,
+              media: viewer.mediaEnabled,
+              audio: this.canHear(viewer, id),
+              visible: viewer.visible,
+              onMediaFrame: viewer.options.onMediaFrame
+                ? (frame) => {
+                    if (
+                      viewer.active &&
+                      this.entries(viewer).some((entry) => entry.id === id) &&
+                      (frame.header.track !== 'audio' ||
+                        this.canHear(viewer, id))
+                    )
+                      viewer.options.onMediaFrame?.(frame);
+                  }
+                : undefined,
+            },
+          )
+          .then(async (observation) => {
+            if (
+              !viewer.active ||
+              this.tabs.get(id) !== tab ||
+              !this.entries(viewer).some((entry) => entry.id === id)
+            ) {
+              await observation.close();
+              throw new Error('Observation grant revoked');
+            }
+            viewer.observations.set(id, observation);
+            return observation;
+          })
+          .finally(() => viewer.observing.delete(id));
+        viewer.observing.set(id, pending);
+      }
+      const observation = viewer.observations.get(id) ?? (await pending!);
+      if (!current()) {
+        this.trackRetirement(viewer, observation.setVisible(false));
+        return;
+      }
+      this.trackRetirement(viewer, observation.setVisible(viewer.visible));
+      viewer.observation = observation;
+      await this.control(viewer);
+      if (current())
+        viewer.send({ type: 'projection', target: id, status: 'ready' });
+    } catch {
+      if (current()) this.unavailable(viewer);
     }
-    this.trackRetirement(viewer, observation.setVisible(viewer.visible));
-    viewer.observation = observation;
-    await this.control(viewer);
   }
   private drop(id: string): void {
     const tab = this.tabs.get(id);
@@ -543,8 +565,8 @@ export class BrowserSession {
       viewer.observations.delete(id);
       if (observation) this.trackRetirement(viewer, observation.close());
     }
-    void tab.engine.close();
     this.tabs.delete(id);
+    void tab.engine.close();
   }
   async observe(
     send: (message: ServerMessage) => void,
@@ -558,12 +580,14 @@ export class BrowserSession {
       active: true,
       selected: '',
       revision: 0,
+      selection: 0,
       queue: Promise.resolve(),
       directoryWork: Promise.resolve(),
       send,
       options: { ...options },
       visible: options.visible !== false,
       observations: new Map(),
+      observing: new Map(),
       mediaEnabled: options.media !== false,
       lastID: 0,
       pending: 0,
@@ -572,22 +596,19 @@ export class BrowserSession {
     const entries = this.entries(viewer);
     viewer.selected =
       entries.find(
-        (entry) => entry.page.id === (options.initialTab ?? this.resumeTab),
-      )?.page.id ??
-      entries[0]?.page.id ??
+        (entry) => entry.id === (options.initialTab ?? this.resumeTab),
+      )?.id ??
+      entries[0]?.id ??
       '';
     this.viewers.add(viewer);
     try {
+      send({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        mediaWireVersion: MEDIA_WIRE_VERSION,
+      });
       send({ type: 'session_access', editTabs: false });
-      if (viewer.selected) await this.select(viewer, viewer.selected);
-      else {
-        send({
-          type: 'hello',
-          version: PROTOCOL_VERSION,
-          mediaWireVersion: MEDIA_WIRE_VERSION,
-        });
-        this.publish(viewer);
-      }
+      await this.select(viewer, viewer.selected);
       this.publishDownloads(viewer);
     } catch (error) {
       viewer.active = false;
@@ -606,13 +627,13 @@ export class BrowserSession {
       select: (tab) => {
         if (
           !viewer.active ||
-          !this.entries(viewer).some((entry) => entry.page.id === tab)
+          !this.entries(viewer).some((entry) => entry.id === tab)
         )
           return Promise.reject(new Error('Unknown source tab'));
         const work = viewer.directoryWork.then(async () => {
           if (
             !viewer.active ||
-            !this.entries(viewer).some((entry) => entry.page.id === tab)
+            !this.entries(viewer).some((entry) => entry.id === tab)
           )
             return;
           await this.select(viewer, tab);
@@ -643,9 +664,7 @@ export class BrowserSession {
         if (
           !viewer.active ||
           !viewer.controller ||
-          !this.entries(viewer).some(
-            (entry) => entry.page.id === viewer.selected,
-          )
+          !this.entries(viewer).some((entry) => entry.id === viewer.selected)
         )
           return Promise.reject(new Error('Source control unavailable'));
         return viewer.controller.upload(id, file, body, signal);
@@ -712,12 +731,14 @@ export class BrowserSession {
       refreshGrants: () => this.refreshGrants(viewer),
       readResource: (tab, id) => this.readViewerResource(viewer, tab, id),
       download: async (tab, id, signal) => {
-        const page = this.entries(viewer).find(
-          (entry) => entry.page.id === tab,
-        )?.page;
+        const page = {
+          id: tab,
+          downloads: () => this.directory.downloads(tab),
+          isClosed: () => !this.entries().some((entry) => entry.id === tab),
+        };
         const authorized = () =>
           viewer.active &&
-          this.entries(viewer).some((entry) => entry.page === page);
+          this.entries(viewer).some((entry) => entry.id === tab);
         if (!page || !authorized()) throw new Error('Download unavailable');
         return viewer.transfers.open(page, id, authorized, signal);
       },
@@ -730,6 +751,7 @@ export class BrowserSession {
           this.closeObservations(viewer);
           this.viewers.delete(viewer);
           await viewer.queue;
+          await Promise.allSettled(viewer.observing.values());
           await this.drainRetirements(viewer);
         })()),
     };
@@ -766,7 +788,7 @@ export class BrowserSession {
     const message = parsed.data;
     if (
       viewer.selected &&
-      !this.entries(viewer).some((entry) => entry.page.id === viewer.selected)
+      !this.entries(viewer).some((entry) => entry.id === viewer.selected)
     )
       void this.refreshGrants(viewer).catch(() => this.unavailable(viewer));
     if (message.type === 'media_keyframe')
@@ -810,7 +832,7 @@ export class BrowserSession {
           !viewer.active ||
           viewer.directoryAuthorize !== closing.authorize ||
           closing.dialog !== dialog ||
-          !this.entries(viewer).some((entry) => entry.page === closing.page)
+          !this.entries(viewer).some((entry) => entry.id === closing.target)
         ) {
           ack('not_allowed');
           return;
@@ -826,7 +848,8 @@ export class BrowserSession {
       return Promise.resolve();
     }
     if (
-      (!viewer.directoryAuthorize && message.action.kind !== 'tab_select') ||
+      (!viewer.directoryAuthorize &&
+        !['tab_select', 'tab_retry'].includes(message.action.kind)) ||
       (message.action.kind === 'tab_restore' &&
         viewer.options.restoreClosedTabs === false)
     ) {
@@ -851,7 +874,7 @@ export class BrowserSession {
       const action = message.action,
         authorize = viewer.directoryAuthorize;
       if (
-        (action.kind !== 'tab_select' && !authorize) ||
+        (!['tab_select', 'tab_retry'].includes(action.kind) && !authorize) ||
         (authorize && !(await authorize(action)))
       ) {
         ack('not_allowed');
@@ -872,14 +895,14 @@ export class BrowserSession {
       }
       operation = (async () => {
         if (action.kind === 'tab_new' || action.kind === 'tab_restore') {
-          const page =
+          const target =
             action.kind === 'tab_new'
               ? await this.directory.create()
               : await this.directory.restore();
-          if (page && viewer.active && revision === viewer.revision)
-            await this.select(viewer, page.id);
+          if (target && viewer.active && revision === viewer.revision)
+            await this.select(viewer, target);
         } else if ('tab' in action) {
-          const ids = this.entries(viewer).map((entry) => entry.page.id);
+          const ids = this.entries(viewer).map((entry) => entry.id);
           if (
             !ids.includes(action.tab) ||
             (action.kind === 'tab_move' &&
@@ -893,19 +916,16 @@ export class BrowserSession {
             await this.directory.move(action.tab, action.before);
           else if (action.kind === 'tab_pin')
             await this.directory.pin(action.tab, action.pinned);
-          else if (action.kind === 'tab_select')
+          else if (action.kind === 'tab_select' || action.kind === 'tab_retry')
             await this.select(viewer, action.tab);
           else if (action.kind === 'tab_close') {
             if (this.directoryClosures.has(action.tab)) {
               ack('busy');
               return;
             }
-            const page = this.entries(viewer).find(
-              (entry) => entry.page.id === action.tab,
-            )!.page;
             const closing: DirectoryClose = {
               viewer,
-              page,
+              target: action.tab,
               authorize: authorize!,
             };
             this.directoryClosures.set(action.tab, closing);
@@ -937,7 +957,7 @@ export class BrowserSession {
       try {
         close.viewer.send({
           type: 'dialog',
-          target: close.page.id,
+          target: close.target,
           dialog: null,
         });
       } catch {
@@ -956,7 +976,7 @@ export class BrowserSession {
       close &&
       close.viewer.active &&
       close.viewer.directoryAuthorize === close.authorize &&
-      this.entries(close.viewer).some((entry) => entry.page === page);
+      this.entries(close.viewer).some((entry) => entry.id === page.id);
     if (!close || dialog.type !== 'beforeunload') {
       if (this.options.onUncontrolledDialog)
         this.options.onUncontrolledDialog(dialog, page);
@@ -1009,7 +1029,7 @@ export class BrowserSession {
       viewer.active &&
       observation &&
       viewer.observations.get(tab) === observation &&
-      this.entries(viewer).some((entry) => entry.page.id === tab);
+      this.entries(viewer).some((entry) => entry.id === tab);
     if (!authorized()) return;
     const resource = await this.tabs.get(tab)?.engine.resources.read(id);
     return authorized() ? resource : undefined;
@@ -1017,8 +1037,6 @@ export class BrowserSession {
   close(): Promise<void> {
     return (this.closing ??= (async () => {
       this.unsubscribe?.();
-      for (const dispose of this.downloadTargets.values()) dispose();
-      this.downloadTargets.clear();
       this.standalone?.dispose();
       for (const viewer of this.viewers) {
         viewer.active = false;
@@ -1029,6 +1047,7 @@ export class BrowserSession {
       const retirements = await Promise.allSettled(
         [...this.viewers].map(async (viewer) => {
           await viewer.queue;
+          await Promise.allSettled(viewer.observing.values());
           await this.drainRetirements(viewer);
         }),
       );

@@ -95,6 +95,42 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
     await first.locator('[data-floe-ui=browser-title] img').count(),
     0,
   );
+  await page.evaluate(() =>
+    (window as any).deliver[1]({
+      type: 'projection',
+      target: 'tab-1',
+      status: 'unavailable',
+    }),
+  );
+  await second
+    .getByRole('button', { name: 'Retry display', exact: true })
+    .click();
+  await page.waitForFunction(() =>
+    (window as any).sent[1].some((m: any) => m.action?.kind === 'tab_retry'),
+  );
+  assert.equal(
+    await second.getByRole('tab').count(),
+    1,
+    'Projection failure preserves the tab strip',
+  );
+  assert.equal(
+    await second
+      .getByRole('button', { name: 'New tab', exact: true })
+      .isEnabled(),
+    true,
+  );
+  await page.evaluate(() => {
+    (window as any).deliver[1]({
+      type: 'projection',
+      target: 'tab-1',
+      status: 'ready',
+    });
+    (window as any).deliver[1]({
+      type: 'control',
+      target: 'tab-1',
+      active: true,
+    });
+  });
   await second.getByRole('combobox').focus();
   await page.keyboard.press('Control+l');
   assert.equal(
@@ -229,6 +265,27 @@ test('embedded browsers own their chrome, focus, localization and lifetime', asy
   assert.deepEqual(
     await page.evaluate(() => (window as any).closeCounts),
     [1, 0],
+  );
+  await page.evaluate(() => {
+    (window as any).deliver[1]({ type: 'session_access', editTabs: true });
+    (window as any).deliver[1]({
+      type: 'tabs',
+      state: { active: '', tabs: [] },
+    });
+    (window as any).deliver[1]({
+      type: 'projection',
+      target: '',
+      status: 'empty',
+    });
+  });
+  await second.getByRole('heading', { name: 'No open tabs' }).waitFor();
+  const create = second.locator('[data-floe-ui=projection-retry]');
+  await create.focus();
+  await create.press('Enter');
+  await page.waitForFunction(() =>
+    (window as any).sent[1].some(
+      (m: any) => m.tab === '' && m.action?.kind === 'tab_new',
+    ),
   );
   await page.evaluate(() => (window as any).views[1].destroy());
   assert.deepEqual(

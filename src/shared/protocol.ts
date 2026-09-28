@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { eventWithTime } from '@rrweb/types';
 import type { MEDIA_WIRE_VERSION, MediaFrame } from './media-wire.js';
 
-export const PROTOCOL_VERSION = 24;
+export const PROTOCOL_VERSION = 25;
 export const MAX_VIEWPORT_DIMENSION = 8192;
 export const MIN_PAGE_ZOOM = 0.25;
 export const MAX_PAGE_ZOOM = 5;
@@ -180,7 +180,7 @@ export const actionSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
-      kind: z.enum(['tab_select', 'tab_close']),
+      kind: z.enum(['tab_select', 'tab_close', 'tab_retry']),
       tab: z.string().min(1).max(80),
     })
     .strict(),
@@ -190,11 +190,16 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('command'),
       id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-      tab: z.string().min(1).max(80),
+      tab: z.string().max(80),
       epoch: z.string().max(80),
       action: actionSchema,
     })
-    .strict(),
+    .strict()
+    .refine(
+      (message) =>
+        message.tab !== '' ||
+        ['tab_new', 'tab_restore'].includes(message.action.kind),
+    ),
   z.object({ type: z.literal('resync') }).strict(),
   z
     .object({
@@ -294,7 +299,10 @@ export type NoticeCode =
   | 'download_unavailable'
   | 'resource_limit'
   | 'tab_unavailable';
+export type ProjectionStatus =
+  'loading' | 'ready' | 'unavailable' | 'unsupported' | 'empty';
 export type ServerMessage =
+  | { type: 'projection'; target: string; status: ProjectionStatus }
   | { type: 'resource'; target: string; resource: ResourceAvailable }
   | { type: 'downloads'; target: string; items: DownloadState[] }
   | { type: 'file_chooser'; target: string; chooser: FileChooserState | null }

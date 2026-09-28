@@ -128,6 +128,16 @@ export const englishMessages = {
     'A page resource exceeds the projection memory limit.',
   'notice.tab_unavailable':
     'The source tab could not be opened. Try again from the current tab.',
+  'projection.failed': 'This tab couldn’t be displayed',
+  'projection.recovery':
+    'Reconnect the display to this tab. Your page will stay open in the source browser.',
+  'projection.retry': 'Retry display',
+  'projection.unsupported': 'This page can’t be displayed here',
+  'projection.unsupportedDescription':
+    'Browser internal pages remain available in your source browser. Select another tab or open a website.',
+  'projection.empty': 'No open tabs',
+  'projection.emptyDescription':
+    'Create a tab to start browsing in this workspace.',
   'page.input': 'Type in the source browser',
   'page.failed': 'This page couldn’t be loaded',
   'page.recovery':

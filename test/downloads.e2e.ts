@@ -226,7 +226,7 @@ test(
     const initial = await owner.adopt(page);
     const directory = new StandaloneSourceDirectory(initial);
     t.after(() => directory.dispose());
-    const background = await directory.create();
+    const background = await directory.resolve(await directory.create());
     const physical = context.pages().find((p) => p !== page)!;
     (background as any).reportDownload({
       state: {
