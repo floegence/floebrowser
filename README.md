@@ -519,15 +519,28 @@ message/input lane. Input is never replayed after a failed or closed bridge.
 ## Own a source browser session
 
 Embedding products call `BrowserSession.open(directory, options)` with one
-host-owned `SourceDirectory`. `list()` is the authoritative authorized page set
-and order; its entries may include host titles and pin state. `subscribe()`
-publishes grants and lifecycle changes, while `create`, `close`, `move`, `pin`
-and `restore` delegate product policy to that owner. Mutations publish their new
-directory before resolving. The session never discovers sibling pages or adopts
-popups on behalf of a supplied directory. Removing a page from the directory
-immediately revokes its observation and input, including its resource access,
-without requiring the host to close the physical page. Creating a projection is
-lazy so a background page does not delay the initial directory.
+host-owned `SourceDirectory`. `list()` supplies authorized tab metadata (`id`,
+`url`, optional `title`, `pinned`, `loading` and `availability: "unsupported"`),
+independently of debugger attachment. `resolve(id)` borrows that exact tab's
+`SourcePage` only when a viewer selects it or a trusted host requests its
+projection. Concurrent requests share one projection owner. `subscribe()`
+publishes native directory changes; hosts must use stable, non-recycled IDs and
+publish the resulting directory before mutation promises resolve. `create()` and
+`restore()` return real tab IDs, independently of projection success. `close`,
+`move` and `pin` delegate native effects to the directory owner. The session
+never discovers sibling pages or adopts popups for a supplied directory.
+Removing a directory grant revokes observation without closing the native page.
+
+A failed or unsupported selected page keeps the tab strip and directory controls
+available. `projection` messages report loading, ready, unavailable, unsupported
+or empty content; `onProjection` exposes the same state to hosts. The explicit
+`tab_retry` command reconnects display only, without creating a tab, navigating,
+or replaying input. Empty host directories stay empty until the user creates a
+tab. Selection and control admission never activate a native tab or focus its
+window. Each viewer selects independently; delayed resolutions cannot overwrite a
+newer selection. `downloads(id)` exposes only already captured download handles and shares the
+directory subscription for updates. Reading it never resolves or projects a page;
+background downloads remain subject to observation grants.
 
 A directory-authorized tab close can ask for its source `beforeunload` decision
 without acquiring page input. The session routes that decision only to the
@@ -547,7 +560,7 @@ policy instead. Closing either directory or session preserves source page life.
 
 `BrowserSession.attach(initialPage, options)` adds tab management above `BrowserProjection`. It owns the initial page, descendant popups and pages explicitly created through `tab_new`; it does not adopt other pages in the same browser context. The embedding product must authorize that session scope. `connect`, `hasController` and `close` follow the same exclusive-controller lifecycle as the page engine. Detaching the session does not close host-owned pages or the browser context.
 
-The standalone server uses this session API. Source popups become the selected tab unless a newer browser intent has already changed selection. The full-window viewer uses a compact tab strip and address bar. Tabs support creation, switching, closing with the close button or middle mouse button, and arrow-key navigation. The tab context menu provides pin/unpin and reopening a closed tab. Control/Command+T, W and Shift+T create, close and restore tabs; Control+Tab cycles the current view. These shortcuts also work when focus is inside the inert projection, where the host browser permits them. Drag tabs to reorder them, with immediate position feedback and automatic scrolling at the edges of an overflowing strip; Escape cancels a drag. Alt+Shift+Left/Right moves the focused tab one position, and Alt+Shift+Home/End moves it to the beginning or end. Reordering preserves the selected tab, live DOM, controller and media, and survives viewer reconnection. Rejected moves restore source order. Tab elements retain their identity and focus across title updates. Selection highlights immediately; the previous page becomes inert until the selected page is ready. Only the latest unsent consecutive tab selection is retained, while submitted commands and navigation barriers keep their order. Ordinary tab switches do not show a connection dialog. Closing the last source tab creates a blank one. Existing source DOM, history and credentials survive tab switches. `tab_new`, `tab_select`, `tab_close` and `tab_move` go through `authorize` before their effects. `tab_move` places its `tab` before another tab ID, or at the end when `before` is `null`; both IDs must belong to the session. It changes only source-owned tab order, without creating a new selection intent. `tabs` messages carry the tab list and active ID; the viewer exposes these through `onTabs`. Every command must include the active tab's `BrowserState.id` as `tab`. Old-tab commands and duplicate command IDs are rejected; they are never redirected to another page.
+The standalone server uses this session API. Source popups become the selected tab unless a newer browser intent has already changed selection. The full-window viewer uses a compact tab strip and address bar. Tabs support creation, switching, closing with the close button or middle mouse button, and arrow-key navigation. The tab context menu provides pin/unpin and reopening a closed tab. Control/Command+T, W and Shift+T create, close and restore tabs; Control+Tab cycles the current view. These shortcuts also work when focus is inside the inert projection, where the host browser permits them. Drag tabs to reorder them, with immediate position feedback and automatic scrolling at the edges of an overflowing strip; Escape cancels a drag. Alt+Shift+Left/Right moves the focused tab one position, and Alt+Shift+Home/End moves it to the beginning or end. Reordering preserves the selected tab, live DOM, controller and media, and survives viewer reconnection. Rejected moves restore source order. Tab elements retain their identity and focus across title updates. Selection highlights immediately; the previous page becomes inert until the selected page is ready. Only the latest unsent consecutive tab selection is retained, while submitted commands and navigation barriers keep their order. Ordinary tab switches do not show a connection dialog. The standalone directory creates a blank page after its final tab closes; embedded directory owners decide their own empty-workspace policy. Existing source DOM, history and credentials survive tab switches. `tab_new`, `tab_select`, `tab_close` and `tab_move` go through `authorize` before their effects. `tab_move` places its `tab` before another tab ID, or at the end when `before` is `null`; both IDs must belong to the session. It changes only source-owned tab order, without creating a new selection intent. `tabs` messages carry the tab list and active ID; the viewer exposes these through `onTabs`. Every command must include the active tab's `BrowserState.id` as `tab`. Old-tab commands and duplicate command IDs are rejected; they are never redirected to another page.
 
 Rebuilt DOM is exposed only after its active stylesheets, including nested imports and shadow-root styles, have settled and layout has completed. Initial display, tab activation and DOM checkpoints share this preparation; late or replaced iframe documents prepare independently. Responsive sizing settles before the new page becomes interactive, and acknowledged source dimensions update the replay viewport immediately so the first click cannot race the initial fit-to-size transition. A denied resize leaves the available page usable without retrying the request. Fonts receive up to 200 ms after styles settle before the browser's fallback text is used. Stylesheet preparation is capped at ten seconds; an unresolved stylesheet produces a notice and exposes the available content instead of stranding the page. Failed resources settle without reconnecting, switching tabs cancels the old preparation, and browser controls remain usable throughout. `test/presentation.e2e.ts` gates resource delivery and checks every exposed animation frame for unstyled content during tab activation.
 
@@ -664,7 +677,7 @@ The standalone viewer always adapts automatically and has no manual size selecto
 
 Embedding hosts can pass a `mediaControls` element in `DOMBrowserView` options to place these optional controls in their browser chrome, outside the projection container. Without that mount, the viewer adds no media UI; website controls and media forwarding still work. The host should provide the toolbar mount when users need auxiliary playback controls and availability details.
 
-Use the same FloeBrowser release on both sides. Protocol version 24 adds viewport-based continuation of an admitted pointer gesture. It distinguishes a rejected, changed pointer/wheel target from an invalid view. It also identifies directory-authorized close decisions separately from page input. It includes explicit held-input release, source-element mute, dialogs,
+Use the same FloeBrowser release on both sides. Protocol version 25 separates tab metadata from projection availability and adds an explicit display-only retry. It retains viewport-based continuation of an admitted pointer gesture. It distinguishes a rejected, changed pointer/wheel target from an invalid view. It also identifies directory-authorized close decisions separately from page input. It includes explicit held-input release, source-element mute, dialogs,
 find, zoom, scoped file selection and downloads, independent observation/media
 subscriptions, source-local encoded media collection, Canvas images, tab ordering,
 viewport commands and epoch-fenced input. It is not compatible with earlier

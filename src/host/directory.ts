@@ -1,8 +1,10 @@
-import type { SourcePage } from './source.js';
+import type { SourcePage, SourceDownload } from './source.js';
 import { consumePopupIntent } from './popup-intent.js';
 
 export type SourceTab = {
-  page: SourcePage;
+  id: string;
+  url: string;
+  availability?: 'unsupported';
   title?: string;
   pinned?: boolean;
   loading?: boolean;
@@ -14,18 +16,24 @@ export type DirectoryChange = { activate?: string };
  * it need not close the physical page. Never include ungranted personal tabs. */
 export interface SourceDirectory {
   list(): readonly SourceTab[];
+  /** Already captured downloads; reading this never connects a source. Changes
+   * use the same directory subscription as tab metadata. */
+  downloads(id: string): readonly SourceDownload[];
   subscribe(listener: (change: DirectoryChange) => void): () => void;
-  create(): Promise<SourcePage>;
+  /** Resolve only the requested authorized identity. A failure never removes its
+   * directory entry or closes its physical page. No implicit navigation. */
+  resolve(id: string): Promise<SourcePage>;
+  create(): Promise<string>;
   close(id: string): Promise<void>;
   move(id: string, before: string | null): Promise<void>;
   pin(id: string, pinned: boolean): Promise<void>;
-  restore(): Promise<SourcePage | undefined>;
+  restore(): Promise<string | undefined>;
 }
 
 /** Explicit standalone policy: own one page, its popups and newly created pages.
  * Embedding products supply their own directory instead of inheriting this grant. */
 export class StandaloneSourceDirectory implements SourceDirectory {
-  private entries: SourceTab[] = [];
+  private entries: Array<SourceTab & { page: SourcePage }> = [];
   private listeners = new Set<(change: DirectoryChange) => void>();
   private disposers = new Map<string, () => void>();
   private closedTabs: Array<{
@@ -33,13 +41,26 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     pinned: boolean;
     position: number;
   }> = [];
-  private replacing?: Promise<SourcePage>;
+  private replacing?: Promise<string>;
   private disposed = false;
   constructor(private initial: SourcePage) {
     this.add(initial);
   }
   list(): readonly SourceTab[] {
-    return this.entries;
+    return this.entries.map(({ page, ...entry }) => ({
+      ...entry,
+      url: page.url(),
+    }));
+  }
+  downloads(id: string): readonly SourceDownload[] {
+    return (
+      this.entries.find((entry) => entry.id === id)?.page.downloads() ?? []
+    );
+  }
+  async resolve(id: string): Promise<SourcePage> {
+    const page = this.entries.find((entry) => entry.id === id)?.page;
+    if (!page || page.isClosed()) throw new Error('Source tab is unavailable');
+    return page;
   }
   subscribe(listener: (change: DirectoryChange) => void): () => void {
     this.listeners.add(listener);
@@ -57,7 +78,7 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     )
       return;
     if (page.isClosed()) throw new Error('Source tab is closed');
-    const entry: SourceTab = { page, pinned };
+    const entry = { page, id: page.id, url: page.url(), pinned, title: '' };
     let observedTitle = false;
     const titleChanged = (title: string) => {
       observedTitle = true;
@@ -75,10 +96,15 @@ export class StandaloneSourceDirectory implements SourceDirectory {
         consumePopupIntent(page) ? { activate: page.id } : undefined,
       );
     };
+    const metadata = () => this.publish();
+    page.on('downloadschanged', metadata);
+    page.on('framenavigated', metadata);
     page.on('close', closed);
     page.on('popup', popup);
     page.on('titlechanged', titleChanged);
     this.disposers.set(page.id, () => {
+      page.off('downloadschanged', metadata);
+      page.off('framenavigated', metadata);
       page.off('close', closed);
       page.off('popup', popup);
       page.off('titlechanged', titleChanged);
@@ -99,17 +125,17 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     this.entries = this.entries.filter((entry) => entry.page.id !== id);
     this.publish();
   }
-  private replaceLast(): Promise<SourcePage> {
+  private replaceLast(): Promise<string> {
     return (this.replacing ??= this.create().finally(() => {
       this.replacing = undefined;
     }));
   }
-  async create(): Promise<SourcePage> {
+  async create(): Promise<string> {
     if (this.disposed) throw new Error('Source directory closed');
     const page = await this.initial.createPage();
     if (this.disposed) throw new Error('Source directory closed');
     this.add(page);
-    return page;
+    return page.id;
   }
   async close(id: string): Promise<void> {
     const position = this.entries.findIndex((entry) => entry.page.id === id);
@@ -150,7 +176,7 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     );
     this.publish();
   }
-  async restore(): Promise<SourcePage | undefined> {
+  async restore(): Promise<string | undefined> {
     const previous = this.closedTabs.pop();
     if (!previous) return;
     const page = await this.initial.createPage();
@@ -158,7 +184,7 @@ export class StandaloneSourceDirectory implements SourceDirectory {
     // Only a fresh GET can be restored. No form values, POST bodies or input
     // receipts survive closure, and the source adapter creates a new target ID.
     if (/^https?:\/\//i.test(previous.url)) await page.navigate(previous.url);
-    return page;
+    return page.id;
   }
   dispose(): void {
     if (this.disposed) return;

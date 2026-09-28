@@ -317,8 +317,14 @@ test('a failed tab admission rejects input promptly and allows another tab to ta
       action: { kind: 'tab_new' },
     });
     assert.equal(
-      messages.findLast((m) => m.type === 'ack')?.code,
-      'action_failed',
+      messages.findLast((m) => m.type === 'ack')?.ok,
+      true,
+      'Creation succeeds independently of projection admission',
+    );
+    assert(
+      messages.some(
+        (m) => m.type === 'projection' && m.status === 'unavailable',
+      ),
     );
     const failedTab = session.currentState.active;
     await controller.receive({

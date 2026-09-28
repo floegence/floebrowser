@@ -27,6 +27,7 @@ export {
   type ClientMessage,
   type ServerMessage,
   type ProjectionConnection,
+  type ProjectionStatus,
   type DisconnectReason,
   type TabState,
 } from '../shared/protocol.js';

@@ -121,6 +121,14 @@ const template = `    <main class="floe-browser browser-window">
             </button>
           </div>
         </div>
+        <section class="projection-overlay" data-floe-ui="projection-overlay" aria-live="polite" hidden>
+          <div class="connection-card">
+            <span class="connection-symbol disconnected-symbol" aria-hidden="true"></span>
+            <h2 data-floe-ui="projection-title"></h2>
+            <p data-floe-ui="projection-description"></p>
+            <button class="primary-button" data-floe-ui="projection-retry"></button>
+          </div>
+        </section>
         <div class="connection-overlay" data-floe-ui="connection-overlay">
           <div class="connection-card">
             <span class="connection-symbol" data-floe-ui="connection-symbol"></span>

@@ -185,7 +185,11 @@ test(
     let collectors = 0;
     const session = await BrowserSession.open(
       {
-        list: () => entries,
+        downloads: () => [],
+        list: () =>
+          entries.map(({ page }) => ({ id: page.id, url: page.url() })),
+        resolve: async (id) =>
+          entries.find((entry) => entry.page.id === id)!.page,
         subscribe: () => () => {},
         create: async () => {
           throw new Error('not granted');

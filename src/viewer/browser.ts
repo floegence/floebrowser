@@ -19,6 +19,7 @@ import {
 import type {
   Action,
   TabState,
+  ProjectionStatus,
   ProjectionConnection,
 } from '../shared/protocol.js';
 
@@ -97,6 +98,7 @@ export function mountBrowser(
   let sourceID = '';
   let tabState: TabState = { active: '', tabs: [] };
   let connected = false;
+  let projection: ProjectionStatus = 'loading';
   let controlling = false;
   let navigationAdmission: AbortController | undefined;
   const controlWaiters = new Set<() => void>();
@@ -227,6 +229,31 @@ export function mountBrowser(
     if (!connected) tabOrder.cancel();
     const selected = desiredTab();
     const pending = switching();
+    const blocked = ['unavailable', 'unsupported', 'empty'].includes(
+      projection,
+    );
+    element('projection-overlay').hidden = !connected || !blocked || pending;
+    const retry = element<HTMLButtonElement>('projection-retry');
+    retry.hidden =
+      projection === 'unsupported' || (projection === 'empty' && !editTabs);
+    retry.disabled = pending;
+    retry.textContent = text(
+      projection === 'empty' ? 'tabs.new' : 'projection.retry',
+    );
+    element('projection-title').textContent = text(
+      projection === 'empty'
+        ? 'projection.empty'
+        : projection === 'unsupported'
+          ? 'projection.unsupported'
+          : 'projection.failed',
+    );
+    element('projection-description').textContent = text(
+      projection === 'empty'
+        ? 'projection.emptyDescription'
+        : projection === 'unsupported'
+          ? 'projection.unsupportedDescription'
+          : 'projection.recovery',
+    );
     stage.classList.toggle('switching', connected && pending);
     stage.classList.toggle('loading', connected && loading);
     element('reload').title = text(
@@ -276,7 +303,8 @@ export function mountBrowser(
       takingControl ? 'control.pending' : 'control.take',
     );
     const target = tabState.tabs.find((tab) => tab.id === selected);
-    welcome.hidden = !connected || pending || target?.url !== 'about:blank';
+    welcome.hidden =
+      !connected || blocked || pending || target?.url !== 'about:blank';
   }
   function command(action: Action): Promise<boolean> {
     if (
@@ -462,6 +490,11 @@ export function mountBrowser(
       element('toast').hidden = true;
     }
     tabState = state;
+    if (previous !== state.active) projection = 'loading';
+    const selected = state.tabs.find((tab) => tab.id === state.active);
+    if (!addressEditing && document.activeElement !== address)
+      address.value =
+        selected?.url === 'about:blank' ? '' : (selected?.url ?? '');
     const list = element('tabs');
     const focusedTab = document.activeElement?.getAttribute('data-tab');
     for (const [id, item] of rows) {
@@ -560,6 +593,7 @@ export function mountBrowser(
     dialog.show(null);
     find.close();
     connected = ready = changingTab = false;
+    projection = 'loading';
     view = new DOMBrowserView(viewport, options.connect({ takeover }), {
       fetchResource: options.fetchResource,
       messages: options.messages,
@@ -599,6 +633,13 @@ export function mountBrowser(
         library.selected(state.active);
         downloads.tabs(state);
         if (generation === admittedGeneration && !destroyed) renderTabs(state);
+      },
+      onProjection: (target, status) => {
+        if (generation !== admittedGeneration || destroyed) return;
+        projection = status;
+        if (status !== 'loading' && status !== 'ready') changingTab = false;
+        options.onProjection?.(target, status);
+        updateChrome();
       },
       onState: (state) => {
         if (generation !== admittedGeneration || destroyed) return;
@@ -695,6 +736,13 @@ export function mountBrowser(
       onShortcut: shortcut,
     });
   }
+  element('projection-retry').addEventListener('click', () => {
+    void command(
+      projection === 'empty'
+        ? { kind: 'tab_new' }
+        : { kind: 'tab_retry', tab: tabState.active },
+    );
+  });
   function hideSuggestions(): void {
     suggestionRequest?.abort();
     suggestionRequest = undefined;

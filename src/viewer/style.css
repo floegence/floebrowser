@@ -571,6 +571,7 @@
   color: var(--floe-muted);
   white-space: nowrap;
 }
+.floe-browser .projection-overlay,
 .floe-browser .connection-overlay {
   position: absolute;
   inset: 0;

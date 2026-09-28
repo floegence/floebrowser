@@ -6,6 +6,8 @@ import type {
   SourceDownloadState,
   SourcePage,
 } from './source.js';
+type DownloadSource = Pick<SourcePage, 'id' | 'downloads' | 'isClosed'>;
+
 import type { DownloadFile } from '../shared/protocol.js';
 
 /** Playwright's exact native download handle owns the file and credentials.
@@ -68,7 +70,7 @@ export function playwrightDownload(download: Download): SourceDownload {
 }
 
 async function readSourceDownload(
-  source: SourcePage,
+  source: DownloadSource,
   id: string,
   allowed: () => boolean,
   signal: AbortSignal,
@@ -116,10 +118,10 @@ async function readSourceDownload(
 /** Each viewing connection owns a bounded set of reads. Revoking observation
  * aborts producers immediately, including reads still waiting for their first byte. */
 export class DownloadTransfers {
-  private active = new Map<AbortController, SourcePage>();
+  private active = new Map<AbortController, DownloadSource>();
   private closed = false;
   async open(
-    source: SourcePage,
+    source: DownloadSource,
     id: string,
     allowed: () => boolean,
     signal?: AbortSignal,
@@ -152,7 +154,7 @@ export class DownloadTransfers {
       throw error;
     }
   }
-  retain(allowed: (page: SourcePage) => boolean): void {
+  retain(allowed: (page: DownloadSource) => boolean): void {
     for (const [abort, page] of this.active) if (!allowed(page)) abort.abort();
   }
   close(): void {
