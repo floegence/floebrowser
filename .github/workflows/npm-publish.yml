@@ -17,7 +17,7 @@ permissions:
 jobs:
   publish:
     if: github.repository == 'floegence/floebrowser' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
