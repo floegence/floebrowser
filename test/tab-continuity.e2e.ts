@@ -7,7 +7,7 @@ import { createProjectionServer } from '../dist/host/server.js';
 for (const engine of [chromium, firefox, webkit])
   for (const observe of [false, true]) {
     test(
-      `${engine.name()} ${observe ? 'observer' : 'controller'}: cold, warm and evicted tabs never blank the painted viewport`,
+      `${engine.name()} ${observe ? 'observer' : 'controller'}: cold, warm and evicted tabs only paint the selected target`,
       { timeout: 40000 },
       async (t) => {
         const sourceBrowser = await chromium.launch();
@@ -112,7 +112,7 @@ for (const engine of [chromium, firefox, webkit])
               ...document.querySelectorAll<HTMLIFrameElement>(
                 '#viewport iframe',
               ),
-            ].some((frame) => {
+            ].find((frame) => {
               const root = frame.contentDocument?.documentElement;
               return (
                 frame.checkVisibility({
@@ -126,7 +126,24 @@ for (const engine of [chromium, firefox, webkit])
                 frame.contentDocument?.querySelector('h1')?.textContent
               );
             });
-            (window as any).paintedFrames.push(Boolean(painted));
+            const selected = document
+              .querySelector('[role=tab][aria-selected=true]')
+              ?.getAttribute('data-tab');
+            const selectedRow = document.querySelector(
+              `[data-tab-id="${selected}"]`,
+            );
+            const name = selectedRow?.querySelector('[role=tab]')?.textContent;
+            const content =
+              painted?.contentDocument?.querySelector('h1')?.textContent;
+            (window as any).paintedFrames.push({
+              content,
+              selected: name === 'Renamed' ? 'page-0' : name,
+              pending:
+                document
+                  .querySelector('#viewport')
+                  ?.parentElement?.classList.contains('switching') ||
+                !!document.querySelector('#status.refreshing'),
+            });
             (window as any).sampling = requestAnimationFrame(sample);
           };
           (window as any).sampling = requestAnimationFrame(sample);
@@ -176,14 +193,26 @@ for (const engine of [chromium, firefox, webkit])
         );
         const frames = await viewer.evaluate(() => {
           cancelAnimationFrame((window as any).sampling);
-          return (window as any).paintedFrames as boolean[];
+          return (window as any).paintedFrames as Array<{
+            content?: string;
+            selected?: string;
+            pending: boolean;
+          }>;
         });
         assert.ok(frames.length > 20);
-        assert.equal(
-          frames.filter((value) => !value).length,
-          0,
-          `Blank frames: ${frames.filter((value) => !value).length}/${frames.length}`,
-        );
+        for (const frame of frames) {
+          if (frame.content)
+            assert.equal(
+              frame.content,
+              frame.selected,
+              'Paint must match selected target',
+            );
+          else
+            assert(
+              frame.pending,
+              'A cold or evicted target presents an explicit loading state',
+            );
+        }
         if (!observe) {
           await viewer
             .frameLocator('#viewport iframe')

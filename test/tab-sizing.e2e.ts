@@ -163,6 +163,14 @@ for (const engine of [chromium, firefox, webkit])
             if (!(window as any).geometryPaused)
               (window as any).geometryFrames.push({
                 name: frame?.contentDocument?.querySelector('h1')?.textContent,
+                selected: document.querySelector(
+                  '[role=tab][aria-selected=true]',
+                )?.textContent,
+                pending:
+                  document
+                    .querySelector('#viewport')
+                    ?.parentElement?.classList.contains('switching') ||
+                  !!document.querySelector('#status.refreshing'),
                 x: rect && rect.x - viewport.x,
                 y: rect && rect.y - viewport.y,
                 width: rect?.width,
@@ -274,7 +282,15 @@ for (const engine of [chromium, firefox, webkit])
         });
         assert.ok(frames.length > 20);
         for (const frame of frames) {
-          assert.ok(frame.name, 'Switching must retain painted content');
+          if (!frame.name) {
+            assert(frame.pending, 'Cold switching must show loading');
+            continue;
+          }
+          assert.equal(
+            frame.name,
+            frame.selected,
+            'Painted content must match selected tab',
+          );
           const { width, height } = frame.viewport;
           const scale = Math.min(1, width / 900, height / 650);
           const expected =

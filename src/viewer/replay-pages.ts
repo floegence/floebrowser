@@ -129,15 +129,14 @@ export class ReplayPages {
       (page.width !== this.container.clientWidth ||
         page.height !== this.container.clientHeight)
     ) {
-      // A preview from a different window size would visibly jump before the
-      // current source layout is ready. Retain the outgoing paint instead.
+      // A preview from a different window size cannot represent this view.
       if (page.surface !== this.visible) this.drop(target);
       page = undefined;
     }
     if (!page) {
-      // A cache miss must not clear the last painted frame. It cannot accept
-      // input while selection and the replacement document are pending.
-      if (this.visible) this.visible.inert = true;
+      // Address, selection and visible content must describe the same target.
+      // Keep warm documents parked, but never show another page on a miss.
+      if (this.visible) this.hide(this.visible);
       return false;
     }
     this.pages.delete(target);

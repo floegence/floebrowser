@@ -45,6 +45,7 @@ test('fences stale tab commands, authorizes tab creation and leaves unrelated pa
       action: { kind: 'navigate', url: 'https://must-not-navigate.invalid/' },
     });
     assert.equal(ack()?.code, 'stale_view');
+    await session.projection(next);
     assert.equal(session.activeProjection.currentState.url, 'about:blank');
     await controller.receive({
       type: 'command',
@@ -118,7 +119,7 @@ test('tab order is authorized session state and moving a tab preserves its contr
   await send({ kind: 'tab_new' });
   await send({ kind: 'tab_new' });
   const [a, b, c] = session.currentState.tabs.map((tab) => tab.id);
-  const active = session.activeProjection;
+  const active = await session.projection(c!);
   messages.length = 0;
   await send({ kind: 'tab_move', tab: c, before: a });
   assert.deepEqual(

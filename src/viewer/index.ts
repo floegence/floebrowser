@@ -8,6 +8,7 @@ export {
   webSocketConnection,
   type ViewOptions,
   type ViewportMode,
+  type BrowserTrace,
 } from './client.js';
 export {
   englishMessages,

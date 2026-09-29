@@ -51,7 +51,8 @@ type Viewer = {
   selected: string;
   revision: number;
   selection: number;
-  queue: Promise<void>;
+  selections: Set<Promise<void>>;
+  effects: Promise<void>;
   directoryWork: Promise<void>;
   send: (message: ServerMessage) => void;
   options: SessionViewOptions;
@@ -84,7 +85,8 @@ export interface SessionConnection extends Controller {
   setDirectoryAuthority(authorize?: AttachOptions['authorize']): void;
   /** Host-only grant. By default it covers only the currently selected source.
    * A dynamic predicate must reflect the host's target leases. This never grants
-   * directory editing. Returns false instead of stealing control. */
+   * directory editing. Awaits only the current target's admission and returns
+   * false if selection or authority changes, or another controller owns it. */
   acquireControl(
     authorize: AttachOptions['authorize'],
     canControl?: (page: SourcePage) => boolean,
@@ -306,11 +308,6 @@ export class BrowserSession {
       (!viewer.options.canHear || viewer.options.canHear(page)),
     );
   }
-  private enqueue(viewer: Viewer, work: () => Promise<void>): Promise<void> {
-    const result = viewer.queue.then(work);
-    viewer.queue = result.catch(() => {});
-    return result;
-  }
   private add(id: string): Promise<Tab> {
     if (this.closing) return Promise.reject(new Error('Session closed'));
     const existing = this.tabs.get(id);
@@ -460,7 +457,12 @@ export class BrowserSession {
     viewer.controller = controller;
     return true;
   }
-  private async select(viewer: Viewer, id: string): Promise<void> {
+  private select(viewer: Viewer, id: string): Promise<void> {
+    const work = this.admitSelection(viewer, id);
+    viewer.directoryWork = work;
+    return work;
+  }
+  private async admitSelection(viewer: Viewer, id: string): Promise<void> {
     const entry = this.entries(viewer).find((entry) => entry.id === id);
     if (id && !entry) throw new Error('Unknown source tab');
     const selection = ++viewer.selection;
@@ -582,7 +584,8 @@ export class BrowserSession {
       selected: '',
       revision: 0,
       selection: 0,
-      queue: Promise.resolve(),
+      selections: new Set(),
+      effects: Promise.resolve(),
       directoryWork: Promise.resolve(),
       send,
       options: { ...options },
@@ -631,16 +634,7 @@ export class BrowserSession {
           !this.entries(viewer).some((entry) => entry.id === tab)
         )
           return Promise.reject(new Error('Unknown source tab'));
-        const work = viewer.directoryWork.then(async () => {
-          if (
-            !viewer.active ||
-            !this.entries(viewer).some((entry) => entry.id === tab)
-          )
-            return;
-          await this.select(viewer, tab);
-        });
-        viewer.directoryWork = work.catch(() => {});
-        return work;
+        return this.select(viewer, tab);
       },
       receiveDirectoryDecision: async (input) => {
         const parsed = clientMessageSchema.safeParse(input);
@@ -709,14 +703,22 @@ export class BrowserSession {
       },
       acquireControl: async (authorize, canControl) => {
         if (!viewer.active) return false;
-        const selected = this.tabs.get(viewer.selected)?.page;
+        const selected = viewer.selected;
+        const selection = viewer.selection;
+        const admission = viewer.directoryWork;
         const previous = viewer.controller;
-        const grant = canControl ?? ((page: SourcePage) => page === selected);
+        const grant =
+          canControl ?? ((page: SourcePage) => page.id === selected);
         viewer.controller = undefined;
         viewer.authorize = authorize;
         viewer.canControl = grant;
         if (previous) await previous.close();
-        if (viewer.authorize !== authorize || viewer.canControl !== grant)
+        await admission;
+        if (
+          viewer.selection !== selection ||
+          viewer.authorize !== authorize ||
+          viewer.canControl !== grant
+        )
           return false;
         return this.control(viewer);
       },
@@ -751,7 +753,8 @@ export class BrowserSession {
           viewer.directoryAuthorize = undefined;
           this.closeObservations(viewer);
           this.viewers.delete(viewer);
-          await viewer.queue;
+          await Promise.allSettled(viewer.selections);
+          await viewer.effects;
           await Promise.allSettled(viewer.observing.values());
           await this.drainRetirements(viewer);
         })()),
@@ -810,7 +813,10 @@ export class BrowserSession {
       return Promise.resolve();
     }
     viewer.lastID = message.id;
-    if (message.tab !== viewer.selected) {
+    const explicitTarget = ['tab_select', 'tab_retry', 'tab_close'].includes(
+      message.action.kind,
+    );
+    if (!explicitTarget && message.tab !== viewer.selected) {
       ack('stale_view');
       return Promise.resolve();
     }
@@ -861,14 +867,16 @@ export class BrowserSession {
       ack('busy');
       return Promise.resolve();
     }
-    const revision = ['tab_move', 'tab_pin'].includes(message.action.kind)
-      ? viewer.revision
-      : ++viewer.revision;
+    const selecting = ['tab_select', 'tab_retry'].includes(message.action.kind);
+    const revision =
+      selecting || ['tab_new', 'tab_restore'].includes(message.action.kind)
+        ? ++viewer.revision
+        : viewer.revision;
     viewer.pending++;
     let operation: Promise<void> | undefined;
-    const admission = this.enqueue(viewer, async () => {
+    const admit = async () => {
       if (!viewer.active) return;
-      if (message.tab !== viewer.selected) {
+      if (!explicitTarget && message.tab !== viewer.selected) {
         ack('stale_view');
         return;
       }
@@ -883,7 +891,8 @@ export class BrowserSession {
       }
       if (
         !viewer.active ||
-        message.tab !== viewer.selected ||
+        (selecting && revision !== viewer.revision) ||
+        (!explicitTarget && message.tab !== viewer.selected) ||
         viewer.directoryAuthorize !== authorize
       ) {
         if (viewer.active)
@@ -901,7 +910,7 @@ export class BrowserSession {
               ? await this.directory.create()
               : await this.directory.restore();
           if (target && viewer.active && revision === viewer.revision)
-            await this.select(viewer, target);
+            viewer.directoryWork = this.select(viewer, target);
         } else if ('tab' in action) {
           const ids = this.entries(viewer).map((entry) => entry.id);
           if (
@@ -918,7 +927,7 @@ export class BrowserSession {
           else if (action.kind === 'tab_pin')
             await this.directory.pin(action.tab, action.pinned);
           else if (action.kind === 'tab_select' || action.kind === 'tab_retry')
-            await this.select(viewer, action.tab);
+            viewer.directoryWork = this.select(viewer, action.tab);
           else if (action.kind === 'tab_close') {
             if (this.directoryClosures.has(action.tab)) {
               ack('busy');
@@ -932,7 +941,6 @@ export class BrowserSession {
             this.directoryClosures.set(action.tab, closing);
             try {
               await this.directory.close(action.tab);
-              await viewer.directoryWork;
             } finally {
               await this.dismissDirectoryDialog(closing);
               this.directoryClosures.delete(action.tab);
@@ -942,7 +950,21 @@ export class BrowserSession {
         ack();
       })();
       void operation.catch(() => {});
-    });
+      // Native mutations keep receive order. Page acquisition is independent
+      // and reports loading/failure separately from confirmed directory effects.
+      if (!['tab_select', 'tab_retry'].includes(action.kind)) await operation;
+    };
+    let admission: Promise<void>;
+    if (selecting) {
+      admission = admit();
+      viewer.selections.add(admission);
+      void admission
+        .finally(() => viewer.selections.delete(admission))
+        .catch(() => {});
+    } else {
+      admission = viewer.effects.then(admit);
+      viewer.effects = admission.catch(() => {});
+    }
     return admission
       .then(() => operation)
       .catch(() => ack('action_failed'))
@@ -1047,7 +1069,8 @@ export class BrowserSession {
       }
       const retirements = await Promise.allSettled(
         [...this.viewers].map(async (viewer) => {
-          await viewer.queue;
+          await Promise.allSettled(viewer.selections);
+          await viewer.effects;
           await Promise.allSettled(viewer.observing.values());
           await this.drainRetirements(viewer);
         }),

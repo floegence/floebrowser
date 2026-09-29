@@ -11,7 +11,7 @@ async function setup(t: test.TestContext) {
   const context = await browser.newContext();
   const source = await context.newPage();
   await source.goto(site.url);
-  let release: (() => void) | undefined;
+  const releases: Array<() => void> = [];
   let blocked = false;
   let allowed = true;
   const selections: string[] = [];
@@ -21,7 +21,7 @@ async function setup(t: test.TestContext) {
         selections.push(action.tab);
         if (blocked)
           await new Promise<void>((resolve) => {
-            release = resolve;
+            releases.push(resolve);
           });
       }
       return action.kind !== 'tab_select' || allowed;
@@ -31,7 +31,7 @@ async function setup(t: test.TestContext) {
     viewport: { width: 1280, height: 900 },
   });
   viewer.setDefaultTimeout(5000);
-  const failures: unknown[] = [];
+  const failures: Array<{ id: number; code: string }> = [];
   const timings: number[] = [];
   let started = 0;
   viewer.on('websocket', (socket) => {
@@ -52,7 +52,7 @@ async function setup(t: test.TestContext) {
   });
   t.after(async () => {
     blocked = false;
-    release?.();
+    for (const release of releases.splice(0)) release();
     await service.close();
     await browser.close();
     await site.close();
@@ -75,12 +75,12 @@ async function setup(t: test.TestContext) {
     },
     unblock() {
       blocked = false;
-      release?.();
+      for (const release of releases.splice(0)) release();
     },
   };
 }
 
-test('tab clicks respond immediately, coalesce unsent selections and preserve source input fences', async (t) => {
+test('tab clicks dispatch immediately and preserve source input fences', async (t) => {
   const s = await setup(t);
   const { viewer, source, service } = s;
   const original = service.session.currentState.active;
@@ -137,11 +137,15 @@ test('tab clicks respond immediately, coalesce unsent selections and preserve so
   );
   assert.deepEqual(
     s.selections,
-    [ids[1], original],
-    'Only the latest unsent selection reaches the source',
+    [ids[1], ids[2], original],
+    'Every selection dispatches promptly without awaiting the previous source',
   );
   assert.equal(service.session.currentState.active, original);
-  assert.deepEqual(s.failures, []);
+  assert.deepEqual(
+    s.failures.map((failure) => failure.code),
+    ['stale_view', 'stale_view'],
+    'Only the two superseded authorization results are rejected',
+  );
 });
 
 test('browser chrome fills the window, closes tabs with the middle button and keeps keyed tab focus', async (t) => {
@@ -251,7 +255,7 @@ test('address first focus selects all, subsequent clicks edit, and suggestions n
   assert.equal(await viewer.getByRole('listbox').isVisible(), false);
 });
 
-test('navigation submitted while switching targets the requested tab and denied switches discard dependent intent', async (t) => {
+test('superseded or denied switches cancel undispatched dependent navigation', async (t) => {
   const s = await setup(t);
   const { viewer, source, site, service } = s;
   const original = service.session.currentState.active;
@@ -275,8 +279,8 @@ test('navigation submitted while switching targets the requested tab and denied 
   );
   assert.equal(
     source.url(),
-    `${site.url}/second`,
-    'Navigation executes on the selected destination before the next switch',
+    `${site.url}/`,
+    'A superseding selection cancels navigation that has not reached its source',
   );
   assert.equal(
     service.session.activeProjection.currentState.url,
@@ -300,7 +304,7 @@ test('navigation submitted while switching targets the requested tab and denied 
     service.session.activeProjection.currentState.url,
     'about:blank',
   );
-  assert.equal(source.url(), `${site.url}/second`);
+  assert.equal(source.url(), `${site.url}/`);
   assert.match(await viewer.locator('#toast').innerText(), /not authorize/);
 });
 

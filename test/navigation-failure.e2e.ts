@@ -299,12 +299,18 @@ test('a failed tab admission rejects input promptly and allows another tab to ta
   });
   const messages: ServerMessage[] = [];
   let rejectHandshake = false;
+  let reportUnavailable!: () => void;
+  const unavailable = new Promise<void>((resolve) => {
+    reportUnavailable = resolve;
+  });
   const controller = await session.connect((message) => {
     if (message.type === 'hello' && rejectHandshake) {
       rejectHandshake = false;
       throw new Error('Consumer rejected the new tab handshake');
     }
     messages.push(message);
+    if (message.type === 'projection' && message.status === 'unavailable')
+      reportUnavailable();
   });
   const original = session.currentState.active;
   try {
@@ -320,6 +326,10 @@ test('a failed tab admission rejects input promptly and allows another tab to ta
       messages.findLast((m) => m.type === 'ack')?.ok,
       true,
       'Creation succeeds independently of projection admission',
+    );
+    await bounded(
+      unavailable,
+      'Failed admission must report an unavailable projection',
     );
     assert(
       messages.some(

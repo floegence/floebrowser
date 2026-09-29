@@ -101,6 +101,7 @@ export function mountBrowser(
   let projection: ProjectionStatus = 'loading';
   let controlling = false;
   let navigationAdmission: AbortController | undefined;
+  let navigationTarget: string | undefined;
   const controlWaiters = new Set<() => void>();
   let takingControl = false;
   let editTabs = true;
@@ -166,10 +167,11 @@ export function mountBrowser(
     (target, id, signal) => view!.download(target, id, signal),
     (action) => command(action),
   );
-  // Only unsent tab selections are replaceable. Submitted effects are never replayed.
+  // Selection is superseding intent. The host orders native effects separately
+  // from page admission; no reply can erase a later command or replay an effect.
   type ChromeCommand = { action: Action; resolve: (ok: boolean) => void };
   const commands: ChromeCommand[] = [];
-  let current: ChromeCommand | undefined;
+  let latestViewIntent: ChromeCommand | undefined;
   const rows = new Map<
     string,
     { row: HTMLElement; select: HTMLButtonElement; close: HTMLButtonElement }
@@ -194,9 +196,10 @@ export function mountBrowser(
     }, 9000);
   }
   function desiredTab(): string {
-    const selection = [...(current ? [current] : []), ...commands].findLast(
-      (command) => command.action.kind === 'tab_select',
-    );
+    const selection =
+      latestViewIntent && commands.includes(latestViewIntent)
+        ? latestViewIntent
+        : undefined;
     return selection?.action.kind === 'tab_select'
       ? selection.action.tab
       : tabState.active;
@@ -204,15 +207,17 @@ export function mountBrowser(
   function switching(): boolean {
     return (
       changingTab ||
-      [current, ...commands].some(
-        (command) =>
-          command &&
-          (command.action.kind === 'tab_select' ||
-            command.action.kind === 'tab_new' ||
-            command.action.kind === 'tab_restore' ||
-            (command.action.kind === 'tab_close' &&
-              command.action.tab === tabState.active)),
-      )
+      commands
+        .filter((command) => command === latestViewIntent)
+        .some(
+          (command) =>
+            command &&
+            (command.action.kind === 'tab_select' ||
+              command.action.kind === 'tab_new' ||
+              command.action.kind === 'tab_restore' ||
+              (command.action.kind === 'tab_close' &&
+                command.action.tab === tabState.active)),
+        )
     );
   }
   function updateChrome(): void {
@@ -320,64 +325,114 @@ export function mountBrowser(
       navigationAdmission?.abort();
     if (!connected || destroyed) return Promise.resolve(false);
     return new Promise((resolve) => {
-      const tail = commands.at(-1);
-      if (action.kind === 'tab_select' && tail?.action.kind === 'tab_select') {
-        commands.pop()!.resolve(false);
+      if (
+        action.kind === 'tab_retry' &&
+        commands.some(
+          (command) =>
+            command.action.kind === 'tab_retry' &&
+            command.action.tab === action.tab,
+        )
+      ) {
+        resolve(false);
+        return;
       }
-      commands.push({ action, resolve });
+      const barriers = commands.filter(
+        (command) =>
+          command.action.kind === 'tab_new' ||
+          command.action.kind === 'tab_restore' ||
+          command === latestViewIntent,
+      );
+      const work = { action, resolve };
+      commands.push(work);
+      if (
+        ['tab_select', 'tab_retry', 'tab_new', 'tab_restore'].includes(
+          action.kind,
+        ) ||
+        (action.kind === 'tab_close' && action.tab === desiredTab())
+      )
+        latestViewIntent = work;
+      const admittedGeneration = generation;
+      const intent = latestViewIntent;
+      const pageAdmission = action.kind.startsWith('tab_')
+        ? undefined
+        : new AbortController();
+      if (pageAdmission) {
+        navigationAdmission = pageAdmission;
+        // A dependent address has no source identity until its directory
+        // command completes. The resulting selection must not cancel it.
+        navigationTarget = barriers.length ? undefined : tabState.active;
+      }
+      if (action.kind === 'tab_select') view!.previewTab(action.tab);
       updateChrome();
-      void drain();
+      // An address submitted after New tab belongs to that new tab. Waiting
+      // for its native effect must not hold later chrome intent dispatch.
+      const wait = barriers.map(
+        (barrier) =>
+          new Promise<boolean>((done) => {
+            const complete = barrier.resolve;
+            barrier.resolve = (ok) => {
+              complete(ok);
+              done(ok);
+            };
+          }),
+      );
+      const execute = action.kind.startsWith('tab_')
+        ? view!.dispatch(action)
+        : Promise.all(wait).then((results) =>
+            results.every(Boolean) &&
+            generation === admittedGeneration &&
+            intent === latestViewIntent &&
+            connected
+              ? dispatchPage(action, pageAdmission!)
+              : false,
+          );
+      void execute.then((ok) => {
+        work.resolve(ok);
+        const index = commands.indexOf(work);
+        if (index !== -1) commands.splice(index, 1);
+        if (destroyed || generation !== admittedGeneration) return;
+        if (!ok && latestViewIntent === work) {
+          changingTab = false;
+          view?.previewTab(tabState.active);
+        }
+        updateChrome();
+        if (document.activeElement !== address) setAddress();
+      });
     });
   }
-  async function drain(): Promise<void> {
-    if (current) return;
-    while (connected && commands.length) {
-      const work = commands.shift()!;
-      current = work;
-      const admittedGeneration = generation;
-      updateChrome();
-      if (!work.action.kind.startsWith('tab_')) {
-        // Dispatch in intent order, but page completion never holds browser
-        // chrome. A subsequent tab command can revoke this page immediately.
-        void dispatchPage(work.action).then(work.resolve);
-        current = undefined;
-        continue;
-      }
-      const ok =
-        work.action.kind === 'tab_select' && work.action.tab === tabState.active
-          ? true
-          : await view!.dispatch(work.action);
-      work.resolve(ok);
-      if (destroyed || generation !== admittedGeneration) return;
-      current = undefined;
-      if (!ok) {
-        view?.previewTab(tabState.active);
-        for (const pending of commands.splice(0)) pending.resolve(false);
-        break;
-      }
-    }
-    updateChrome();
-    if (document.activeElement !== address) setAddress();
-  }
-  async function dispatchPage(action: Action): Promise<boolean> {
+  async function dispatchPage(
+    action: Action,
+    admission: AbortController,
+  ): Promise<boolean> {
+    const signal = AbortSignal.any([admission.signal, lifetime.signal]);
+    const target = tabState.active;
+    navigationTarget = target;
+    if (
+      signal.aborted ||
+      (changingTab && !ready && !(await view!.whenReady(target, signal)))
+    )
+      return false;
     const resume = ['navigate', 'back', 'forward', 'reload'].includes(
       action.kind,
     )
       ? view!.suspendInput()
       : undefined;
     try {
-      return await admitPage(action);
+      return await admitPage(action, admission, signal);
     } finally {
       resume?.();
     }
   }
-  async function admitPage(action: Action): Promise<boolean> {
+  async function admitPage(
+    action: Action,
+    admission: AbortController,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (signal.aborted) return false;
     if (action.kind !== 'navigate' || !options.onRequestControl)
       return view!.dispatch(action);
     const target = tabState.active,
       admittedGeneration = generation;
-    const admission = (navigationAdmission = new AbortController());
-    const signal = AbortSignal.any([admission.signal, lifetime.signal]);
     try {
       await options.onRequestControl(target, signal);
       signal.throwIfAborted();
@@ -438,7 +493,7 @@ export function mountBrowser(
     focusAddress();
   }
   function closingTab(id: string): boolean {
-    return [current, ...commands].some(
+    return commands.some(
       (command) =>
         command?.action.kind === 'tab_close' && command.action.tab === id,
     );
@@ -451,7 +506,6 @@ export function mountBrowser(
     }
     addressEditing = false;
     hideSuggestions();
-    view?.previewTab(id);
     void command({ kind: 'tab_select', tab: id });
     setAddress();
     rows
@@ -475,7 +529,12 @@ export function mountBrowser(
   function renderTabs(state: TabState): void {
     options.onTabs?.(state);
     const previous = tabState.active;
-    if (previous !== state.active) navigationAdmission?.abort();
+    if (
+      previous !== state.active &&
+      navigationTarget !== undefined &&
+      navigationTarget !== state.active
+    )
+      navigationAdmission?.abort();
     if (previous !== state.active) find.close();
     if (previous !== state.active)
       loading = !!state.tabs.find((tab) => tab.id === state.active)?.loading;
@@ -491,7 +550,7 @@ export function mountBrowser(
     }
     tabState = state;
     if (previous !== state.active) projection = 'loading';
-    const selected = state.tabs.find((tab) => tab.id === state.active);
+    const selected = state.tabs.find((tab) => tab.id === desiredTab());
     if (!addressEditing && document.activeElement !== address)
       address.value =
         selected?.url === 'about:blank' ? '' : (selected?.url ?? '');
@@ -573,7 +632,11 @@ export function mountBrowser(
       showSuggestions();
     }
     updateChrome();
-    if (previous !== state.active && !current) {
+    if (
+      previous !== state.active &&
+      !addressEditing &&
+      document.activeElement !== address
+    ) {
       setAddress();
       rows
         .get(desiredTab())
@@ -587,8 +650,7 @@ export function mountBrowser(
     navigationAdmission?.abort();
     const admittedGeneration = ++generation;
     for (const pending of commands.splice(0)) pending.resolve(false);
-    current?.resolve(false);
-    current = undefined;
+    latestViewIntent = undefined;
     view?.destroy();
     dialog.show(null);
     find.close();
@@ -599,6 +661,7 @@ export function mountBrowser(
       messages: options.messages,
       mediaAssets: options.mediaAssets,
       onAction: options.onAction,
+      onTrace: options.onTrace,
       onPrepareView: options.onPrepareView,
       onFind: (result) => {
         find.result(result);
@@ -636,6 +699,7 @@ export function mountBrowser(
       },
       onProjection: (target, status) => {
         if (generation !== admittedGeneration || destroyed) return;
+        if (target !== desiredTab()) return;
         projection = status;
         if (status !== 'loading' && status !== 'ready') changingTab = false;
         options.onProjection?.(target, status);
@@ -1110,8 +1174,7 @@ export function mountBrowser(
     suggestionRequest?.abort();
     clearTimeout(toastTimer);
     for (const pending of commands.splice(0)) pending.resolve(false);
-    current?.resolve(false);
-    current = undefined;
+    latestViewIntent = undefined;
     tabOrder.destroy();
     dialog.destroy();
     find.destroy();

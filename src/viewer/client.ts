@@ -58,6 +58,24 @@ import {
 
 export type ViewportMode = 'responsive' | 'fit' | 'actual';
 
+/** Content-free local timing. Hosts choose whether and where to retain it. */
+export type BrowserTrace = {
+  stage:
+    | 'command_dispatch'
+    | 'command_ack'
+    | 'selection_intent'
+    | 'selection'
+    | 'first_snapshot'
+    | 'control'
+    | 'usable_paint';
+  target: string;
+  generation: number;
+  at: number;
+  request?: number;
+  duration?: number;
+  action?: Action['kind'];
+};
+
 export type ViewOptions = {
   /** Reads only host-issued same-origin resource URLs in the trusted document.
    * Defaults to fetch; authenticated hosts may route it through their carrier. */
@@ -73,6 +91,7 @@ export type ViewOptions = {
   ) => void;
   onNotice?: (message: string) => void;
   onAction?: (milliseconds: number) => void;
+  onTrace?: (event: BrowserTrace) => void;
   onControl?: (controlling: boolean) => void;
   /** Prepare a newly selected view or a view resumed after control revocation. Hosts may
    * request idle control, never takeover. Return true to await the matching
@@ -97,6 +116,9 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
   expire: () => void;
   started: number;
+  traceTarget: string;
+  generation: number;
+  action: Action['kind'];
   epoch: string;
   tab: string;
   quiet: boolean;
@@ -142,7 +164,6 @@ export class DOMBrowserView {
   private controlled = false;
   private editTabs = true;
   private restoreTabs = true;
-  private tabCommands = new Set<Promise<boolean>>();
   private preparation?: { abort: AbortController; work: Promise<void> };
   private disconnectReason?: DisconnectReason;
   private ready = false;
@@ -150,6 +171,11 @@ export class DOMBrowserView {
   private resyncing = false;
   private eventBytes = 0;
   private pending = new Map<number, Pending>();
+  private selectionGeneration = 0;
+  private selectionStarted = performance.now();
+  private snapshotReceived = false;
+  private usablePainted = false;
+  private projectionStatus: ProjectionStatus = 'loading';
   private queuedWheel?: Wheel;
   private wheelsInFlight = 0;
   private sink: HTMLTextAreaElement;
@@ -538,6 +564,7 @@ export class DOMBrowserView {
     if (this.destroyed || this.incompatible) return;
     if (message.type === 'projection') {
       if (message.target !== this.tab) return;
+      this.projectionStatus = message.status;
       if (message.status !== 'ready') {
         // A resumed selection can load the same target again. Retain its
         // painted document before revoking readiness for the replacement.
@@ -612,6 +639,7 @@ export class DOMBrowserView {
     }
     if (message.type === 'control') {
       if (message.target === this.tab) {
+        if (message.active) this.trace('control');
         if (this.controlled && !message.active) {
           this.preparation?.abort.abort();
           this.preparation = undefined;
@@ -745,6 +773,8 @@ export class DOMBrowserView {
       return;
     }
     if (message.type === 'snapshot') {
+      if (!this.snapshotReceived) this.trace('first_snapshot');
+      this.snapshotReceived = true;
       // The source has already advanced its epoch. Cleanup releases held input
       // through the current controller before the replacement becomes usable.
       this.epoch = message.epoch;
@@ -773,12 +803,8 @@ export class DOMBrowserView {
             this.connected &&
             !this.destroyed &&
             presentation.active &&
-            this.presentation === presentation;
-          if (!current()) return;
-          // Selection and host admission determine whether this view fits an
-          // observer's source or resizes it. Settle both before exposing it.
-          while (current() && this.tabCommands.size)
-            await Promise.all(this.tabCommands);
+            this.presentation === presentation &&
+            (!this.previewTarget || this.previewTarget === this.tab);
           if (!current()) return;
           await this.prepareView();
           if (!current()) return;
@@ -802,6 +828,14 @@ export class DOMBrowserView {
           this.pages.drop(this.tab);
           this.applyFocus();
           if (!this.inputPause) this.options.onStatus?.('live');
+          if (!this.usablePainted) {
+            this.trace(
+              'usable_paint',
+              undefined,
+              performance.now() - this.selectionStarted,
+            );
+            this.usablePainted = true;
+          }
           for (const changed of this.readiness) changed();
         },
         () => this.options.onNotice?.(this.text('page.stylesSlow')),
@@ -905,6 +939,16 @@ export class DOMBrowserView {
       this.pending.delete(message.id);
       pending.resolve(message.ok);
       this.options.onAction?.(Math.round(performance.now() - pending.started));
+      this.trace(
+        'command_ack',
+        message.id,
+        performance.now() - pending.started,
+        {
+          target: pending.traceTarget,
+          generation: pending.generation,
+          action: pending.action,
+        },
+      );
       if (!message.ok) {
         if (!pending.chrome && pending.tab !== this.tab) return;
         // Hover and input release have no business effect to repeat. An old document's
@@ -922,6 +966,9 @@ export class DOMBrowserView {
         // Never retry the gesture or reinterpret it against the new content.
         if (message.code === 'target_changed') return;
         if (message.code === 'stale_view') {
+          // Selection authorization may finish after newer intent. That reply
+          // never invalidates the current page or starts a source refresh.
+          if (['tab_select', 'tab_retry'].includes(pending.action)) return;
           // A loading or rebuilding view is already fenced and awaiting source
           // state. A rejected old gesture cannot trigger another refresh loop.
           if (!this.ready) return;
@@ -979,6 +1026,7 @@ export class DOMBrowserView {
 
   /** Preview remains inert until the source selects and rebuilds this tab. */
   previewTab(target: string): void {
+    this.trace('selection_intent', undefined, undefined, { target });
     this.cancelInput();
     this.clearProxy();
     if (target === this.tab && this.ready) {
@@ -988,6 +1036,53 @@ export class DOMBrowserView {
       this.previewTarget = target;
       this.pages.preview(target);
     }
+  }
+
+  /** Wait for this selected page only. Superseding intent cancels the waiter;
+   * neither cancellation nor a failed wait dispatches or replays page input. */
+  whenReady(target: string, signal: AbortSignal): Promise<boolean> {
+    return new Promise((resolve) => {
+      const finish = (ok: boolean) => {
+        clearTimeout(timer);
+        this.readiness.delete(check);
+        signal.removeEventListener('abort', cancelled);
+        resolve(ok);
+      };
+      const cancelled = () => finish(false);
+      const check = () => {
+        if (
+          signal.aborted ||
+          !this.connected ||
+          this.destroyed ||
+          this.tab !== target
+        )
+          finish(false);
+        else if (this.ready || !this.pageError.hidden) finish(true);
+        else if (!['loading', 'ready'].includes(this.projectionStatus))
+          finish(false);
+      };
+      const timer = setTimeout(cancelled, 10000);
+      this.readiness.add(check);
+      signal.addEventListener('abort', cancelled, { once: true });
+      check();
+    });
+  }
+
+  private trace(
+    stage: BrowserTrace['stage'],
+    request?: number,
+    duration?: number,
+    identity?: Partial<Pick<BrowserTrace, 'target' | 'generation' | 'action'>>,
+  ): void {
+    this.options.onTrace?.({
+      stage,
+      target: this.tab,
+      generation: this.selectionGeneration,
+      at: performance.now(),
+      ...(request === undefined ? {} : { request }),
+      ...(duration === undefined ? {} : { duration }),
+      ...identity,
+    });
   }
 
   dispatch(action: Action): Promise<boolean> {
@@ -1009,12 +1104,7 @@ export class DOMBrowserView {
     if (action.kind === 'tab_move') return this.sendAction(action);
     if (action.kind.startsWith('tab_')) {
       this.queuedWheel = undefined;
-      const work = this.sendAction(action).finally(() => {
-        this.tabCommands.delete(work);
-        this.scheduleViewport();
-      });
-      this.tabCommands.add(work);
-      return work;
+      return this.sendAction(action).finally(() => this.scheduleViewport());
     }
     // A click, key, navigation or other action is an ordering barrier.
     this.flushWheel();
@@ -1022,13 +1112,7 @@ export class DOMBrowserView {
   }
 
   private queueWheel(action: Wheel): void {
-    if (
-      !this.controlled ||
-      !this.connected ||
-      !this.ready ||
-      this.tabCommands.size
-    )
-      return;
+    if (!this.controlled || !this.connected || !this.ready) return;
     this.flushDragMove();
     const prior = this.queuedWheel;
     if (
@@ -1090,9 +1174,6 @@ export class DOMBrowserView {
       (!this.editTabs &&
         action.kind.startsWith('tab_') &&
         !['tab_select', 'tab_retry'].includes(action.kind)) ||
-      (this.tabCommands.size > 0 &&
-        !action.kind.startsWith('tab_') &&
-        action.kind !== 'dialog_reply') ||
       (!this.ready &&
         ![
           'release_input',
@@ -1131,6 +1212,11 @@ export class DOMBrowserView {
     const id = ++this.nextID;
     const tab = this.tab;
     const epoch = this.epoch;
+    const identity = {
+      target: 'tab' in action ? action.tab : tab,
+      generation: this.selectionGeneration,
+      action: action.kind,
+    };
     const quiet =
       action.kind === 'release_input' ||
       (action.kind === 'pointer' &&
@@ -1165,6 +1251,9 @@ export class DOMBrowserView {
         timer,
         expire,
         started: performance.now(),
+        traceTarget: identity.target,
+        generation: identity.generation,
+        action: identity.action,
         epoch: this.epoch,
         tab: this.tab,
         chrome,
@@ -1172,6 +1261,7 @@ export class DOMBrowserView {
         quiet,
       });
       try {
+        this.trace('command_dispatch', id, undefined, identity);
         this.connection.send({
           type: 'command',
           id,
@@ -1231,7 +1321,6 @@ export class DOMBrowserView {
       !this.controlled ||
       !this.connected ||
       !this.ready ||
-      this.tabCommands.size > 0 ||
       this.viewportMode !== 'responsive'
     )
       return;
@@ -1241,8 +1330,7 @@ export class DOMBrowserView {
         this.viewportPending ||
         !this.controlled ||
         !this.connected ||
-        !this.ready ||
-        this.tabCommands.size
+        !this.ready
       )
         return;
       void this.resizeViewport();
@@ -1259,7 +1347,6 @@ export class DOMBrowserView {
       !this.controlled ||
       width < 1 ||
       height < 1 ||
-      this.tabCommands.size ||
       (Math.round(width / this.zoom) === this.viewport.width &&
         Math.round(height / this.zoom) === this.viewport.height)
     )
@@ -1637,6 +1724,12 @@ export class DOMBrowserView {
     this.preparation?.abort.abort();
     this.preparation = undefined;
     this.tab = target;
+    this.selectionGeneration++;
+    this.selectionStarted = performance.now();
+    this.snapshotReceived = false;
+    this.usablePainted = false;
+    this.projectionStatus = 'loading';
+    this.trace('selection');
   }
 
   private prepareView(): Promise<void> | undefined {

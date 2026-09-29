@@ -484,7 +484,7 @@ export class MediaView {
   private relevant(state: ScopedState) {
     const node = this.node(state.id, state.target) as HTMLMediaElement | null;
     if (!node?.isConnected)
-      return !state.paused && (state.volume > 0 || state.duration > 0);
+      return !state.paused && !state.muted && state.volume > 0;
     if (node.hasAttribute(CANVAS_ATTRIBUTE)) return false;
     // Background audio remains controllable even without a rendered element.
     if (!state.paused && !state.muted && state.volume > 0) return true;
