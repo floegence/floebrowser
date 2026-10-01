@@ -63,7 +63,7 @@
     "postcss-safe-parser": "7.1.0",
     "postcss-selector-parser": "7.1.6",
     "postcss-value-parser": "4.2.0",
-    "ws": "8.21.3",
+    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
