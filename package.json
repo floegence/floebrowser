@@ -55,7 +55,7 @@
     "build:release": "node scripts/build.mjs --release"
   },
   "dependencies": {
-    "@rrweb/record": "2.1.6",
+    "@rrweb/record": "2.1.7",
     "@rrweb/replay": "2.1.6",
     "@rrweb/types": "2.1.6",
     "playwright": "1.63.0",
