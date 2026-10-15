@@ -3,7 +3,7 @@ module github.com/floegence/floebrowser/media
 go 1.27.1
 
 require (
-	github.com/bluenviron/mediacommon/v2 v2.9.5
+	github.com/bluenviron/mediacommon/v2 v2.9.6
 	github.com/pion/ice/v4 v4.4.4
 	github.com/pion/interceptor v0.1.49
 	github.com/pion/logging v0.2.4
