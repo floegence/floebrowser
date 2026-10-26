@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -36,6 +36,28 @@ try {
     ],
     { stdio: 'pipe' },
   );
+  const packageRoot = join(directory, 'node_modules/@floegence/floebrowser');
+  const manifest = JSON.parse(
+    await readFile(join(packageRoot, 'dist/bin/manifest.json'), 'utf8'),
+  );
+  const licenses = await readFile(
+    join(packageRoot, 'dist/THIRD_PARTY_LICENSES.txt'),
+    'utf8',
+  );
+  const licensedGo = licenses.match(/^Go runtime (go\S+)$/m)?.[1];
+  assert.ok(licensedGo, 'The collector must retain its Go runtime license');
+  for (const artifact of manifest.artifacts) {
+    const metadata = execFileSync(
+      'go',
+      ['version', '-m', join(packageRoot, 'dist/bin', artifact.path)],
+      { encoding: 'utf8' },
+    );
+    assert.equal(
+      metadata.split('\n')[0].split(': ')[1],
+      licensedGo,
+      'Each collector must match the licensed Go toolchain',
+    );
+  }
   const help = execFileSync(
     process.execPath,
     [

@@ -92,6 +92,7 @@ export async function writeThirdPartyLicenses(targets) {
   }
   const toolchain = JSON.parse(
     execFileSync('go', ['env', '-json', 'GOROOT', 'GOVERSION'], {
+      cwd: 'media',
       encoding: 'utf8',
     }),
   );

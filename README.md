@@ -867,7 +867,7 @@ The TSL guide at `https://threejs.org/tsl/#architecture` was additionally exerci
 
 ## Published Flowersec transport qualification
 
-`test/flowersec.e2e.ts` uses the published TypeScript SDK 5.4.1 and Go SDK v5.4.1
+`test/flowersec.e2e.ts` uses the published TypeScript SDK 5.11.1 and Go SDK v5.11.1
 through public ByteStream APIs. The disposable Go acceptor binds numeric loopback,
 issues one test artifact and checks a host-only session cookie before upgrade.
 The test uses the SDK's explicit `flowersec-private-loopback/1` profile; it does
@@ -981,6 +981,8 @@ helpers for x64 and arm64, a versioned SHA-256 manifest and licenses for depende
 compiled on any of those targets. Run `npm run check:package` after a release build
 to install the tarball outside the checkout, verify all six artifacts, open the
 packaged DOM browser and prove that a modified helper is rejected before execution.
+The bundled Go runtime license is resolved in the collector module and must match
+the toolchain embedded in every collector binary.
 Consumers do not need a Go toolchain or a helper on PATH. Cross-compilation verifies
 artifact construction; supported-platform behavior still requires native runtime
 and browser qualification on each platform.
