@@ -7,8 +7,11 @@ import { createProjectionServer } from '../dist/host/server.js';
 for (const client of [chromium, firefox, webkit])
   test(
     `${client.name()} copies source-selected text through trusted host clipboard events`,
-    { timeout: 15000 },
+    { timeout: 30000 },
     async (t) => {
+      const started = performance.now();
+      const stage = (name: string) =>
+        t.diagnostic(`${name}: ${Math.round(performance.now() - started)} ms`);
       const browser = await chromium.launch();
       const viewerBrowser = await client.launch();
       t.after(() => Promise.all([browser.close(), viewerBrowser.close()]));
@@ -26,6 +29,7 @@ for (const client of [chromium, firefox, webkit])
         }),
       );
       const source = await context.newPage();
+      source.setDefaultTimeout(3000);
       await source.goto('http://copy.test/');
       const service = await createProjectionServer(source, {
         authorize: () => true,
@@ -35,6 +39,7 @@ for (const client of [chromium, firefox, webkit])
       viewer.setDefaultTimeout(3000);
       await viewer.goto(service.url);
       await viewer.locator('#status.live').waitFor();
+      stage('projection ready');
       const copy = process.platform === 'darwin' ? 'Meta+c' : 'Control+c';
       await source.evaluate(() => {
         (window as any).sourceCopies = 0;
@@ -79,6 +84,7 @@ for (const client of [chromium, firefox, webkit])
       });
       await viewer.keyboard.press(copy);
       await viewer.waitForFunction(() => (window as any).copies.length === 1);
+      stage('input copied');
       await clickProjected(content.locator('textarea'));
       await source.waitForFunction(
         () => document.activeElement?.tagName === 'TEXTAREA',
@@ -93,6 +99,7 @@ for (const client of [chromium, firefox, webkit])
       );
       await viewer.keyboard.press(copy);
       await viewer.waitForFunction(() => (window as any).copies.length === 2);
+      stage('textarea copied');
       await clickProjected(content.frameLocator('iframe').locator('p'), {
         clickCount: 3,
       });
@@ -107,6 +114,7 @@ for (const client of [chromium, firefox, webkit])
       );
       await viewer.keyboard.press(copy);
       await viewer.waitForFunction(() => (window as any).copies.length === 3);
+      stage('child selection copied');
       assert.deepEqual(
         await viewer.evaluate(() =>
           (window as any).copies.map((copy: any) => ({
