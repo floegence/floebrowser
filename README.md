@@ -745,6 +745,13 @@ at the fixture's source RTP negotiation and verified at the receiving worker;
 source resolution changes and paused pictures survive DOM checkpoints in each
 engine. Decoded pictures use automatic Canvas stream
 capture; Firefox does not expose `CanvasCaptureMediaStreamTrack.requestFrame()`.
+
+Media capability requires qualification on each client platform. On the macOS 26
+qualification host, Firefox 155 advertises Opus support but neither emits PCM nor
+completes a one-packet decoder flush. The same failure occurs with the published
+0.1.27 Worker. Firefox audio on that host remains unqualified; the dedicated Linux
+workflow owns the complete cross-engine media matrix.
+
 All three also forward source clicks, text, native select choices, shadow-root
 input and scaled child-frame input/scrolling. Input is received by one trusted
 host surface; projected iframe documents remain scriptless. Focused text controls
