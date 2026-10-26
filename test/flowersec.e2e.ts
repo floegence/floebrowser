@@ -82,7 +82,7 @@ test(
           platform: process.platform,
           arch: process.arch,
           browser: browser.version(),
-          sdk: { typescript: '5.4.1', go: 'v5.4.1' },
+          sdk: { typescript: '5.11.1', go: 'v5.11.1' },
           profile: 'flowersec-private-loopback/1',
           network: 'local loopback, no simulated WAN',
           result,
