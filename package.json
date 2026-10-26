@@ -55,9 +55,9 @@
     "build:release": "node scripts/build.mjs --release"
   },
   "dependencies": {
-    "@rrweb/record": "2.2.0",
-    "@rrweb/replay": "2.2.0",
-    "@rrweb/types": "2.2.0",
+    "@rrweb/record": "2.1.7",
+    "@rrweb/replay": "2.1.7",
+    "@rrweb/types": "2.1.7",
     "playwright": "1.63.0",
     "postcss": "8.5.28",
     "postcss-safe-parser": "7.1.0",
@@ -78,6 +78,10 @@
     "typescript": "7.0.2"
   },
   "overrides": {
+    "@rrweb/utils": "2.1.7",
+    "rrdom": "2.1.7",
+    "rrweb": "2.1.7",
+    "rrweb-snapshot": "2.1.7",
     "source-map-js": "^1.2.2"
   },
   "publishConfig": {

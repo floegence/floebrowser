@@ -976,6 +976,13 @@ rejected. No scan categories or rules are excluded to suppress these findings.
 
 FloeBrowser owns reusable projection, source input mapping, the wire protocol and viewer. Redeven should own environment authentication, target leases, browser/profile lifecycle, transport and product UI. Redeven integration is a separate change and should consume a released FloeBrowser artifact.
 
+The qualified rrweb family is 2.1.7. SDK builds pin `@rrweb/utils`, `rrdom`, `rrweb`
+and `rrweb-snapshot` to that version alongside the record, replay and types entry
+packages. rrweb 2.2.0 fails the existing dynamic `srcdoc` frame input/projection
+checks in all three viewer engines. Embedding hosts that require one version per
+runtime package must retain these transitive pins in their own package-manager
+overrides; npm does not inherit a dependency's overrides.
+
 ## License
 
 MIT. rrweb and other upstream notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
