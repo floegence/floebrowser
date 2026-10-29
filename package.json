@@ -73,7 +73,7 @@
     "@types/node": "^26.6.4",
     "@types/ws": "^8.18.1",
     "esbuild": "0.28.2",
-    "prettier": "3.9.9",
+    "prettier": "3.9.10",
     "tsx": "^4.20.0",
     "typescript": "7.0.2"
   },
