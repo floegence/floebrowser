@@ -2,7 +2,7 @@ module floebrowser-flowersec-qualification
 
 go 1.27.3
 
-require github.com/floegence/flowersec/flowersec-go/v5 v5.11.1
+require github.com/floegence/flowersec/flowersec-go/v5 v5.12.0
 
 require (
 	github.com/dunglas/httpsfv v1.1.1 // indirect
